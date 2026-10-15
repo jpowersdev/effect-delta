@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "include": [],
+  "references": [
+    { "path": "packages/delta" },
+    { "path": "packages/tools/jsdocs" },
+    { "path": "packages/tools/oxc" },
+    { "path": "packages/tools/utils" }
+  ]
+}

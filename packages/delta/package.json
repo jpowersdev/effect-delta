@@ -1,0 +1,70 @@
+{
+  "name": "effect-delta",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Replicated data types and merge rules for collaborative state, built on Effect",
+  "homepage": "https://github.com/jpowersdev/effect-delta",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jpowersdev/effect-delta.git",
+    "directory": "packages/delta"
+  },
+  "bugs": {
+    "url": "https://github.com/jpowersdev/effect-delta/issues"
+  },
+  "tags": [
+    "typescript",
+    "effect",
+    "crdt",
+    "collaboration",
+    "local-first"
+  ],
+  "keywords": [
+    "typescript",
+    "effect",
+    "crdt",
+    "collaboration",
+    "local-first"
+  ],
+  "sideEffects": [],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts",
+    "./internal/*": null,
+    "./index": null,
+    "./*/index": null
+  },
+  "files": [
+    "src/**/*.ts",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "exports": {
+      "./package.json": "./package.json",
+      ".": "./dist/index.js",
+      "./*": "./dist/*.js",
+      "./internal/*": null,
+      "./index": null,
+      "./*/index": null
+    }
+  },
+  "scripts": {
+    "codegen": "effect-utils codegen",
+    "build": "tsc -b tsconfig.json && pnpm babel",
+    "babel": "babel dist --plugins annotate-pure-calls --out-dir dist --source-maps",
+    "check": "tsc -b tsconfig.json"
+  },
+  "peerDependencies": {
+    "effect": "^4.0.4"
+  },
+  "devDependencies": {
+    "effect": "4.0.4"
+  }
+}

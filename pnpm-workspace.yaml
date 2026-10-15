@@ -1,0 +1,14 @@
+packages:
+  - packages/*
+  - packages/tools/*
+
+verifyDepsBeforeRun: error
+enableGlobalVirtualStore: false
+
+# Fail instead of silently adding `minimumReleaseAgeExclude` entries when a
+# pinned version is newer than the minimum release age.
+minimumReleaseAgeStrict: true
+
+allowBuilds:
+  dprint: false
+  esbuild: false
