@@ -65,6 +65,7 @@
     "effect": "^4.0.4"
   },
   "devDependencies": {
+    "@effect/platform-node": "4.0.4",
     "effect": "4.0.4"
   }
 }

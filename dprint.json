@@ -19,6 +19,7 @@
     "**/coverage",
     "**/*.tsbuildinfo",
     "**/CHANGELOG.md",
+    "**/test/fixtures",
     "!scratchpad/**/*",
     "**/.*",
     "!.changeset",

@@ -7,6 +7,7 @@
     "./packages/*/test/**/*.ts",
     "./packages/*/test/**/*.json",
     "./packages/*/typetest/**/*.ts",
+    "./packages/*/examples/**/*.ts",
     "./packages/*/benchmark/**/*.ts",
     "./packages/**/test/**/*.ts",
     "./packages/**/test/**/*.json",
