@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Clock, Effect, Exit, Option, Schema, Stream } from "effect"
+import { Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, Stream } from "effect"
 import { Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
@@ -629,6 +629,30 @@ describe("ReplicatedDocument", () => {
           value: { ...initial, votes: 1, status: "review" },
           overlaps: []
         })
+      }))
+
+    it.effect("an update or a merge interrupted partway shows what the replica has", () =>
+      Effect.gen(function*() {
+        // Yields every few steps, so an interruption can land between any two.
+        const stepwise = Effect.provideService(Scheduler.MaxOpsBeforeYield, 3)
+        for (let steps = 0; steps < 40; steps++) {
+          const { ada, ben } = yield* pair
+          const interrupted: ReadonlyArray<Effect.Effect<unknown, unknown>> = [
+            ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "review" })),
+            Effect.flatMap(Replica.delta(ada, VersionVector.empty), (delta) => Replica.receive(ben, delta))
+          ]
+          for (const effect of interrupted) {
+            const fiber = yield* Effect.forkChild(stepwise(effect))
+            for (let i = 0; i < steps; i++) yield* Effect.yieldNow
+            yield* Fiber.interrupt(fiber)
+          }
+          // Each shows what a replica it sends everything to shows.
+          for (const doc of [ada, ben]) {
+            const copy = yield* make("copy")
+            yield* Replica.receive(copy, yield* Replica.delta(doc, VersionVector.empty))
+            assert.deepStrictEqual(yield* ReplicatedDocument.get(doc), yield* ReplicatedDocument.get(copy))
+          }
+        }
       }))
   })
 
