@@ -17,6 +17,7 @@ import { KeyValueStore } from "effect/persistence"
 import {
   appliedBy,
   asOld,
+  checkTextOverlaps,
   editProject,
   EditSession,
   expectedOverlaps,
@@ -274,63 +275,74 @@ const partAt = (value: unknown, path: ReadonlyArray<string>): unknown => {
   return current
 }
 
-// Checks the overlaps a merge reported against the value it came with: a text
-// overlap's range is in its text, and a removal's entry or item doesn't show.
-// And its value and removal overlaps are the ones their rule gives for what
-// the replica had before the merge (`before`) and received in it (up to
-// `after`), in the parts its schema shows. Which overlaps a merge reports
-// depends on what the replica had, so they aren't the same however the
-// changes arrive.
-const checkOverlaps = (
+// Checks the overlaps of a merge, just after it, against the value it came
+// with and against their rules, for what the replica had before the merge
+// (`before`) and received in it (up to `after`), in the parts its schema
+// shows. A removal's entry or item doesn't show, and the value and removal
+// overlaps are the ones their rule gives. A text overlap's anchors are at its
+// range; with the tree strategy, the text overlaps are the ones their rule
+// gives too, and the replay strategy reports the same as tree for the same
+// edits. Which overlaps a merge reports depends on what the replica had, so
+// they aren't the same however the changes arrive.
+const checkOverlaps = Effect.fnUntraced(function*(
+  doc: ReplicatedDocument.ReplicatedDocument<unknown>,
   edit: ReplicatedDocument.Edit<unknown>,
   merge: {
-    readonly changes: ReadonlyArray<InternalDocument.AnyChange>
     readonly before: VersionVector.VersionVector
     readonly after: VersionVector.VersionVector
     readonly shape: InternalShape.Shape
+    readonly strategy: Replica.Strategy
   }
-): void => {
+) {
   if (edit._tag !== "Remote") return
-  for (const overlap of edit.overlaps) {
-    const part = partAt(edit.value, overlap.path)
-    switch (overlap._tag) {
-      case "Text":
-        if (Predicate.isString(part)) {
-          assert.isTrue(
-            0 <= overlap.range.start && overlap.range.start <= overlap.range.end && overlap.range.end <= part.length,
-            `${JSON.stringify(overlap)} in ${JSON.stringify(part)}`
-          )
-        }
-        break
-      case "Removed":
-        assert.isUndefined(part, JSON.stringify(overlap))
-        break
-    }
-  }
-  const { after, before, changes, shape } = merge
-  const sorted = (overlaps: ReadonlyArray<Replica.Overlap | InternalDocument.Overlap>) =>
-    overlaps.filter(({ _tag }) => _tag !== "Text").map((overlap) => JSON.stringify(overlap)).sort()
+  const { after, before, shape, strategy } = merge
+  const changes = [...((yield* Replica.delta(doc, VersionVector.empty)) as InternalDelta.DeltaImpl).changes.values()]
   const earlier = new Set(appliedBy(changes, before))
   const received = appliedBy(changes, after).filter((change) => !earlier.has(change))
+  const receiving = `receiving ${JSON.stringify(received)}`
+  for (const overlap of edit.overlaps) {
+    if (overlap._tag === "Removed") assert.isUndefined(partAt(edit.value, overlap.path), JSON.stringify(overlap))
+  }
+  const sorted = (overlaps: ReadonlyArray<Replica.Overlap | InternalDocument.Overlap>) =>
+    overlaps.filter(({ _tag }) => _tag !== "Text").map((overlap) => JSON.stringify(overlap)).sort()
   assert.deepStrictEqual(
     sorted(edit.overlaps),
     sorted(expectedOverlaps(changes, before, after).filter((overlap) => InternalShape.shows(shape, overlap))),
-    `receiving ${JSON.stringify(received)}`
+    receiving
   )
-  // A text overlap is where text the replica had met text it received.
-  const edited = (changes: Iterable<InternalDocument.AnyChange>) =>
-    new Set(
-      [...changes].flatMap(({ ops }) =>
-        ops.flatMap((op) => textOps.has(op._tag) ? [JSON.stringify(op.path ?? [])] : [])
-      )
+
+  const textAt = (path: ReadonlyArray<string>) =>
+    InternalShape.shows(shape, { _tag: "Text", path, start: 0, end: 0, anchors: everything, replicas: [] })
+      ? ReplicatedDocument.text(doc, path as never)
+      : undefined
+  const texts = edit.overlaps.flatMap((overlap) => overlap._tag === "Text" ? [overlap] : [])
+  for (const { anchors, path, range } of texts) {
+    const text = textAt(path)!
+    assert.deepStrictEqual(
+      [yield* ReplicatedText.locate(text, anchors.start), yield* ReplicatedText.locate(text, anchors.end)],
+      [Option.some(range.start), Option.some(range.end)],
+      `${JSON.stringify(path)} ${JSON.stringify(range)}`
     )
-  const [had, got] = [edited(earlier), edited(received)]
-  for (const overlap of edit.overlaps) {
-    if (overlap._tag !== "Text") continue
-    const k = JSON.stringify(overlap.path)
-    assert.isTrue(had.has(k) && got.has(k), `${JSON.stringify(overlap)} receiving ${JSON.stringify(received)}`)
   }
-}
+  if (strategy === "replay") {
+    // Where text the replica had met text it received.
+    const edited = (changes: Iterable<InternalDocument.AnyChange>) =>
+      new Set(
+        [...changes].flatMap(({ ops }) =>
+          ops.flatMap((op) => textOps.has(op._tag) ? [JSON.stringify(op.path ?? [])] : [])
+        )
+      )
+    const [had, got] = [edited(earlier), edited(received)]
+    for (const overlap of texts) {
+      const k = JSON.stringify(overlap.path)
+      assert.isTrue(had.has(k) && got.has(k), `${JSON.stringify(overlap)} ${receiving}`)
+    }
+    return
+  }
+  yield* checkTextOverlaps(texts, { changes, before, after, textAt })
+})
+
+const everything = { start: { _tag: "Start" }, end: { _tag: "End" } } as const
 
 const textOps = new Set(["Insert", "Remove", "InsertAt", "RemoveAt"])
 
@@ -373,20 +385,24 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
       yield* Replica.receive(doc, yield* hop((yield* Queue.take(updates)).delta))
     }
   })
-  // A replica that edits and receives, failing or not, and afterwards says
-  // what its subscribers were told, having checked the overlaps.
+  // A replica that edits and receives, failing or not, checking the overlaps
+  // of each merge as it happens. `told` is what its subscribers were told.
   const watched = <A>(doc: ReplicatedDocument.ReplicatedDocument<A>, schema: Schema.Top) =>
     Effect.gen(function*() {
-      const { edits } = yield* ReplicatedDocument.subscribe(doc)
-      // Each edit or merge that changes the replica is one edit to tell.
-      const told: Array<{ readonly before: VersionVector.VersionVector; readonly after: VersionVector.VersionVector }> =
-        []
+      const edits = yield* Stream.toQueue((yield* ReplicatedDocument.subscribe(doc)).edits, { capacity: "unbounded" })
+      const shape = InternalShape.compile(schema)
+      const told: Array<ReplicatedDocument.Edit<unknown>> = []
       const tracked = <B, E, R>(effect: Effect.Effect<B, E, R>) =>
         Effect.gen(function*() {
           const before = yield* Replica.version(doc)
           const exit = yield* Effect.exit(effect)
           const after = yield* Replica.version(doc)
-          if (VersionVector.compare(after, before) !== "equal") told.push({ before, after })
+          // Each edit or merge that changes the replica is one edit to tell.
+          if (VersionVector.compare(after, before) !== "equal") {
+            const edit = yield* Queue.take(edits)
+            yield* checkOverlaps(doc, edit, { before, after, shape, strategy })
+            told.push(edit)
+          }
           return exit
         })
       return {
@@ -394,14 +410,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         tracked,
         // Received one hop away.
         receive: (delta: Delta.Delta) => Effect.flatMap(hop(delta), (sent) => tracked(Replica.receive(doc, sent))),
-        edits: Effect.gen(function*() {
-          const all = yield* Stream.runCollect(Stream.take(edits, told.length))
-          const delta = (yield* Replica.delta(doc, VersionVector.empty)) as InternalDelta.DeltaImpl
-          const changes = [...delta.changes.values()]
-          const shape = InternalShape.compile(schema)
-          for (const [i, edit] of all.entries()) checkOverlaps(edit, { changes, ...told[i]!, shape })
-          return all
-        })
+        told: told as ReadonlyArray<ReplicatedDocument.Edit<unknown>>
       }
     })
   const inOrder = Replica.DocumentId.make("in-order")
@@ -437,13 +446,11 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
             return (change: InternalDocument.AnyChange) => kept.changes.has(key(change))
           }))
         const expected = yield* view(doc.doc)
-        yield* doc.edits
         assert.deepStrictEqual(yield* fromRelay(relay, inOrder), expected)
 
         const atOnce = yield* watched(yield* make("at-once"), Project)
         yield* atOnce.receive(InternalDelta.fromChanges(changes))
         assert.deepStrictEqual(yield* view(atOnce.doc), expected)
-        yield* atOnce.edits
 
         // One at a time, shuffled and repeated, to a replica that saves them,
         // and to a relay whose subscriber takes what it sends: they accept the
@@ -473,7 +480,6 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
             }
           }
           assert.deepStrictEqual(yield* view(oneByOne.doc), expected)
-          yield* oneByOne.edits
           yield* Scope.close(back.scope, Exit.void)
         })).pipe(Random.withSeed(seed))
         const fromShuffled = yield* fromRelay(relay, shuffled)
@@ -586,10 +592,8 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
           if (change.replica !== "old") continue
           for (const op of change.ops) assert.isFalse(isNewer(op.path ?? []), JSON.stringify(op))
         }
-        for (const peer of peers) yield* peer.edits
         // And it isn't told of overlaps in them.
-        const told = yield* old.edits
-        for (const edit of told) {
+        for (const edit of old.told) {
           for (const { path } of edit._tag === "Remote" ? edit.overlaps : []) {
             assert.isFalse(isNewer(path), JSON.stringify(path))
           }

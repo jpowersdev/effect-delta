@@ -1,4 +1,5 @@
-import { Effect, Equal, Random, Schema, Stream, Struct } from "effect"
+import { assert } from "@effect/vitest"
+import { Effect, Equal, Option, Random, Schema, Stream, Struct } from "effect"
 import { Delta, Replica, ReplicatedDocument, ReplicatedText, Sync, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import * as InternalDocument from "effect-delta/internal/document"
@@ -953,3 +954,196 @@ export const expectedOverlaps = (
     return [{ _tag: "Value", path, replicas: sorted, kept: kept.replica }]
   })
 }
+
+// Text overlaps --------------------------------------------------------------
+
+/** A text overlap a merge reports, with the characters its anchors name. */
+interface TextOverlap {
+  readonly path: Path
+  readonly start: number
+  readonly end: number
+  readonly replicas: ReadonlyArray<string>
+  /**
+   * The first and last characters of the stretch that show, or for a stretch
+   * that's all removed, its characters, any of which can be its anchors.
+   */
+  readonly anchors: { readonly start: Id; readonly end: Id } | { readonly among: ReadonlyArray<Id> }
+}
+
+// One change's ops on one text, which come together, as a merge sees them.
+interface TextPart {
+  readonly replica: string
+  readonly seq: number
+  length: number
+  readonly past: VersionVector.VersionVector
+  /** Whether it arrived in the merge. */
+  readonly fresh: boolean
+}
+
+interface Character {
+  readonly id: Id
+  readonly insertedBy: TextPart
+  readonly removedBy: Set<TextPart>
+}
+
+/**
+ * The text overlaps a merge of tree texts reports, by their rule: a text is
+ * split at characters that show and that no change touched (inserted or
+ * removed) among those the merge received and those the replica had that a
+ * received one hadn't seen, and a stretch between is an overlap where a
+ * received change and one it hadn't seen both touched characters. The
+ * characters' order comes from where `textAt(path)` locates them, for each
+ * path the schema has a text at; their ids and who touched them come from
+ * the changes' ops. `changes` are every change the replica has, and `before`
+ * and `after` its versions around the merge.
+ */
+const expectedTextOverlaps = Effect.fnUntraced(function*(
+  changes: ReadonlyArray<InternalDocument.AnyChange>,
+  before: VersionVector.VersionVector,
+  after: VersionVector.VersionVector,
+  textAt: (path: Path) => ReplicatedText.Editable | undefined
+) {
+  const applied = appliedBy(changes, after)
+  const earlier = new Set(appliedBy(changes, before))
+  const texts = new Map<string, { readonly path: Path; readonly characters: Map<string, Character> }>()
+  const textOf = (path: Path) => {
+    const k = pathKey(path)
+    let found = texts.get(k)
+    if (found === undefined) {
+      found = { path, characters: new Map() }
+      texts.set(k, found)
+    }
+    return found
+  }
+  const idKey = (id: Id) => `${id.seq}@${id.replica}`
+  const removals: Array<{ readonly path: Path; readonly id: Id; readonly by: TextPart }> = []
+  for (const change of applied) {
+    const past = pastOf(change, applied)
+    let part: { readonly k: string; readonly part: TextPart } | undefined
+    let seq = change.seq
+    for (const op of change.ops) {
+      if (op._tag === "Insert" || op._tag === "Remove") {
+        const path = InternalDocument.pathOf(op)
+        const k = pathKey(path)
+        if (part?.k !== k) {
+          part = { k, part: { replica: change.replica, seq, length: 0, past, fresh: !earlier.has(change) } }
+        }
+        const by = part.part
+        by.length += InternalDocument.opLength(op)
+        if (op._tag === "Insert") {
+          for (let i = 0; i < op.text.length; i++) {
+            const id = { replica: change.replica, seq: seq + i }
+            textOf(path).characters.set(idKey(id), { id, insertedBy: by, removedBy: new Set() })
+          }
+        } else {
+          for (const span of op.targets) {
+            for (let i = 0; i < span.length; i++) removals.push({ path, id: { ...span, seq: span.seq + i }, by })
+          }
+        }
+      } else {
+        part = undefined
+      }
+      seq += InternalDocument.opLength(op)
+    }
+  }
+  // Removals name characters of changes that may come later in `applied`.
+  for (const { by, id, path } of removals) textOf(path).characters.get(idKey(id))!.removedBy.add(by)
+
+  const unseenBy = (earlier: TextPart, later: TextPart) =>
+    (later.past[earlier.replica] ?? 0) < earlier.seq + earlier.length
+  const found: Array<TextOverlap> = []
+  for (const { characters, path } of texts.values()) {
+    const fresh = new Set([...characters.values()].flatMap(({ insertedBy, removedBy }) => [insertedBy, ...removedBy]))
+    for (const part of fresh) if (!part.fresh) fresh.delete(part)
+    const text = textAt(path)
+    if (fresh.size === 0 || text === undefined) continue
+    const concurrent = (part: TextPart) => !part.fresh && [...fresh].some((later) => unseenBy(part, later))
+    const touchesOf = ({ insertedBy, removedBy }: Character) =>
+      [insertedBy, ...removedBy].filter((part) => part.fresh || concurrent(part))
+    // Where each touched character is: one that shows at its index, and a
+    // removed one in the gap where it was. Removed characters in the same gap
+    // can be in any order, which changes nothing but which of them anchor.
+    const touched: Array<{ readonly character: Character; readonly at: number; readonly shows: boolean }> = []
+    for (const character of characters.values()) {
+      if (touchesOf(character).length === 0) continue
+      const shows = character.removedBy.size === 0
+      const locate = (side: "before" | "after") =>
+        Effect.map(ReplicatedText.locate(text, { _tag: "Character", ...character.id, side }), Option.getOrThrow)
+      const at = yield* locate("before")
+      assert.strictEqual(yield* locate("after"), shows ? at + 1 : at, `${idKey(character.id)} at ${pathKey(path)}`)
+      touched.push({ character, at, shows })
+    }
+    // In text order: a removed character comes before the one that shows at
+    // its gap's index.
+    const order = ({ at, shows }: (typeof touched)[number]) => 2 * at + (shows ? 1 : 0)
+    touched.sort((a, b) => order(a) - order(b))
+    let stretch: Array<(typeof touched)[number]> = []
+    const close = () => {
+      const parts = new Set(stretch.flatMap(({ character }) => touchesOf(character)))
+      const received = [...parts].filter((part) => part.fresh)
+      if ([...parts].some((part) => !part.fresh && received.some((later) => unseenBy(part, later)))) {
+        const showing = stretch.filter(({ shows }) => shows)
+        found.push({
+          path,
+          start: stretch[0]!.at,
+          end: stretch[0]!.at + showing.length,
+          replicas: [...new Set([...parts].map(({ replica }) => replica))].sort(),
+          anchors: showing.length > 0
+            ? { start: showing[0]!.character.id, end: showing.at(-1)!.character.id }
+            : { among: stretch.map(({ character }) => character.id) }
+        })
+      }
+      stretch = []
+    }
+    for (const next of touched) {
+      const last = stretch.at(-1)
+      // A character that shows between them, which nothing touched.
+      if (last !== undefined && Math.ceil(order(last) / 2) < Math.floor(order(next) / 2)) close()
+      stretch.push(next)
+    }
+    if (stretch.length > 0) close()
+  }
+  return found
+})
+
+/**
+ * Checks the text overlaps a merge of tree texts reported against the ones
+ * their rule gives (see `expectedTextOverlaps`), anchors included.
+ */
+export const checkTextOverlaps = Effect.fnUntraced(function*(
+  overlaps: ReadonlyArray<Replica.Overlap>,
+  merge: {
+    readonly changes: ReadonlyArray<InternalDocument.AnyChange>
+    readonly before: VersionVector.VersionVector
+    readonly after: VersionVector.VersionVector
+    readonly textAt: (path: Path) => ReplicatedText.Editable | undefined
+  }
+) {
+  const { after, before, changes, textAt } = merge
+  const where = ({ end, path, replicas, start }: ReplicatedText.Range & {
+    readonly path: Path
+    readonly replicas: ReadonlyArray<string>
+  }) => JSON.stringify({ path, start, end, replicas })
+  const expected = new Map(
+    (yield* expectedTextOverlaps(changes, before, after, textAt)).map((overlap) => [where(overlap), overlap])
+  )
+  const texts = overlaps.flatMap((overlap) => overlap._tag === "Text" ? [overlap] : [])
+  const earlier = new Set(appliedBy(changes, before))
+  const received = appliedBy(changes, after).filter((change) => !earlier.has(change))
+  assert.deepStrictEqual(
+    texts.map((overlap) => where({ ...overlap, ...overlap.range })).sort(),
+    [...expected.keys()].sort(),
+    `receiving ${JSON.stringify(received)}`
+  )
+  const character = (anchor: ReplicatedText.Anchor, side: ReplicatedText.Side): Id | undefined =>
+    anchor._tag === "Character" && anchor.side === side ? { replica: anchor.replica, seq: anchor.seq } : undefined
+  for (const overlap of texts) {
+    const { anchors } = expected.get(where({ ...overlap, ...overlap.range }))!
+    const named = [character(overlap.anchors.start, "before"), character(overlap.anchors.end, "after")]
+    if ("among" in anchors) {
+      for (const id of named) assert.deepInclude(anchors.among, id, JSON.stringify(overlap))
+    } else {
+      assert.deepStrictEqual(named, [anchors.start, anchors.end], JSON.stringify(overlap))
+    }
+  }
+})

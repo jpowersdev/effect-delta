@@ -1,10 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Option, Random } from "effect"
-import { Replica, ReplicatedText } from "effect-delta"
+import { Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import type { Change, Id } from "effect-delta/internal/change"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as ReplayText from "effect-delta/internal/replayText"
 import cases from "./fixtures/eg-walker-conformance.json" with { type: "json" }
+import { checkTextOverlaps } from "./utils/forged.ts"
 import {
   documentRuns,
   DocumentSession,
@@ -141,10 +142,20 @@ describe("replay against tree", () => {
           }
           case "Sync": {
             if (command.from === command.to) break
+            const merged = tree[command.from]!
+            const before = yield* Replica.version(merged)
             const [fromTree, fromReplay] = yield* both((replicas) =>
               Replica.exchange(replicas[command.from]!, replicas[command.to]!)
             )
             assert.deepStrictEqual(fromReplay, fromTree, "overlaps")
+            // And they're the ones their rule gives.
+            const delta = (yield* Replica.delta(merged, VersionVector.empty)) as InternalDelta.DeltaImpl
+            yield* checkTextOverlaps(fromTree, {
+              changes: [...delta.changes.values()],
+              before,
+              after: yield* Replica.version(merged),
+              textAt: () => merged
+            })
             break
           }
           case "Anchor": {
@@ -191,8 +202,20 @@ describe("replay against tree, for documents", () => {
       const tree = yield* makeBoards("tree")
       const replay = yield* makeBoards("replay")
       for (const command of session) {
+        const merged = command._tag === "Sync" ? tree[command.from]! : undefined
+        const before = merged === undefined ? undefined : yield* Replica.version(merged)
         const inTree = yield* stepBoards(tree, command)
         assert.deepStrictEqual(yield* stepBoards(replay, command), inTree, "overlaps")
+        // And the text overlaps are the ones their rule gives.
+        if (merged !== undefined) {
+          const delta = (yield* Replica.delta(merged, VersionVector.empty)) as InternalDelta.DeltaImpl
+          yield* checkTextOverlaps(inTree, {
+            changes: [...delta.changes.values()],
+            before: before!,
+            after: yield* Replica.version(merged),
+            textAt: (path) => ReplicatedDocument.text(merged, path as never)
+          })
+        }
         for (const i of [0, 1, 2]) {
           assert.deepStrictEqual(yield* viewOf(replay[i]!), yield* viewOf(tree[i]!), `replica ${i}`)
         }

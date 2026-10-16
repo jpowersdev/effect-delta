@@ -543,7 +543,8 @@ All built, each with tests and an example:
 - **Forged changes.** Changes made directly, many malformed or not fitting the schema, among well-formed ones
   from extra replicas, sent together, late, again and as JSON. Replicas, relays and authorities accept the
   same ones and show the same value however they arrive, and every merge reports the `Value` and `Removed`
-  overlaps a model of the rule gives.
+  overlaps a model of the rule gives. With the tree strategy, it reports the `Text` overlaps the rule gives
+  too, for these and for honest sessions, and replay reports what tree does.
 - **Break it on purpose,** as before: drop the replica-id tiebreak, let edits keep entries, and so on, and
   confirm a property fails.
 
