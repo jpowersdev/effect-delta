@@ -304,21 +304,16 @@ describe("Relay", () => {
         yield* Deferred.await(saving)
         // Opens the document, then waits for the push to finish with it.
         const sent: Array<Sync.Update> = []
-        const subscribed = yield* Effect.forkChild(Effect.exit(
-          Stream.runForEach(
-            relay.subscribe({ format: Sync.FORMAT, document: notes, strategy: "tree", version: {}, authority: false }),
-            (update) => Effect.sync(() => sent.push(update))
-          )
+        const subscribed = yield* Effect.forkChild(Stream.runForEach(
+          relay.subscribe({ format: Sync.FORMAT, document: notes, strategy: "tree", version: {}, authority: false }),
+          (update) => Effect.sync(() => sent.push(update))
         ))
         for (let i = 0; i < 50; i++) yield* Effect.yieldNow
         yield* Deferred.succeed(fail, undefined)
         assert.isTrue(Exit.isFailure(yield* Fiber.join(pushed)))
         // Told to subscribe again, once the document is loaded from the store.
-        const exit = yield* Fiber.join(subscribed)
-        assert.deepStrictEqual(
-          Exit.mapError(exit, (error) => error.reason._tag),
-          Exit.fail("Unavailable")
-        )
+        const error = yield* Effect.flip(Fiber.join(subscribed))
+        assert.strictEqual(error.reason._tag, "Unavailable")
         assert.deepStrictEqual(sent, [])
       }).pipe(Effect.provide(Relay.layer.pipe(Layer.provide(Failing))))
     }))
