@@ -137,7 +137,9 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
       if (ast.checks !== undefined) refuse(path, `a list can't have checks: ${onMerged}`)
       const item = compileAst(ast.rest[0]!, [...path, "*"])
       if (rule.key === undefined) {
-        if (item._tag !== "Value") refuse(path, "a list of values can't hold texts, counters or other merged parts")
+        if (item._tag !== "Value") {
+          refuse(path, "a list without a key holds values written whole: give a list of structs or classes a key")
+        }
         return { _tag: "List", item, key: undefined }
       }
       const field = item._tag === "Fields" ? item.fields.find(({ name }) => name === rule.key) : undefined
