@@ -65,7 +65,7 @@ const Proto = {
 
 // A replicated text is a document whose only part is a text at the root.
 const model: InternalEngine.Model = {
-  read: (document) => InternalDocument.textAt(document, InternalPath.root)?.value ?? "",
+  read: (document) => InternalDocument.textAt(document, InternalPath.root),
   check: (change) => InternalShape.check(InternalShape.text, change)
 }
 
@@ -115,7 +115,7 @@ const locked = <A, E, R>(self: Editable, effect: Effect.Effect<A, E, R>) =>
 
 // The text, or an empty one if nothing has been written to it yet.
 const textOf = (self: Editable): InternalText.Text =>
-  InternalDocument.textAt(impl(self).engine.state.document, impl(self).path) ??
+  InternalDocument.slot(impl(self).engine.state.document, impl(self).path)?.text ??
     InternalText.make(impl(self).engine.strategy)
 
 // Reading ------------------------------------------------------------------
@@ -128,7 +128,7 @@ const editsOf = (self: Editable, events: Stream.Stream<InternalEngine.Event>): S
   const k = InternalPath.key(path)
   return events.pipe(
     Stream.map((event): Edit | undefined => {
-      const patch = event.texts.get(k)?.patch ?? TextPatch.empty
+      const patch = event.texts.get(k) ?? TextPatch.empty
       switch (event._tag) {
         case "Local":
           return patch.length === 0 ? undefined : { _tag: "Local", patch }
@@ -173,7 +173,7 @@ const editText = <E>(
   InternalEngine.edit(impl(self).engine, (document) => {
     const { path } = impl(self)
     return Result.map(
-      patchOf(InternalDocument.textAt(document, path)?.value ?? ""),
+      patchOf(InternalDocument.textAt(document, path)),
       (patch): ReadonlyArray<InternalDocument.Intent> => [{ _tag: "Text", path, patch }]
     )
   })

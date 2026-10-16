@@ -270,11 +270,11 @@ const insertSorted = <W extends Write>(writes: Array<W>, write: W): void => {
 // Reading --------------------------------------------------------------------
 
 /**
- * The text at `path`, if anything has been written to it.
+ * The text at `path`: empty if nothing has been written to it.
  *
  * @internal
  */
-export const textAt = (document: Document, path: Path.Path): Text.Text | undefined => slot(document, path)?.text
+export const textAt = (document: Document, path: Path.Path): string => slot(document, path)?.text?.value ?? ""
 
 /**
  * The values written at `path`, earliest write first.
@@ -437,8 +437,8 @@ const kept = (found: Slot, over: ReadonlySet<Over>): string => {
 export interface Integrated {
   /** How many of the changes were applied. */
   readonly applied: number
-  /** How each text changed, by path. */
-  readonly texts: ReadonlyMap<string, { readonly path: Path.Path; readonly patch: TextPatch.TextPatch }>
+  /** How each text changed, by path key. */
+  readonly texts: ReadonlyMap<string, TextPatch.TextPatch>
   readonly overlaps: ReadonlyArray<Overlap>
   /** What's wrong with the first change that wasn't applied, if any. */
   readonly problem: string | undefined
@@ -479,7 +479,7 @@ export const integrate = (
   }
 
   const found = options.overlaps ? new Found() : undefined
-  const texts = new Map<string, { path: Path.Path; patch: TextPatch.TextPatch }>()
+  const texts = new Map<string, TextPatch.TextPatch>()
   let problem: string | undefined
   let applied = 0
   for (const [i, change] of changes.entries()) {
@@ -496,8 +496,7 @@ export const integrate = (
           document.strategy ??= strategy
           const patch = mergeOf(part.path, strategy).apply(part)
           ensureSlot(document, part.path).kind = "text"
-          const k = Path.key(part.path)
-          texts.set(k, { path: part.path, patch: TextPatch.compose(texts.get(k)?.patch ?? TextPatch.empty, patch) })
+          composeText(texts, part.path, patch)
         }
       } else {
         applyOp(document, op, write, found)
@@ -516,6 +515,11 @@ export const integrate = (
     }
   }
   return { applied, texts, overlaps, problem }
+}
+
+const composeText = (texts: Map<string, TextPatch.TextPatch>, path: Path.Path, patch: TextPatch.TextPatch): void => {
+  const k = Path.key(path)
+  texts.set(k, TextPatch.compose(texts.get(k) ?? TextPatch.empty, patch))
 }
 
 type TextPart = Text.Part & { readonly path: Path.Path }
@@ -864,7 +868,7 @@ export const edit = (
   const { history } = document
   const past = { ...history.version }
   const ops: Array<Op> = []
-  const texts = new Map<string, { path: Path.Path; patch: TextPatch.TextPatch }>()
+  const texts = new Map<string, TextPatch.TextPatch>()
   const inserted = new Map<number, string>()
   let seq = options.seq
   const write = (op: Exclude<Op, Text.Op>) => {
@@ -902,11 +906,7 @@ export const edit = (
           noteBelow(document, intent.path, done, Text.opLength(op), undefined)
           seq += Text.opLength(op)
         }
-        const k = Path.key(intent.path)
-        texts.set(k, {
-          path: intent.path,
-          patch: TextPatch.compose(texts.get(k)?.patch ?? TextPatch.empty, edited.patch)
-        })
+        composeText(texts, intent.path, edited.patch)
         break
       }
       case "Place":

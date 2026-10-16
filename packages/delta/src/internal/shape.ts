@@ -398,7 +398,7 @@ const readAt = (
 ): unknown => {
   switch (shape._tag) {
     case "Text":
-      return InternalDocument.textAt(document, path)?.value ?? ""
+      return InternalDocument.textAt(document, path)
     case "Counter":
       return ((initial?.value as number | undefined) ?? 0) + InternalDocument.counterAt(document, path)
     case "Value": {
@@ -589,7 +589,7 @@ const planAt = (
 ): void => {
   switch (shape._tag) {
     case "Text": {
-      const before = InternalDocument.textAt(document, path)?.value ?? ""
+      const before = InternalDocument.textAt(document, path)
       if (before !== after) intents.push({ _tag: "Text", path, patch: TextPatch.get(before, after as string) })
       return
     }

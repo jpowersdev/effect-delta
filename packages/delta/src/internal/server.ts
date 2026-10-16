@@ -177,7 +177,7 @@ export const make = Effect.fnUntraced(function*(options: {
           for (const change of History.takeReady(state.history)) {
             // A change all at the root is a replicated text's.
             const isText = change.ops.every((op) => Path.isRoot(InternalDocument.pathOf(op)))
-            const before = isText ? rootText(state) : InternalDocument.toJson(state)
+            const before = isText ? InternalDocument.textAt(state, Path.root) : InternalDocument.toJson(state)
             const { problem, texts } = InternalDocument.integrate(state, [change], { overlaps: false })
             if (problem !== undefined) {
               malformed = problem
@@ -189,9 +189,9 @@ export const make = Effect.fnUntraced(function*(options: {
                   _tag: "Text",
                   document: document.id,
                   user,
-                  patch: texts.get(Path.key(Path.root))?.patch ?? TextPatch.empty,
+                  patch: texts.get(Path.key(Path.root)) ?? TextPatch.empty,
                   before: before as string,
-                  after: rootText(state)
+                  after: InternalDocument.textAt(state, Path.root)
                 }
                 : {
                   _tag: "Document",
@@ -298,8 +298,6 @@ const integrateAll = (
   }
   return problems
 }
-
-const rootText = (state: InternalDocument.Document): string => InternalDocument.textAt(state, Path.root)?.value ?? ""
 
 // The paths a change wrote to, in order.
 const pathsOf = (change: InternalDocument.AnyChange): ReadonlyArray<Replica.Path> => {

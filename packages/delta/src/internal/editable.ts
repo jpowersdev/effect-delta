@@ -24,7 +24,7 @@ export const isEditable = (u: unknown): u is ReplicatedText.Editable => hasPrope
 /** @internal */
 export const text = (self: ReplicatedText.Editable): string => {
   const { engine, path } = self as EditableImpl
-  return InternalDocument.textAt(engine.state.document, path)?.value ?? ""
+  return InternalDocument.textAt(engine.state.document, path)
 }
 
 /** @internal */

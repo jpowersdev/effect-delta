@@ -39,8 +39,8 @@ export interface Event {
   readonly _tag: "Local" | "Remote" | "Rejected"
   /** The value after it. */
   readonly value: unknown
-  /** How each text changed, and what it is now, by path key. */
-  readonly texts: ReadonlyMap<string, { readonly patch: TextPatch.TextPatch; readonly text: string }>
+  /** How each text changed, by path key. */
+  readonly texts: ReadonlyMap<string, TextPatch.TextPatch>
   readonly overlaps: ReadonlyArray<Replica.Overlap>
   readonly message: string
 }
@@ -111,24 +111,26 @@ export const locked = <A, E, R>(engine: Engine, effect: Effect.Effect<A, E, R>):
   engine.lock.withPermit(effect)
 
 // Tells subscribers about a change, with the value it leads to.
-const publish = (
-  engine: Engine,
-  event: Omit<Event, "value" | "texts"> & {
-    readonly texts: ReadonlyMap<string, { readonly patch: TextPatch.TextPatch }>
-  }
-): Effect.Effect<void> =>
+const publish = (engine: Engine, event: Omit<Event, "value">): Effect.Effect<void> =>
   Effect.suspend(() => {
-    const { document } = engine.state
-    const value = engine.model.read(document)
-    const texts = new Map<string, { patch: TextPatch.TextPatch; text: string }>()
-    for (const [k, { patch }] of event.texts) {
-      if (patch.length > 0) texts.set(k, { patch, text: document.slots.get(k)?.text?.value ?? "" })
-    }
-    return Effect.andThen(
-      SubscriptionRef.set(engine.value, value),
-      PubSub.publish(engine.events, { ...event, value, texts })
-    )
+    const value = engine.model.read(engine.state.document)
+    return Effect.andThen(SubscriptionRef.set(engine.value, value), PubSub.publish(engine.events, { ...event, value }))
   })
+
+// How each text changed from one state of the document to another.
+const textsBetween = (
+  before: InternalDocument.Document,
+  after: InternalDocument.Document
+): ReadonlyMap<string, TextPatch.TextPatch> => {
+  const texts = new Map<string, TextPatch.TextPatch>()
+  for (const { path } of [...InternalDocument.texts(before), ...InternalDocument.texts(after)]) {
+    texts.set(
+      Path.key(path),
+      TextPatch.get(InternalDocument.textAt(before, path), InternalDocument.textAt(after, path))
+    )
+  }
+  return texts
+}
 
 /**
  * Makes a local edit as one change, with the intents `plan` works out from the
@@ -233,12 +235,8 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
               snapshot.texts
             )
             if (loaded !== undefined) {
+              const texts = textsBetween(state.document, loaded)
               state.document = loaded
-              const texts = new Map(
-                InternalDocument.texts(loaded).map((
-                  { path, text }
-                ) => [Path.key(path), { patch: TextPatch.insert(0, text) }])
-              )
               const after = InternalDelta.fromChanges(changes.filter((change) => !inSnapshot(change)))
               return publish(engine, { _tag: "Remote", texts, overlaps: [], message: "" }).pipe(
                 Effect.andThen(receive(engine, after)),
@@ -263,9 +261,7 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
           Effect.gen(function*() {
             const confirmed = state.confirmed!
             confirmed.version = VersionVector.combine(confirmed.version, version)
-            const before = new Map(
-              InternalDocument.texts(state.document).map(({ path, text }) => [Path.key(path), text])
-            )
+            const before = state.document
             // Everything the authority doesn't have was made on top of the
             // rejected change, and nobody else has seen it, so it all goes.
             const { changes, pending } = history()
@@ -278,14 +274,12 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
             state.replica = yield* confirmed.freshId
             state.nextSeq = 0
             state.writers.add(state.replica)
-            const after = new Map(
-              InternalDocument.texts(state.document).map(({ path, text }) => [Path.key(path), text])
-            )
-            const texts = new Map<string, { patch: TextPatch.TextPatch }>()
-            for (const k of new Set([...before.keys(), ...after.keys()])) {
-              texts.set(k, { patch: TextPatch.get(before.get(k) ?? "", after.get(k) ?? "") })
-            }
-            yield* publish(engine, { _tag: "Rejected", texts, overlaps: [], message })
+            yield* publish(engine, {
+              _tag: "Rejected",
+              texts: textsBetween(before, state.document),
+              overlaps: [],
+              message
+            })
           })
         )
     }
