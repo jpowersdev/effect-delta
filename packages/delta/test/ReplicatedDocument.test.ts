@@ -1048,7 +1048,7 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), { votes: 1, priority: "urgent" })
       }))
 
-    it.effect("an older schema isn't told of overlaps in parts it doesn't describe", () =>
+    it.effect("an older schema is told only of overlaps between writes it can read", () =>
       Effect.gen(function*() {
         const V3 = Schema.Struct({
           ...V2.fields,
@@ -1071,6 +1071,22 @@ describe("ReplicatedDocument", () => {
         const old = yield* make("old")
         yield* Replica.receive(old, yield* Replica.delta(ada, VersionVector.empty))
         assert.deepStrictEqual(yield* Replica.receive(old, yield* Replica.delta(ben, VersionVector.empty)), [])
+
+        // Where values it can read meet, it's told of them, and of the write
+        // it shows, though a later one it can't read came with them.
+        yield* ReplicatedDocument.update(old, (doc) => ({ ...doc, status: "review" }))
+        yield* TestClock.adjust("1 second")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "approved" }))
+        yield* Replica.exchange(ada, ben)
+        yield* TestClock.adjust("1 second")
+        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, status: "archived" }))
+        assert.deepStrictEqual(yield* Replica.receive(old, yield* Replica.delta(ben, VersionVector.empty)), [{
+          _tag: "Value",
+          path: ["status"],
+          replicas: [Replica.ReplicaId.make("ada"), Replica.ReplicaId.make("old")],
+          kept: Replica.ReplicaId.make("ada")
+        }])
+        assert.strictEqual((yield* ReplicatedDocument.get(old)).status, "approved")
       }))
   })
 
