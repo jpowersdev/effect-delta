@@ -763,6 +763,42 @@ describe("Relay", () => {
         yield* refuses([change(0, [set("status")], { time: 2 * day })], "is stamped too far in the future")
       }).pipe(Effect.provide(RelayLive)))
 
+    it.effect("refuses a change whose sequence numbers run past the safe integers, though it would wait", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const push = (changes: ReadonlyArray<InternalDocument.AnyChange>, user: string) =>
+          relay.push({ format: Sync.FORMAT, document: spec, delta: InternalDelta.fromChanges(changes) }).pipe(
+            asUser(user)
+          )
+        const status: InternalDocument.Op = { _tag: "Set", path: ["status"], value: "review" }
+        // The second waits for a change nobody has, so nothing checks its ops
+        // against its length; a relay moves the version it reports past it.
+        const forged: ReadonlyArray<InternalDocument.AnyChange> = [
+          { replica: "f", seq: 0, length: 1, parents: [], time: 1, ops: [status] },
+          {
+            replica: "f",
+            seq: 1,
+            length: Number.MAX_SAFE_INTEGER,
+            parents: [{ replica: "ghost", seq: 0 }],
+            time: 2,
+            ops: [status]
+          }
+        ]
+        const refused = yield* Effect.flip(
+          Replica.receive(yield* makeDoc("replica"), InternalDelta.fromChanges(forged))
+        )
+        assert.strictEqual(refused.reason._tag, "Malformed")
+        const error = yield* Effect.flip(push(forged, "forger"))
+        assert.deepStrictEqual(error.reason, refused)
+        // The document still takes everyone else's changes.
+        const ada = yield* makeDoc("ada")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "approved" }))
+        const ack = yield* push([
+          ...((yield* Replica.delta(ada, VersionVector.empty)) as InternalDelta.DeltaImpl).changes.values()
+        ], "ada")
+        assert.strictEqual(ack._tag, "Accepted")
+      }).pipe(Effect.provide(RelayLive)))
+
     it.effect("passes on changes a replica's schema has another rule for, without cutting it off", () =>
       Effect.gen(function*() {
         const relay = yield* Relay.Relay
