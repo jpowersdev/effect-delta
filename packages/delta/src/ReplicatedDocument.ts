@@ -239,8 +239,8 @@ export const Text: Schema.String = Schema.String.annotate({ [InternalShape.RuleK
  *
  * Counters are whole numbers because fractions added in a different order on
  * each replica can round differently, and the replicas would disagree. A
- * total past `Number.MAX_SAFE_INTEGER` reads as that. Like a text, a counter
- * can't have checks.
+ * total past the safe integers reads as the nearest one. Like a text, a
+ * counter can't have checks.
  *
  * @stability unstable
  * @category schemas
@@ -400,7 +400,9 @@ export const makeConfirmed: <A>(
  * Reading never fails. Parts nobody wrote come from `initial`. Parts this
  * schema doesn't describe, written by a newer version of it, are left out,
  * and so are entries, items and optional fields it can't read; a value whose
- * latest write it can't decode shows the latest write it can.
+ * latest write it can't decode shows the latest write it can. An entry or
+ * item missing a field that has a constructor default shows the default, so
+ * that default must be a constant for every replica to show the same.
  *
  * @stability unstable
  * @category getters

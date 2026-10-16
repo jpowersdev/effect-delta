@@ -194,7 +194,8 @@ optional field exists is then always its latest write, never `initial`, so a ser
 
 Entries, items and optional fields have no initial value. One that's missing a required field (written by an
 older version of the schema) is left out, unless the field has a constructor default
-(`Schema.withConstructorDefault`), which fills it in.
+(`Schema.withConstructorDefault`), which fills it in. Every replica fills it in as it reads, so the default
+must be a constant: one that reads the clock or makes a random id would show differently on each replica.
 
 The alternatives:
 - **Defaults in the schema** (`Schema.withDecodingDefaultTypeKey` on every field): pure Schema, but verbose
@@ -206,7 +207,7 @@ The alternatives:
 
 Apps upgrade one device at a time, so replicas on different versions of a schema sync with each other.
 - **Adding a field:** documents that never wrote it show its initial value. Add it to `initial`. A field
-  added to an entry's or item's schema should be optional or have a constructor default.
+  added to an entry's or item's schema should be optional or have a constant constructor default.
 - **Parts an older schema doesn't describe** (a new field, a value it can't decode, such as a new literal)
   are kept, stored and sent on, but don't show in its value, and merges don't report overlaps in them. A
   value whose latest write it can't decode shows the latest write it can. After the upgrade, they show.

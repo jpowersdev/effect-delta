@@ -243,7 +243,10 @@ encoding details.
 ### ReplicatedText
 
 ```ts
-interface ReplicatedText extends Replica.Replica<string> {}
+// A text the functions below edit, watch and anchor: a ReplicatedText, or a document's text field
+// (ReplicatedDocument.text, documents.md), so one editor binding works for both.
+interface Editable extends Pipeable {}
+interface ReplicatedText extends Replica.Replica<string>, Editable {}
 interface Confirmed extends ReplicatedText { readonly connection: Sync.Connection }
 
 interface Options {
@@ -263,9 +266,9 @@ declare const makeConfirmed: (options: {
 }) => Effect<Confirmed, never, Authority | Crypto | Scope>
 
 // Reading
-declare const get: (self: ReplicatedText) => Effect<string>
-declare const changes: (self: ReplicatedText) => Stream<string> // current text, then each new one (like SubscriptionRef.changes)
-declare const subscribe: (self: ReplicatedText) => Effect<Subscription, never, Scope>
+declare const get: (self: Editable) => Effect<string>
+declare const changes: (self: Editable) => Stream<string> // current text, then each new one (like SubscriptionRef.changes)
+declare const subscribe: (self: Editable) => Effect<Subscription, never, Scope>
 
 interface Subscription {
   readonly text: string        // the text at the moment of subscribing
@@ -278,11 +281,11 @@ type Edit =
   | { readonly _tag: "Rejected"; readonly patch: TextPatch; readonly message: string } // rolls back my edit
 
 // Editing: each call is one change. All are dual.
-declare const insert: (self: ReplicatedText, index: number, text: string) => Effect<void, ReplicatedTextError>
-declare const remove: (self: ReplicatedText, index: number, length: number) => Effect<void, ReplicatedTextError>
-declare const applyPatch: (self: ReplicatedText, patch: TextPatch) => Effect<void, ReplicatedTextError> // several edits as one change
-declare const set: (self: ReplicatedText, text: string) => Effect<void>                                  // one replacement, see below
-declare const update: (self: ReplicatedText, f: (text: string) => string) => Effect<void>
+declare const insert: (self: Editable, index: number, text: string) => Effect<void, ReplicatedTextError>
+declare const remove: (self: Editable, index: number, length: number) => Effect<void, ReplicatedTextError>
+declare const applyPatch: (self: Editable, patch: TextPatch) => Effect<void, ReplicatedTextError> // several edits as one change
+declare const set: (self: Editable, text: string) => Effect<void>                                  // one replacement, see below
+declare const update: (self: Editable, f: (text: string) => string) => Effect<void>
 
 // Stable positions
 type Side = "before" | "after" // which way an anchor leans: where text typed exactly at it goes
@@ -290,10 +293,10 @@ interface Anchor { /* opaque; Schema-encodable */ }
 interface AnchorRange { readonly start: Anchor; readonly end: Anchor }
 interface Range { readonly start: number; readonly end: number } // [start, end), UTF-16 code units
 
-declare const anchor: (self: ReplicatedText, index: number, side?: Side) => Effect<Anchor, ReplicatedTextError>
-declare const locate: (self: ReplicatedText, anchor: Anchor) => Effect<Option<number>>       // None: not received here yet, or rolled back
-declare const anchorRange: (self: ReplicatedText, range: Range) => Effect<AnchorRange, ReplicatedTextError>
-declare const locateRange: (self: ReplicatedText, range: AnchorRange) => Effect<Option<Range>> // also None once all of it is deleted
+declare const anchor: (self: Editable, index: number, side?: Side) => Effect<Anchor, ReplicatedTextError>
+declare const locate: (self: Editable, anchor: Anchor) => Effect<Option<number>>       // None: not received here yet, or rolled back
+declare const anchorRange: (self: Editable, range: Range) => Effect<AnchorRange, ReplicatedTextError>
+declare const locateRange: (self: Editable, range: AnchorRange) => Effect<Option<Range>> // also None once all of it is deleted
 
 class ReplicatedTextError extends Schema.TaggedError<ReplicatedTextError>()("ReplicatedTextError", {
   reason: Schema.Union([OutOfBounds, SplitsSurrogatePair])
@@ -353,8 +356,9 @@ interface Replica<out A> extends Pipeable {
   readonly strategy: "tree" | "replay"
 }
 
-declare const ReplicaId: Schema.brand<Schema.String, "ReplicaId"> // never empty
+declare const ReplicaId: Schema.brand<Schema.String, "ReplicaId"> // never empty, nor __proto__
 declare const DocumentId: Schema.brand<Schema.String, "DocumentId">
+type Path = ReadonlyArray<string> // where a part of a document is: ["comments", "c1", "text"]; [] is the root
 
 declare const id: (self: Replica<unknown>) => Effect<ReplicaId> // the id new changes are written under
 declare const version: (self: Replica<unknown>) => Effect<VersionVector>
@@ -492,12 +496,27 @@ declare const layer: <R>(options: {
 declare const layerRemote: Layer<Authority, never, RpcClient.Protocol>
 declare const layerHandlers: Layer<Rpc.ToHandler<Sync.Rpcs>, never, Authority | Sync.Authorization>
 
-interface Proposal {
+type Proposal = TextProposal | DocumentProposal
+
+interface TextProposal {
+  readonly _tag: "Text"
   readonly document: DocumentId
   readonly user: string     // Sync.CurrentUser
   readonly patch: TextPatch // what the change does to the current text
   readonly before: string
   readonly after: string
+}
+
+// A change to a ReplicatedDocument. The authority has no schema, so the document is JSON; a check reads
+// it with ReplicatedDocument.readProposal (documents.md).
+interface DocumentProposal {
+  readonly _tag: "Document"
+  readonly document: DocumentId
+  readonly user: string
+  readonly before: Schema.Json
+  readonly after: Schema.Json
+  readonly paths: ReadonlyArray<Replica.Path> // where the change wrote
+  readonly delta: Delta                       // the change itself
 }
 
 class Rejected extends Schema.TaggedError<Rejected>()("Rejected", { message: Schema.String }) {}
@@ -548,8 +567,8 @@ interface Stored {
 }
 
 interface Snapshot {
-  readonly version: VersionVector // the changes it's the text of
-  readonly text: string
+  readonly version: VersionVector // the changes they're the texts of
+  readonly texts: ReadonlyArray<{ readonly path: Replica.Path; readonly text: string }> // [] for a ReplicatedText
 }
 
 declare const layerMemory: Layer<HistoryStore>
@@ -565,7 +584,7 @@ interface Persisted { readonly await: Effect<never, HistoryStoreError> }
 
 **The store stays simple.** `persist` knows the strategy, so it decides when to write a snapshot. For
 replay, it writes one when its scope closes and after every 4,096 characters of history in between. Loading
-records the history without replaying it, takes the text from the snapshot, and merges only the changes
+records the history without replaying it, takes the texts from the snapshot, and merges only the changes
 saved after it; a snapshot that doesn't match the history is ignored. `writers` lets a replica upload
 changes it made under earlier ids, and lets servers remember who owns each id. When its scope closes,
 `persist` saves once more, so the last edits aren't lost. A confirmed replica's
