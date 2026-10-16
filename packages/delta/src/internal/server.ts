@@ -189,13 +189,9 @@ export const make = Effect.fnUntraced(function*(options: {
         const fresh: Array<InternalDocument.AnyChange> = []
         let refused: string | undefined
         for (const change of incoming) {
-          const problem = InternalDocument.checkOnArrival(change)
-          if (problem !== undefined) {
-            refused ??= problem
-            continue
-          }
-          // As for replicas, one under the key of a change dropped as bad is
-          // refused, and the bad one itself is checked again.
+          // As for replicas, a change under another's key refuses the whole
+          // push, whatever else is wrong with it, even if the other was
+          // dropped as bad. The bad one itself is checked again.
           const existing = History.get(state.history, key(change))
           if (existing !== undefined && !Equal.equals(existing, change)) {
             return yield* syncError(
@@ -204,7 +200,9 @@ export const make = Effect.fnUntraced(function*(options: {
               })
             )
           }
-          if (!History.has(state.history, change)) fresh.push(change)
+          const problem = InternalDocument.checkOnArrival(change)
+          if (problem !== undefined) refused ??= problem
+          else if (!History.has(state.history, change)) fresh.push(change)
         }
         const pushed = new Set(fresh.map(key))
         unsaved = pushed
