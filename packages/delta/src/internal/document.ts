@@ -561,8 +561,18 @@ class Found {
       // and an edit made after seeing the one that wins wasn't lost to it.
       const removal = slot(document, path)?.presence
       if (removal === undefined || removal.exists) return []
+      // Worked out once for each change, which can make many of the edits.
+      const edits = new Map<AnyChange, boolean>()
+      const editsHere = (change: AnyChange) => {
+        let found = edits.get(change)
+        if (found === undefined) {
+          found = change.ops.some((op) => editsInside(op, path, this.reading))
+          edits.set(change, found)
+        }
+        return found
+      }
       const concurrent = lost.filter((each) =>
-        each.editor !== removal.replica && editedConcurrently(document, path, each, removal, this.reading)
+        each.editor !== removal.replica && editedConcurrently(document.history, each, removal, editsHere)
       )
       if (concurrent.length === 0) return []
       const met = new Set(concurrent.flatMap(({ editor, remover }) => [editor, remover]))
@@ -572,21 +582,20 @@ class Found {
 }
 
 // Whether any of the edits `lost` names was made concurrently with `removal`:
-// neither had seen the other.
+// neither had seen the other. `edits` says whether a change edits inside the
+// part.
 const editedConcurrently = (
-  document: Document,
-  path: Path.Path,
+  history: History.History<Op>,
   lost: Lost,
   removal: Write,
-  reading: Reading
+  edits: (change: AnyChange) => boolean
 ): boolean => {
-  const { history } = document
   for (let seq = Math.max(lost.from, VersionVector.get(removal.past, lost.editor)); seq < lost.next;) {
     const change = History.find(history, { replica: lost.editor, seq })!
     // Each change says what it was made on top of, which needn't include
     // what its replica's earlier ones had seen.
     const sawRemoval = VersionVector.get(history.pasts.get(key(change))!, removal.replica) > removal.seq
-    if (!sawRemoval && change.ops.some((op) => editsInside(op, path, reading))) return true
+    if (!sawRemoval && edits(change)) return true
     seq = change.seq + change.length
   }
   return false
