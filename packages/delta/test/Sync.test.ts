@@ -407,6 +407,36 @@ describe("Relay", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(carol), yield* ReplicatedDocument.get(ben))
       }).pipe(Effect.provide(RelayLive)))
 
+    it.effect("refuses a bad change that waited when it's pushed again with what it waited for, as replicas do", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const ada = yield* makeDoc("ada")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes: 1 }))
+        const fromAda = (yield* Replica.delta(ada, VersionVector.empty)) as InternalDelta.DeltaImpl
+        // Made on top of Ada's change, and bad: it has fewer ops than it says.
+        const bad: InternalDocument.AnyChange = {
+          replica: "mallory",
+          seq: 0,
+          length: 2,
+          parents: [{ replica: "ada", seq: 0 }],
+          time: 1000,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }
+        const both = InternalDelta.fromChanges([...fromAda.changes.values(), bad])
+        const ben = yield* makeDoc("ben")
+        const received = yield* Effect.forEach(
+          [InternalDelta.fromChanges([bad]), both],
+          (delta) => Effect.map(Effect.exit(Replica.receive(ben, delta)), Exit.isSuccess)
+        )
+        const pushed = yield* Effect.forEach(
+          [InternalDelta.fromChanges([bad]), both],
+          (delta) =>
+            Effect.map(Effect.exit(relay.push({ format: Sync.FORMAT, document: notes, delta })), Exit.isSuccess)
+        )
+        assert.deepStrictEqual(received, [true, false])
+        assert.deepStrictEqual(pushed, received)
+      }).pipe(Effect.provide(RelayLive)))
+
     it.effect("keeps what it sent when a change reuses the key of one that turned out bad", () =>
       Effect.gen(function*() {
         const review: InternalDocument.AnyChange = {
