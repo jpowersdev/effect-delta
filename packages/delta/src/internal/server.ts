@@ -28,6 +28,7 @@ import * as InternalDelta from "./delta.ts"
 import * as InternalDocument from "./document.ts"
 import * as History from "./history.ts"
 import * as Path from "./path.ts"
+import * as InternalProposal from "./proposal.ts"
 
 // The core shared by relays and authorities. Each document is held in memory
 // while it's in use: loaded from the history store when first asked for, and
@@ -210,6 +211,7 @@ export const make = Effect.fnUntraced(function*(options: {
             // A change all at the root is a replicated text's.
             const isText = change.ops.every((op) => Path.isRoot(InternalDocument.pathOf(op)))
             const before = isText ? InternalDocument.textAt(state, Path.root) : InternalDocument.toJson(state)
+            const existedBefore = isText ? undefined : InternalProposal.existingIn(state)
             // Kept consistent, so its JSON of the document is never ambiguous.
             const { problem, texts } = InternalDocument.integrate(state, [change], {
               overlaps: false,
@@ -229,15 +231,14 @@ export const make = Effect.fnUntraced(function*(options: {
                   before: before as string,
                   after: InternalDocument.textAt(state, Path.root)
                 }
-                : {
-                  _tag: "Document",
+                : InternalProposal.make({
                   document: document.id,
                   user,
-                  before,
-                  after: InternalDocument.toJson(state),
+                  before: { json: before, existing: existedBefore! },
+                  after: { json: InternalDocument.toJson(state), existing: InternalProposal.existingIn(state) },
                   paths: pathsOf(change),
                   delta: InternalDelta.fromChanges([change])
-                }
+                })
             ))
             if (Result.isFailure(verdict)) {
               document.state = without(state, (c) => c === change)

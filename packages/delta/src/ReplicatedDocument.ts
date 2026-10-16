@@ -38,6 +38,7 @@ import * as InternalConnection from "./internal/connection.ts"
 import type * as InternalDelta from "./internal/delta.ts"
 import * as InternalEditable from "./internal/editable.ts"
 import * as InternalEngine from "./internal/engine.ts"
+import * as InternalProposal from "./internal/proposal.ts"
 import * as InternalReplica from "./internal/replica.ts"
 import * as InternalShape from "./internal/shape.ts"
 import type * as Replica from "./Replica.ts"
@@ -635,8 +636,8 @@ export interface Proposed<A> {
  * `Authority.Rejected` when the change writes where the schema has no part,
  * writes a part with an op its rule doesn't take, writes a value the schema
  * can't read, or gives a list item a key field that names another item. A
- * change that fits reads as replicas will show it, with one exception
- * (below).
+ * change that fits reads as replicas will show it: entries, items and
+ * optional fields only where they exist, and each value as its latest write.
  *
  * **Gotchas**
  *
@@ -644,9 +645,9 @@ export interface Proposed<A> {
  * authority before the apps that write to it: a change from a newer version
  * doesn't fit an older one.
  *
- * A record entry or optional field that nobody has added, but that has text
- * typed into it through `text` (or anything else a client wrote inside it),
- * reads as there, though replicas don't show it until it's added.
+ * Read a proposal in the check that receives it: what exists is noted for
+ * the authority's own proposals, and one made any other way reads entries
+ * and optional fields wherever its JSON has them.
  *
  * **Example** (Only the owner approves)
  *
@@ -685,8 +686,18 @@ export const readProposal = <A>(
       if (misfit !== undefined) return Effect.fail(new Authority.Rejected({ message: misfit }))
     }
     return Effect.succeed({
-      before: InternalShape.readJson(shape, proposal.before, options.initial) as A,
-      after: InternalShape.readJson(shape, proposal.after, options.initial) as A,
+      before: InternalShape.readJson(
+        shape,
+        proposal.before,
+        options.initial,
+        InternalProposal.existsIn(proposal, "before")
+      ) as A,
+      after: InternalShape.readJson(
+        shape,
+        proposal.after,
+        options.initial,
+        InternalProposal.existsIn(proposal, "after")
+      ) as A,
       paths: proposal.paths
     })
   })

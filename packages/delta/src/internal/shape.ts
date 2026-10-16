@@ -424,8 +424,13 @@ export const read = (
  *
  * @internal
  */
-export const readJson = (shape: Shape, json: Schema.Json, initial: unknown): unknown =>
-  readRoot(shape, jsonAt(json, Path.root), initial, new Map())
+export const readJson = (
+  shape: Shape,
+  json: Schema.Json,
+  initial: unknown,
+  // Which optional fields and entries exist, where JSON alone can't say.
+  exists: ((path: Path.Path) => boolean) | undefined
+): unknown => readRoot(shape, jsonAt(json, Path.root, exists), initial, new Map())
 
 // What reading needs from one part of a document: a replica's state, or the
 // JSON a server shows it as.
@@ -461,17 +466,24 @@ const documentAt = (document: InternalDocument.Document, path: Path.Path): Sourc
   items: () => InternalDocument.itemsAt(document, path).map((name) => documentAt(document, [...path, name]))
 })
 
-// A server's JSON has only what exists, and only each value's latest write.
-const jsonAt = (json: Schema.Json | undefined, path: Path.Path): Source => ({
+// A server's JSON has only each value's latest write, and leaves out what was
+// removed, but not what was never added.
+const jsonAt = (
+  json: Schema.Json | undefined,
+  path: Path.Path,
+  exists: ((path: Path.Path) => boolean) | undefined
+): Source => ({
   path,
   itemKey: undefined,
   text: () => Predicate.isString(json) ? json : "",
   counter: () => Predicate.isNumber(json) ? json : 0,
   values: () => json === undefined ? [] : [json],
-  exists: () => json !== undefined,
-  at: (name) => jsonAt(isJsonObject(json) && Object.hasOwn(json, name) ? json[name] : undefined, [...path, name]),
+  exists: () => json !== undefined && (exists?.(path) ?? true),
+  at: (name) =>
+    jsonAt(isJsonObject(json) && Object.hasOwn(json, name) ? json[name] : undefined, [...path, name], exists),
   keys: () => isJsonObject(json) ? Object.keys(json) : [],
-  items: () => Array.isArray(json) ? json.map((item, i) => jsonAt(item, [...path, String(i)])) : []
+  // A list's items are the ones that show, so they exist.
+  items: () => Array.isArray(json) ? json.map((item, i) => jsonAt(item, [...path, String(i)], undefined)) : []
 })
 
 const isJsonObject = (json: Schema.Json | undefined): json is Schema.JsonObject =>
