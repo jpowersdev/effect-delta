@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema"
 import type * as Types from "effect/Types"
 import type * as Delta from "./Delta.ts"
 import * as InternalAnchor from "./internal/anchor.ts"
+import * as InternalChange from "./internal/change.ts"
 import * as InternalPath from "./internal/path.ts"
 import * as internal from "./internal/replica.ts"
 import type * as ReplicatedText from "./ReplicatedText.ts"
@@ -62,13 +63,13 @@ export const isReplica: (u: unknown) => u is Replica<unknown> = internal.isRepli
 /**
  * Identifies the stream of changes one replica writes. Unique per replica and
  * never reused. It isn't a user or a connection: one user's tabs and devices
- * are each their own replica.
+ * are each their own replica. It can't be empty, or `__proto__`.
  *
  * @stability unstable
  * @category schemas
  * @since 0.1.0
  */
-export const ReplicaId = Schema.String.check(Schema.isMinLength(1)).pipe(Schema.brand("ReplicaId"))
+export const ReplicaId = InternalChange.ReplicaName.pipe(Schema.brand("ReplicaId"))
 
 /**
  * A replica id: identifies the stream of changes one replica writes.

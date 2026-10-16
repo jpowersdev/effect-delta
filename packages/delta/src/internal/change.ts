@@ -8,6 +8,17 @@ import * as Schema from "effect/Schema"
 // numbers.
 
 /**
+ * A replica id as changes and version vectors carry it: never empty, and never
+ * `__proto__`, which a plain object can't hold as a key.
+ *
+ * @internal
+ */
+export const ReplicaName = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.makeFilter((name) => name !== "__proto__", { expected: "a replica id other than __proto__" })
+)
+
+/**
  * One sequence number of one replica: the identity of a character, and the
  * name of a version when it's the last sequence number of a change.
  *
@@ -20,7 +31,7 @@ export interface Id {
 
 /** @internal */
 export const Id: Schema.Codec<Id> = Schema.Struct({
-  replica: Schema.String,
+  replica: ReplicaName,
   seq: Schema.Int
 })
 
@@ -37,7 +48,7 @@ export interface Span {
 
 /** @internal */
 export const Span: Schema.Codec<Span> = Schema.Struct({
-  replica: Schema.String,
+  replica: ReplicaName,
   seq: Schema.Int,
   length: Schema.Int
 })
@@ -59,7 +70,7 @@ export interface Change<Op> {
 /** @internal */
 export const Change = <Op extends Schema.Top>(op: Op) =>
   Schema.Struct({
-    replica: Schema.String.check(Schema.isMinLength(1)),
+    replica: ReplicaName,
     seq: Schema.Int,
     length: Schema.Int,
     parents: Schema.Array(Id),

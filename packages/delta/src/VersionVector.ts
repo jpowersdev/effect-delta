@@ -14,6 +14,7 @@
 import { dual } from "effect/Function"
 import * as Reducer from "effect/Reducer"
 import * as Schema from "effect/Schema"
+import { ReplicaName } from "./internal/change.ts"
 
 /**
  * What a replica has seen: for each replica id, how many of its sequence
@@ -33,7 +34,7 @@ export type VersionVector = { readonly [replica: string]: number }
  * @since 0.1.0
  */
 export const VersionVector: Schema.Codec<VersionVector, { readonly [replica: string]: number }> = Schema.Record(
-  Schema.String,
+  ReplicaName,
   Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 )
 
