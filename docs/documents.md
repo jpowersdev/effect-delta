@@ -410,7 +410,9 @@ interface Proposed<A> { readonly before: A; readonly after: A; readonly paths: R
 - lists, as [Lists](#lists) says.
 
 The whole call is one change. It fails with `Schema.SchemaError` when a new value doesn't encode, for example
-when it fails a check, or encodes to something JSON can't carry (`Schema.Any` passes anything on). Values are
+when it fails a check, or encodes to something JSON can't carry (`Schema.Any` passes anything on), or to JSON
+that reads back as another value (a union of a number and a string writes the string `"NaN"` as the number's
+JSON). Values are
 written as JSON sends them, so `-0` is written as `0`, and a `-0` in JSON text, which other languages send,
 is read as `0`.
 

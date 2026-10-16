@@ -244,14 +244,29 @@ const compileValue = (ast: SchemaAST.AST): Value => {
   const codec = Schema.toCodecJson(schema)
   const encode = Schema.encodeUnknownResult(codec)
   const decode = Schema.decodeUnknownResult(codec)
+  const equivalence = Schema.toEquivalence(schema)
   return {
     _tag: "Value",
     // As JSON sends it, so the replica that writes it shows what the rest
     // receive: some codecs, such as `Schema.Any`'s, pass on what JSON can't
-    // carry, and JSON has no -0.
-    encode: (value) => Result.map(Result.flatMap(encode(value), asJson), InternalDocument.asSent),
+    // carry, and JSON has no -0. And only if it reads back as the value: a
+    // union's members can write the same JSON, such as a number's and a
+    // string's "NaN", and it reads as the first.
+    encode: (value) =>
+      Result.flatMap(
+        Result.map(Result.flatMap(encode(value), asJson), InternalDocument.asSent),
+        (json) =>
+          Result.flatMap(decode(json), (read) =>
+            equivalence(read, value)
+              ? Result.succeed(json)
+              : Result.fail(
+                new Schema.SchemaError(
+                  new SchemaIssue.InvalidValue({ message: "its JSON reads back as another value" }, value)
+                )
+              ))
+      ),
     decode: (json) => decode(json),
-    equivalence: Schema.toEquivalence(schema)
+    equivalence
   }
 }
 
