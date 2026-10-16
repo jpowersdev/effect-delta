@@ -1,7 +1,6 @@
 import * as Clock from "effect/Clock"
 import * as Crypto from "effect/Crypto"
 import * as Effect from "effect/Effect"
-import * as Equal from "effect/Equal"
 import * as PubSub from "effect/PubSub"
 import type * as Result from "effect/Result"
 import * as Semaphore from "effect/Semaphore"
@@ -311,27 +310,20 @@ const receive = (
 ): Effect.Effect<ReadonlyArray<Replica.Overlap>, Replica.DeltaError> => {
   const { state } = engine
   const { history } = state.document
+  const reused = (replica: string) =>
+    Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(replica) })))
   // Checked before anything changes, so a bad delta leaves the replica as it was.
   for (const change of delta.changes.values()) {
     if (!InternalDocument.fitsStrategy(change, engine.strategy)) {
       return Effect.fail(deltaError(new Replica.StrategyMismatch({ expected: engine.strategy })))
     }
-    // A change under the key of one dropped as bad is another change too:
-    // a store keeps only one of them.
-    const existing = History.get(history, key(change))
-    if (
-      (change.replica === state.replica && existing === undefined) ||
-      (existing !== undefined && !Equal.equals(existing, change))
-    ) {
-      return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
+    // Made under this replica's id by another copy of it.
+    if (change.replica === state.replica && History.get(history, key(change)) === undefined) {
+      return reused(change.replica)
     }
   }
-  let refused: string | undefined
-  for (const change of delta.changes.values()) {
-    const problem = InternalDocument.checkOnArrival(change)
-    if (problem !== undefined) refused ??= problem
-    else if (!History.has(history, change)) history.pending.set(key(change), change)
-  }
+  const arrived = InternalDocument.arrive(state.document, [...delta.changes.values()])
+  if (arrived.reused !== undefined) return reused(arrived.reused)
 
   // A bad change is dropped, and the rest are applied without it.
   const integrated = InternalDocument.integrateReady(state.document, { overlaps: true })
@@ -341,7 +333,7 @@ const receive = (
     : publish(engine, { _tag: "Remote", texts: integrated.texts, overlaps, message: "" })
   // A bad change that waited on these, if it came only with an earlier delta,
   // was answered then: these are fine, as a relay would say.
-  const problem = integrated.problems.find(({ key }) => delta.changes.has(key))?.message ?? refused
+  const problem = integrated.problems.find(({ key }) => delta.changes.has(key))?.message ?? arrived.refused
   if (problem === undefined) return Effect.as(published, overlaps)
   return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem }))))
 }

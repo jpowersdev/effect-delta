@@ -786,14 +786,46 @@ const textEnds = (change: AnyChange): ReadonlyMap<string, Id> => {
 const endsCache = new WeakMap<AnyChange, ReadonlyMap<string, Id>>()
 
 /**
- * What's wrong with a change that the change alone shows: it takes no sequence
- * numbers, which version vectors can't say whether anyone has, or it starts,
- * or names a parent, before any change. It's refused as it arrives, before it
- * can wait or be saved.
+ * Takes in changes as they arrive, the same way for every receiver, before
+ * any is applied. A change under the key of another the document has, even
+ * one dropped as bad, reuses its replica id, and nothing is taken: `reused`
+ * says whose. Otherwise a change that's bad on its own is refused, and
+ * `refused` says why; the rest that are new wait as pending, for
+ * `integrateReady`, and are `fresh`.
  *
  * @internal
  */
-export const checkOnArrival = (change: AnyChange): string | undefined => {
+export const arrive = (
+  document: Document,
+  changes: ReadonlyArray<AnyChange>
+): {
+  readonly reused: string | undefined
+  readonly refused: string | undefined
+  readonly fresh: ReadonlyArray<AnyChange>
+} => {
+  const { history } = document
+  // A store keeps one change per key, so the other is another change too.
+  const reused = changes.find((change) => {
+    const existing = History.get(history, key(change))
+    return existing !== undefined && !Equal.equals(existing, change)
+  })
+  if (reused !== undefined) return { reused: reused.replica, refused: undefined, fresh: [] }
+  let refused: string | undefined
+  const fresh: Array<AnyChange> = []
+  for (const change of changes) {
+    const problem = checkOnArrival(change)
+    if (problem !== undefined) refused ??= problem
+    else if (!History.has(history, change)) fresh.push(change)
+  }
+  for (const change of fresh) history.pending.set(key(change), change)
+  return { reused: undefined, refused, fresh }
+}
+
+// What's wrong with a change that the change alone shows: it takes no sequence
+// numbers, which version vectors can't say whether anyone has, or it starts,
+// or names a parent, before any change. It's refused before it can wait or be
+// saved.
+const checkOnArrival = (change: AnyChange): string | undefined => {
   const name = `Change ${key(change)}`
   if (change.length < 1) return `${name} takes no sequence numbers`
   if (change.seq < 0) return `${name} starts before any change`

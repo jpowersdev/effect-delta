@@ -3,7 +3,6 @@ import * as Clock from "effect/Clock"
 import type * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
-import * as Equal from "effect/Equal"
 import * as Exit from "effect/Exit"
 import type * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -185,28 +184,15 @@ export const make = Effect.fnUntraced(function*(options: {
         }
 
         // Changes that are new here wait as pending until what they build on
-        // is here, then they're checked and applied in causal order.
-        const fresh: Array<InternalDocument.AnyChange> = []
-        let refused: string | undefined
-        for (const change of incoming) {
-          // As for replicas, a change under another's key refuses the whole
-          // push, whatever else is wrong with it, even if the other was
-          // dropped as bad. The bad one itself is checked again.
-          const existing = History.get(state.history, key(change))
-          if (existing !== undefined && !Equal.equals(existing, change)) {
-            return yield* syncError(
-              new Replica.DeltaError({
-                reason: new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })
-              })
-            )
-          }
-          const problem = InternalDocument.checkOnArrival(change)
-          if (problem !== undefined) refused ??= problem
-          else if (!History.has(state.history, change)) fresh.push(change)
+        // is here, then they're checked and applied in causal order, as on
+        // replicas.
+        const { fresh, refused, reused } = InternalDocument.arrive(state, incoming)
+        if (reused !== undefined) {
+          return yield* syncError(
+            new Replica.DeltaError({ reason: new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(reused) }) })
+          )
         }
-        const pushed = new Set(fresh.map(key))
-        unsaved = pushed
-        for (const change of fresh) state.history.pending.set(key(change), change)
+        unsaved = new Set(fresh.map(key))
         // What this push may apply: these, and changes that waited for them.
         const waiting = [...state.history.pending.values()]
 
