@@ -781,9 +781,9 @@ const endsCache = new WeakMap<AnyChange, ReadonlyMap<string, Id>>()
 
 /**
  * What's wrong with a change that the change alone shows: it takes no sequence
- * numbers, which version vectors can't say whether anyone has, or it starts,
- * or names a parent, before any change. It's refused as it arrives, before it
- * can wait or be saved.
+ * numbers, which version vectors can't say whether anyone has, it starts, or
+ * names a parent, before any change, or it's stamped later than any clock
+ * reads. It's refused as it arrives, before it can wait or be saved.
  *
  * @internal
  */
@@ -792,8 +792,14 @@ export const checkOnArrival = (change: AnyChange): string | undefined => {
   if (change.length < 1) return `${name} takes no sequence numbers`
   if (change.seq < 0) return `${name} starts before any change`
   if (change.parents.some((parent) => parent.seq < 0)) return `${name} has a parent before any change`
+  if (change.time > latestTime) return `${name} is stamped later than any clock reads`
   return undefined
 }
+
+// The last millisecond a `Date` holds. A change stamped after it is forged,
+// and the changes made after it, each stamped later than the last, would run
+// out of whole numbers a change can carry.
+const latestTime = 8.64e15
 
 // Checks a change before applying any of it, so a bad change can't leave the
 // document half-updated.

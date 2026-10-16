@@ -228,11 +228,12 @@ export class StrategyMismatch extends Schema.TaggedError<StrategyMismatch>()("St
 /**
  * A delta held a change that can't be applied: for example one that refers to
  * characters the changes it was made on top of don't have, or whose write
- * time isn't later than theirs. The replica drops it and applies the rest of
- * the delta without it; changes made on top of it wait. A change that waited
- * for others and turns out bad once they arrive is dropped too, without
- * failing the delta they came in. A change that only doesn't fit the
- * replica's schema isn't malformed: it's kept, and doesn't show.
+ * time isn't later than theirs, or is later than any clock reads. The replica
+ * drops it and applies the rest of the delta without it; changes made on top
+ * of it wait. A change that waited for others and turns out bad once they
+ * arrive is dropped too, without failing the delta they came in. A change
+ * that only doesn't fit the replica's schema isn't malformed: it's kept, and
+ * doesn't show.
  *
  * @stability unstable
  * @category errors

@@ -97,7 +97,8 @@ What time costs: a device whose clock is far ahead wins concurrent writes until 
 and replicas that see its changes stamp their own later changes after them. Changes stay correctly ordered.
 What's off is which concurrent write wins and, later, the times a history view shows. Relays and
 authorities reject changes stamped more than a day ahead of their own clock, so a broken clock (or a
-forged time) can't spread from them; peers that exchange directly trust each other's.
+forged time) can't spread from them; peers that exchange directly trust each other's, up to the latest time a
+clock reads.
 
 ### Fields
 
@@ -225,8 +226,8 @@ but can show different values for the parts only one of them understands.
 ## How changes look
 
 The change envelope gains a write time, on every change, texts included:
-`{ replica, seq, length, parents, time, ops }`. Receivers check that it's later than each parent's
-(`Malformed` otherwise).
+`{ replica, seq, length, parents, time, ops }`. Receivers check that it's later than each parent's, and
+no later than any clock reads: a `Date`'s last millisecond (`Malformed` otherwise).
 
 Every op names a path. An absent path means the root, so a `ReplicatedText`'s changes look exactly as
 they do now, plus `time`.
@@ -594,6 +595,9 @@ All built, each with tests and an example:
    relay for good. Authorities still keep each path to one kind of thing.
 9. **Servers reject write times more than a day ahead of their clock.** A change stamped far in the future
    would leave everyone who saw it unable to write anything later.
+10. **Every receiver refuses a write time later than any clock reads** (a `Date`'s last millisecond). A
+    change stamped at the last whole numbers a change can carry left peers that took it directly unable to
+    stamp a change after it, so nobody accepted their changes.
 
 ## Later
 
