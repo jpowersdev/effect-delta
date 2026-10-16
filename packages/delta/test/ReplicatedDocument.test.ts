@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, Stream } from "effect"
-import { Delta, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
+import { Delta, HistoryStore, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { TestClock } from "effect/testing"
@@ -946,6 +946,66 @@ describe("ReplicatedDocument", () => {
           }
         }
       }))
+
+    it.effect("a change that takes no sequence numbers is refused whenever it arrives", () => {
+      const first: InternalDocument.AnyChange = {
+        replica: "mallory",
+        seq: 0,
+        length: 1,
+        parents: [],
+        time: 0,
+        ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+      }
+      // After `first`, and taking none of the sequence numbers after it.
+      const empty: InternalDocument.AnyChange = {
+        replica: "mallory",
+        seq: 1,
+        length: 0,
+        parents: [{ replica: "mallory", seq: 0 }],
+        time: 1,
+        ops: [
+          { _tag: "Place", path: ["comments", "c1"], parent: { replica: "nobody", seq: 0 }, side: "L" },
+          { _tag: "RemoveAt", path: ["title"], index: 0, length: -1 }
+        ]
+      }
+      const other: InternalDocument.AnyChange = {
+        replica: "ben",
+        seq: 0,
+        length: 1,
+        parents: [],
+        time: 0,
+        ops: [{ _tag: "Increment", path: ["votes"], by: 1 }]
+      }
+      const saved = Replica.DocumentId.make("saved")
+      // Receives the changes in order, saving as it goes, then opens what it
+      // saved.
+      const receiving = (changes: ReadonlyArray<InternalDocument.AnyChange>) =>
+        Effect.gen(function*() {
+          yield* Effect.scoped(Effect.gen(function*() {
+            const ada = yield* make("ada", "replay")
+            yield* HistoryStore.persist(ada, saved)
+            for (const change of changes) {
+              const received = yield* Effect.exit(Replica.receive(ada, InternalDelta.fromChanges([change])))
+              assert.strictEqual(Exit.isFailure(received), change === empty, `receiving ${key(change)}`)
+              // Saved before the next arrives.
+              yield* Effect.yieldNow
+            }
+          }))
+          const reopened = yield* Effect.scoped(Effect.gen(function*() {
+            const ada = yield* make("ada-2", "replay")
+            yield* HistoryStore.persist(ada, saved)
+            return yield* ReplicatedDocument.get(ada)
+          }))
+          assert.strictEqual(reopened.status, "review")
+        }).pipe(Effect.provide(HistoryStore.layerMemory))
+      const key = (change: InternalDocument.AnyChange) => `${change.seq}@${change.replica}`
+      return Effect.gen(function*() {
+        yield* receiving([first, empty])
+        // Waiting for `first` while `other` is saved, then reopened from
+        // the texts saved with what it had.
+        yield* receiving([empty, other, first])
+      })
+    })
 
     it.effect("says which change a bad text op is in", () =>
       Effect.gen(function*() {
