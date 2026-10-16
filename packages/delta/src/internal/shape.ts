@@ -143,8 +143,14 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
         return { _tag: "List", item, key: undefined }
       }
       const field = item._tag === "Fields" ? item.fields.find(({ name }) => name === rule.key) : undefined
-      if (item._tag !== "Fields" || field === undefined || field.optional || field.shape._tag !== "Value") {
-        return refuse(path, `a list's items must be structs or classes with a required "${rule.key}" field`)
+      if (
+        item._tag !== "Fields" || field === undefined || field.optional || field.shape._tag !== "Value" ||
+        !holdsStrings(ast.rest[0]!, rule.key)
+      ) {
+        return refuse(
+          path,
+          `a list's items must be structs or classes with a required "${rule.key}" field that's a string`
+        )
       }
       // An item's key is never made up: one without it can't be read.
       const fields = item.fields.map((other) => other === field ? { ...field, hasDefault: false } : other)
@@ -226,6 +232,13 @@ const withoutUndefined = (ast: SchemaAST.AST): SchemaAST.AST => {
   if (!SchemaAST.isUnion(ast)) return ast
   const defined = ast.types.filter((type) => !SchemaAST.isUndefined(type))
   return defined.length === 1 ? defined[0]! : ast
+}
+
+// Whether an item's field `key` holds strings, as the steps of a path are.
+const holdsStrings = (item: SchemaAST.AST, key: string): boolean => {
+  const fields = classFields(item) ?? (SchemaAST.isObjects(item) ? item : undefined)
+  const type = fields?.propertySignatures.find(({ name }) => name === key)?.type
+  return type !== undefined && isStringKey(SchemaAST.toType(type))
 }
 
 const isStringKey = (ast: SchemaAST.AST): boolean =>
