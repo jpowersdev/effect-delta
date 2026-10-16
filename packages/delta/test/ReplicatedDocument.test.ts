@@ -623,6 +623,45 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual((yield* ReplicatedDocument.get(ada)).comments, {})
       }))
 
+    it.effect(
+      "a removal over many edits in one change merges about as fast wherever in it they are",
+      () =>
+        Effect.gen(function*() {
+          const Shelf = Schema.Struct({
+            first: Schema.Record(Schema.String, Schema.Int),
+            boxes: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Int)),
+            last: Schema.Record(Schema.String, Schema.Int)
+          })
+          const values = Object.fromEntries(Array.from({ length: 8000 }, (_, i) => [`k${i}`, i]))
+          // Ben removes a box while Ada fills it, in one change that writes as
+          // much before or after it.
+          const merging = Effect.fnUntraced(function*(other: "first" | "last") {
+            const open = (replica: string) =>
+              ReplicatedDocument.make(Shelf, {
+                initial: { first: {}, boxes: {}, last: {} },
+                replica: Replica.ReplicaId.make(replica)
+              })
+            const ada = yield* open("ada")
+            const ben = yield* open("ben")
+            yield* ReplicatedDocument.update(ada, (shelf) => ({ ...shelf, boxes: { b: {} } }))
+            yield* Replica.exchange(ada, ben)
+            yield* ReplicatedDocument.update(ben, (shelf) => ({ ...shelf, boxes: {} }))
+            yield* ReplicatedDocument.update(ada, (shelf) => ({ ...shelf, boxes: { b: values }, [other]: values }))
+            const delta = yield* Replica.delta(ada, yield* Replica.version(ben))
+            // The test clock stands still, so this is the time on the wall.
+            const start = performance.now()
+            const overlaps = yield* Replica.receive(ben, delta)
+            const took = performance.now() - start
+            assert.deepStrictEqual(overlaps.map(({ _tag }) => _tag), ["Removed"])
+            return took
+          })
+          const editsLast = yield* merging("first")
+          const editsFirst = yield* merging("last")
+          assert.isBelow(editsLast / editsFirst, 8)
+        }),
+      60_000
+    )
+
     it.effect("a removal wins over edits to the entry's own text or counter it hadn't seen, and the merge says so", () =>
       Effect.gen(function*() {
         // Entries and an optional field that are a text or a counter.
