@@ -187,9 +187,9 @@ same starting text and end up with it twice, as Yjs apps sometimes do. And wheth
 optional field exists is then always its latest write, never `initial`, so a server's JSON (which has no
 `initial`) says the same.
 
-Entries and items have no initial value. One that's missing a required field (written by an older version
-of the schema) is left out, unless the field has a constructor default (`Schema.withConstructorDefault`),
-which fills it in.
+Entries, items and optional fields have no initial value. One that's missing a required field (written by an
+older version of the schema) is left out, unless the field has a constructor default
+(`Schema.withConstructorDefault`), which fills it in.
 
 The alternatives:
 - **Defaults in the schema** (`Schema.withDecodingDefaultTypeKey` on every field): pure Schema, but verbose
@@ -399,8 +399,8 @@ a text field is a defect.
 **`changes` keeps the identity of unchanged parts.** A new value shares every part that didn't change with the
 previous one, so a UI can skip re-rendering them.
 
-**Reading never fails.** Parts the schema doesn't describe are left out, and so are entries and items it can't
-read. Parts nobody wrote come from `initial`.
+**Reading never fails.** Parts the schema doesn't describe are left out, and so are entries, items and optional
+fields it can't read. Parts nobody wrote come from `initial`.
 
 ### Overlaps
 
@@ -540,8 +540,8 @@ All built, each with tests and an example:
 1. **`initial` has no entries, items or optional fields.** Texts, records and lists start empty and optional
    fields start absent, so whether something exists is always its latest write. Otherwise a server's JSON,
    which has no `initial`, couldn't say that an entry in `initial` had been removed.
-2. **Entries and items that can't be read are left out**, such as one missing a required field, unless the
-   field has a constructor default.
+2. **Entries, items and optional fields that can't be read are left out**, such as one missing a required
+   field, unless the field has a constructor default.
 3. **Lists are `ReplicatedDocument.List(item, { key })`**, a constructor like `Schema.Array`, instead of
    `Schema.Array(item).pipe(list(...))`. Items are placed with a `Place` op, and a list of values knows each
    item by the id of the write that added it.

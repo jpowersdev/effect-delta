@@ -489,7 +489,8 @@ const readAt = (
           ? undefined
           : { value: (initial.value as Record<string, unknown>)[field.name] }
         const value = readAt(field.shape, part, fieldInitial, memo)
-        if (value === Missing && !field.hasDefault) return Missing
+        // An optional field that can't be read is left out, like an entry.
+        if (value === Missing && !field.optional && !field.hasDefault) return Missing
         parts.push(value)
         if (value !== Missing && !(field.optional && value === undefined)) fields[field.name] = value
       }
@@ -606,6 +607,8 @@ const planAt = (
           continue
         }
         const present = Object.hasOwn(after as object, field.name) && fieldAfter !== undefined
+        // One this schema can't read isn't in `after`, but it stays.
+        if (!present && !shown(field.shape, document, fieldPath, memo)) continue
         planPresence(field.shape, document, fieldPath, present ? { value: fieldAfter } : undefined, intents, memo)
       }
       return

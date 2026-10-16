@@ -397,8 +397,8 @@ export const makeConfirmed: <A>(
  *
  * Reading never fails. Parts nobody wrote come from `initial`. Parts this
  * schema doesn't describe, written by a newer version of it, are left out,
- * and so are entries and items it can't read; a value whose latest write it
- * can't decode shows the latest write it can.
+ * and so are entries, items and optional fields it can't read; a value whose
+ * latest write it can't decode shows the latest write it can.
  *
  * @stability unstable
  * @category getters
