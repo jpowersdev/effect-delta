@@ -242,7 +242,8 @@ export class Malformed extends Schema.TaggedError<Malformed>()("Malformed", {
  * Two different changes used the same replica id and sequence numbers. That
  * happens when a replica id is reused, for example by two tabs restoring the
  * same saved replica, and it would silently corrupt history if it were
- * applied.
+ * applied. A change dropped as `Malformed` counts too: it may have been saved
+ * while it waited.
  *
  * **Gotchas**
  *

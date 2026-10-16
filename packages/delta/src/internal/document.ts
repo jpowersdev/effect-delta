@@ -535,6 +535,7 @@ export const integrateReady = (
     if (round.problem === undefined) break
     const [bad, ...behind] = ready.filter((change) => !history.changes.has(key(change)))
     problems.push({ key: key(bad!), message: round.problem })
+    history.dropped.set(key(bad!), bad!)
     for (const change of behind) history.pending.set(key(change), change)
   }
   const located = textOverlaps.map((overlap) => moved.has(overlap) ? locate(document, overlap) : overlap)

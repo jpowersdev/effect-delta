@@ -14,6 +14,11 @@ export interface History<Op> {
   /** What each applied change's author had seen when making it, by change key. */
   readonly pasts: Map<string, VersionVector.VersionVector>
   readonly pending: Map<string, Change<Op>>
+  /**
+   * Changes that waited and turned out bad, by key. They may have been
+   * stored while they waited, and a store keeps one change per key.
+   */
+  readonly dropped: Map<string, Change<Op>>
   readonly version: Record<string, number>
   frontier: ReadonlyArray<Id>
   /** The latest write time of an applied change, or -1 before the first. */
@@ -26,6 +31,7 @@ export const make = <Op>(): History<Op> => ({
   byReplica: new Map(),
   pasts: new Map(),
   pending: new Map(),
+  dropped: new Map(),
   version: {},
   frontier: [],
   time: -1
@@ -34,6 +40,14 @@ export const make = <Op>(): History<Op> => ({
 /** @internal */
 export const seen = (history: History<unknown>, replica: string): number =>
   Object.hasOwn(history.version, replica) ? history.version[replica]! : 0
+
+/**
+ * The change the history has under `key`: applied, pending, or dropped as bad.
+ *
+ * @internal
+ */
+export const get = <Op>(history: History<Op>, key: string): Change<Op> | undefined =>
+  history.changes.get(key) ?? history.pending.get(key) ?? history.dropped.get(key)
 
 /**
  * Whether the history already has `change`, applied or pending.

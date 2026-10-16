@@ -193,7 +193,9 @@ export const make = Effect.fnUntraced(function*(options: {
             refused ??= problem
             continue
           }
-          const existing = state.history.changes.get(key(change)) ?? state.history.pending.get(key(change))
+          // As for replicas, one under the key of a change dropped as bad is
+          // refused, and the bad one itself is checked again.
+          const existing = History.get(state.history, key(change))
           if (existing !== undefined && !Equal.equals(existing, change)) {
             return yield* syncError(
               new Replica.DeltaError({
@@ -201,7 +203,7 @@ export const make = Effect.fnUntraced(function*(options: {
               })
             )
           }
-          if (existing === undefined && !History.has(state.history, change)) fresh.push(change)
+          if (!History.has(state.history, change)) fresh.push(change)
         }
         const pushed = new Set(fresh.map(key))
         unsaved = pushed

@@ -316,7 +316,9 @@ const receive = (
     if (!InternalDocument.fitsStrategy(change, engine.strategy)) {
       return Effect.fail(deltaError(new Replica.StrategyMismatch({ expected: engine.strategy })))
     }
-    const existing = history.changes.get(key(change)) ?? history.pending.get(key(change))
+    // A change under the key of one dropped as bad is another change too:
+    // a store keeps only one of them.
+    const existing = History.get(history, key(change))
     if (
       (change.replica === state.replica && existing === undefined) ||
       (existing !== undefined && !Equal.equals(existing, change))
