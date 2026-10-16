@@ -1384,7 +1384,10 @@ describe("Authority", () => {
       assert.strictEqual(exchanged.reason._tag, "AuthorityOnly")
       const received = yield* Effect.flip(Replica.receive(confirmed, yield* Replica.delta(peer, VersionVector.empty)))
       assert.strictEqual(received.reason._tag, "AuthorityOnly")
-    }).pipe(Effect.scoped, Effect.provide([NoSecrets, CryptoTest])))
+      // Connecting it to a relay is a mistake, not something to retry.
+      const connected = yield* Effect.exit(Relay.connect(confirmed, { document: spec }))
+      assert.isTrue(Exit.hasDies(connected))
+    }).pipe(Effect.scoped, Effect.provide([NoSecrets, RelayLive, CryptoTest])))
 
   it.effect("refuses replicas that don't expect an authority", () =>
     Effect.gen(function*() {
