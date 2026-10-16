@@ -213,7 +213,7 @@ this by deriving merge rules from an ordinary `Schema`:
 That's a second family of strategies: last-writer-wins values and maps. It reuses the same changes,
 version vectors and deltas.
 
-Documents' merge rules are proposed in [`documents.md`](./documents.md).
+Documents' merge rules are decided, and built, in [`documents.md`](./documents.md).
 
 **Decided (2026-10-15): text first, with all three strategies, then Schema-derived documents.** The
 first examples use a bare text. Documents come once every text strategy is solid.
