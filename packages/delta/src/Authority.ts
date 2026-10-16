@@ -97,6 +97,10 @@ export interface TextProposal {
  * - `paths`: where the change wrote.
  * - `delta`: the change itself.
  *
+ * A list is an array of the items that show, in order, but in `exists` and
+ * `paths` an item's path ends with its key, not its index: its key field, or
+ * for a list of values, a key made from the id of the write that added it.
+ *
  * @stability unstable
  * @category models
  * @since 0.1.0

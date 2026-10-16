@@ -15,9 +15,9 @@
  * `ReplicatedText` functions, through `text`, which is what editors use.
  * Observe it with `changes` (each new value) or `subscribe` (each edit).
  *
- * It's a replica like any other: `Replica.exchange`, `Relay.connect`,
- * `HistoryStore.persist` and authorities take it as it is, and servers don't
- * need its schema.
+ * It's a replica like any other: `Replica.exchange`, `Relay.connect` and
+ * `HistoryStore.persist` take it as it is, `makeConfirmed` makes one that
+ * answers to an authority, and servers don't need its schema.
  *
  * @stability unstable
  * @since 0.1.0
@@ -286,7 +286,8 @@ export type KeyOf<A> = { readonly [K in keyof A]-?: A[K] extends string ? K : ne
  * wins over concurrent edits inside the item.
  *
  * Without `key`, items are values, compared by value: changing one counts as
- * removing it and inserting another.
+ * removing it and inserting another. A list of structs or classes needs a
+ * `key`: `make` refuses one without, as a defect.
  *
  * An array that isn't a `List` is a value, written whole.
  *
@@ -677,12 +678,12 @@ type TextPathWithin<A, Steps extends ReadonlyArray<0>> = A extends string ? read
  *
  * **Details**
  *
- * Each edit through it is one change to the document. A text field in a
- * record entry or list item that doesn't exist, or was removed, still works:
- * its text is kept, and shows once the entry exists. An `update` that adds the
- * entry writes the text it's given over the kept text, so to keep it, give
- * the entry the handle's text (`ReplicatedText.get`). The path's type allows
- * any string in the value, but only a `Text` is a text field: a path to
+ * Each edit through it is one change to the document. A text field in a record
+ * entry, list item or optional field that doesn't exist, or was removed, still
+ * works: its text is kept, and shows once the entry exists. An `update` that
+ * adds the entry writes the text it's given over the kept text, so to keep it,
+ * give the entry the handle's text (`ReplicatedText.get`). The path's type
+ * allows any string in the value, but only a `Text` is a text field: a path to
  * another string throws, as a defect.
  *
  * **Example** (Editing a text field)

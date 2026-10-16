@@ -100,7 +100,7 @@ The alternatives:
 What time costs: a device whose clock is far ahead wins concurrent writes until the other clocks catch up,
 and replicas that see its changes stamp their own later changes after them. Changes stay correctly ordered.
 What's off is which concurrent write wins and, later, the times a history view shows. Relays and
-authorities reject changes stamped more than a day ahead of their own clock, so a broken clock (or a
+authorities refuse changes stamped more than a day ahead of their own clock, so a broken clock (or a
 forged time) can't spread from them; peers that exchange directly trust each other's, up to the latest
 time a clock reads.
 
@@ -211,6 +211,8 @@ Entries, items and optional fields have no initial value. One that's missing a r
 older version of the schema) is left out, unless the field has a constructor default
 (`Schema.withConstructorDefault`), which fills it in. Every replica fills it in as it reads, so the default
 must be a constant: one that reads the clock or makes a random id would show differently on each replica.
+Keep it the same in every version of the schema too: a value equal to it isn't always written, so it shows
+whatever default the reader's version has.
 Only a value is filled in: a text, counter, record or list in an entry starts empty (or at 0), whatever its
 default says.
 A field that shows its default is compared with it, so an `update` that leaves it as it shows doesn't write it,
@@ -274,7 +276,7 @@ changes without the app's code. Values are JSON, texts are texts, counters are n
 it can (the envelope, write times, text ops against that path's text) and stores the rest as it is. One
 relay serves every app, and every version of each app's schema.
 
-**Replicas and relays don't reject a change for not fitting a schema.** Any one replica that did would
+**Replicas and relays don't refuse a change for not fitting a schema.** Any one replica that did would
 refuse what the others accept, and a relay that did would cut off everyone it had passed the change to.
 Replicas keep such changes and don't show them, as they do for parts a newer schema adds. An authority is
 where a change can be turned down, before anyone else has it: it rejects ops that would make one path hold
@@ -460,8 +462,8 @@ type Path = ReadonlyArray<string>
 
 type Overlap =
   | { readonly _tag: "Text"; readonly path: Path; readonly range: Range; readonly anchors: AnchorRange; readonly replicas: ReadonlyArray<ReplicaId> }
-  // Both wrote different values here, both moved this list item, or one removed it while the other wrote it;
-  // `kept` is whose write shows.
+  // Both wrote different values here, both placed this list item (adding or moving it), or one removed it
+  // while the other wrote it; `kept` is whose write shows.
   | { readonly _tag: "Value"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId>; readonly kept: ReplicaId }
   // One removed this entry, item or optional field while the other changed something inside it, or moved
   // it. It stays removed, by a removal made concurrently with that change.
@@ -533,7 +535,8 @@ Decided (2026-10-15):
 6. **Arrays are whole values unless they're lists.** `ReplicatedDocument.List` merges item by item, with
    items keyed by a field.
 7. **Checks only on values.** `make` refuses checks on merged parts.
-8. **Parts an older schema doesn't describe are kept, not shown, and never rejected.**
+8. **Parts an older schema doesn't describe are kept and not shown,** and replicas and relays never refuse
+   them.
 9. **One change format, and servers don't need the schema:** every change has a write time, and every op can
    name a path.
 10. **Text fields are `ReplicatedText.Editable`**, so one editor binding serves both. *Alternative names:*
@@ -574,7 +577,7 @@ All built, each with tests and an example:
   overlaps a model of the rule gives. With the tree strategy, it reports the `Text` overlaps the rule gives
   too, for these and for honest sessions, and replay reports what tree does.
 - **Break it on purpose,** as before: drop the replica-id tiebreak, let edits keep entries, and so on, and
-  confirm a property fails.
+  confirm a property test fails.
 
 ## Known limits
 
@@ -635,7 +638,7 @@ All built, each with tests and an example:
 4. **Existence is `Set` for values and `Add` for everything else,** texts and counters included: an
    optional text field is added, then edited.
 5. **Changes must keep one text's ops together, take a sequence number or more for each op, and name the
-   last ids of changes as parents.** All three hold for every change a replica makes; receivers reject others
+   last ids of changes as parents.** All three hold for every change a replica makes; receivers refuse others
    as `Malformed`.
 6. **A replay text's parents are found by walking the change graph,** not from version vectors. The
    Eg-walker conformance data has replica ids whose changes aren't in sequence order, which version vectors
@@ -644,10 +647,10 @@ All built, each with tests and an example:
    doesn't fit the schema, so a check reads the document as replicas will show it. Reading JSON
    alone let a client hide a write from a check: writing over it with a value replicas can't read, or
    removing a required field, which replicas ignore.
-8. **Changes that don't fit a schema are kept, not rejected,** by replicas and relays alike (see
-   [How changes look](#how-changes-look)). Rejecting them let one bad change cut every replica off from a
+8. **Changes that don't fit a schema are kept, not refused,** by replicas and relays alike (see
+   [How changes look](#how-changes-look)). Refusing them let one bad change cut every replica off from a
    relay for good. Authorities still keep each path to one kind of thing.
-9. **Servers reject write times more than a day ahead of their clock.** A change stamped far in the future
+9. **Servers refuse write times more than a day ahead of their clock.** A change stamped far in the future
    would leave everyone who saw it unable to write anything later.
 10. **Every receiver refuses a write time later than any clock reads** (a `Date`'s last millisecond),
     unless it's a millisecond after its parents', as the changes of a replica that saw one are. A change

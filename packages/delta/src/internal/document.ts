@@ -702,7 +702,7 @@ const applyChanges = (
     }
   }
   // A text nobody has written yet joins the document when a part of it is
-  // applied, so a change that's rejected leaves nothing behind.
+  // applied, so a change that's refused leaves nothing behind.
   const merges = new Map<string, { readonly path: Path.Path; readonly text: Text.Text; readonly merge: Text.Merge }>()
   const mergeOf = (path: Path.Path, strategy: Replica.Strategy) => {
     const k = Path.key(path)

@@ -229,7 +229,7 @@ apart. It reopens 115,000 characters in about 25 ms and merges the co-author's w
 | Module           | What it's for                                                                                                 |
 | ---------------- | ------------------------------------------------------------------------------------------------------------- |
 | `ReplicatedText` | A collaborative text replica: create, edit, read, subscribe, anchor.                                          |
-| `ReplicatedDocument` | A replica whose value is a `Schema`, merged by rules from the schema ([`documents.md`](./documents.md)). |
+| `ReplicatedDocument` | A replica whose value has a `Schema`, merged by rules from the schema ([`documents.md`](./documents.md)). |
 | `TextPatch`      | How a string changed, in the Quill shape. Named and shaped like `JsonPatch`, and a `Differ<string, TextPatch>`. Editor bindings speak this. |
 | `Replica`        | What every replica shares, so sync and storage work for texts and documents alike: ids, version, delta, receive, exchange, overlaps. |
 | `Delta`          | What syncs: a set of changes. Combines with `Combiner`/`Reducer`.                                            |
@@ -249,7 +249,7 @@ encoding details.
 ```ts
 // A text the functions below edit, watch and anchor: a ReplicatedText, or a document's text field
 // (ReplicatedDocument.text, documents.md), so one editor binding works for both.
-interface Editable extends Pipeable {}
+interface Editable extends Pipeable, Inspectable {}
 interface ReplicatedText extends Replica.Replica<string>, Editable {}
 interface Confirmed extends ReplicatedText { readonly connection: Sync.Connection }
 
@@ -379,10 +379,11 @@ type Overlap =
     readonly anchors: ReplicatedText.AnchorRange  // follows it from here on
     readonly replicas: ReadonlyArray<ReplicaId>
   }
-  // Documents only (documents.md): both wrote here, both moved this list item, or one removed it;
-  // `kept` is whose write shows.
+  // Documents only (documents.md): both wrote different values here, both placed this list item (adding or
+  // moving it), or one removed it while the other wrote it; `kept` is whose write shows.
   | { readonly _tag: "Value"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId>; readonly kept: ReplicaId }
   // One removed this entry, item or optional field while the other changed something inside it, or moved it.
+  // It stays removed, by a removal made concurrently with that change.
   | { readonly _tag: "Removed"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId> }
 
 class DeltaError extends Schema.TaggedError<DeltaError>()("DeltaError", {

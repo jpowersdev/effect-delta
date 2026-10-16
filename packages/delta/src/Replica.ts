@@ -27,10 +27,10 @@ import type * as VersionVector from "./VersionVector.ts"
 const TypeId = "~effect-delta/Replica"
 
 /**
- * How a replica merges concurrent edits. `"tree"` keeps every character, even
- * removed ones, in a tree that's always in memory. `"replay"` keeps the plain
- * text and its history, and replays the concurrent part of the history to
- * merge.
+ * How a replica merges concurrent edits to its texts. `"tree"` keeps every
+ * character, even removed ones, in a tree that's always in memory.
+ * `"replay"` keeps the plain text and its history, and replays the
+ * concurrent part of the history to merge.
  *
  * @stability unstable
  * @category models
@@ -153,13 +153,14 @@ export const Overlap: Schema.Codec<Overlap, OverlapEncoded> = Schema.Union([
  *   where "8 hours" and "12 hours" merged into "812 hours". `range` is where
  *   the stretch is in the merged text right now (empty if both sides removed
  *   all of it); `anchors` follow it from here on.
- * - `Value`: both wrote different values at `path`, both moved the list item
- *   at `path`, or one removed it while the other wrote it. `kept` is the
- *   replica whose write shows, which can be a third replica whose later write
- *   arrived in the same merge. Values are compared as this replica's schema
- *   reads them, and one it can't read, written by a newer version of the
- *   schema, meets no other value, though writing it still says the entry,
- *   item or optional field at `path` exists, which can meet a removal.
+ * - `Value`: both wrote different values at `path`, both placed the list item
+ *   at `path` (adding or moving it), or one removed it while the other wrote
+ *   it. `kept` is the replica whose write shows, which can be a third replica
+ *   whose later write arrived in the same merge. Values are compared as this
+ *   replica's schema reads them, and one it can't read, written by a newer
+ *   version of the schema, meets no other value, though writing it still says
+ *   the entry, item or optional field at `path` exists, which can meet a
+ *   removal.
  * - `Removed`: one removed the entry, list item or optional field at `path`
  *   while the other changed something inside it (its text or counter, if
  *   it's one), or moved it. It stays removed, by a removal made concurrently
@@ -232,13 +233,13 @@ export class StrategyMismatch extends Schema.TaggedError<StrategyMismatch>()("St
 
 /**
  * A delta held a change that can't be applied: for example one that refers to
- * characters the changes it was made on top of don't have, or whose write
- * time isn't later than theirs, or is later than any clock reads. The replica
- * drops it and applies the rest of the delta without it; changes made on top
- * of it wait. A change that waited for others and turns out bad once they
- * arrive is dropped too, without failing the delta they came in. A change
- * that only doesn't fit the replica's schema isn't malformed: it's kept, and
- * doesn't show.
+ * characters the changes it was made on top of don't have, or whose write time
+ * isn't later than theirs, or is later than any clock reads (unless it's a
+ * millisecond after theirs). The replica drops it and applies the rest of the
+ * delta without it; changes made on top of it wait. A change that waited for
+ * others and turns out bad once they arrive is dropped too, without failing the
+ * delta they came in. A change that only doesn't fit the replica's schema isn't
+ * malformed: it's kept, and doesn't show.
  *
  * @stability unstable
  * @category errors
