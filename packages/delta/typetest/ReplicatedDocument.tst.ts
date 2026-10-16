@@ -76,6 +76,21 @@ describe("ReplicatedDocument", () => {
     expect(ReplicatedDocument.text).type.toBeCallableWith(doc, ["title"])
   })
 
+  it("text takes paths in a document with a recursive value", () => {
+    interface Node {
+      readonly name: string
+      readonly children: ReadonlyArray<Node>
+    }
+    const Node: Schema.Codec<Node> = Schema.Struct({
+      name: Schema.String,
+      children: Schema.Array(Schema.suspend((): Schema.Codec<Node> => Node))
+    })
+    const Notes = Schema.Struct({ title: ReplicatedDocument.Text, meta: Schema.Json, outline: Node })
+    const notes = {} as ReplicatedDocument.ReplicatedDocument<typeof Notes.Type>
+    expect(ReplicatedDocument.text(notes, ["title"])).type.toBe<ReplicatedText.Editable>()
+    expect(ReplicatedDocument.text).type.not.toBeCallableWith(notes, ["missing"])
+  })
+
   it("text rejects paths that don't end at a string", () => {
     expect(ReplicatedDocument.text).type.not.toBeCallableWith(doc, ["votes"])
     expect(ReplicatedDocument.text).type.not.toBeCallableWith(doc, ["missing"])
