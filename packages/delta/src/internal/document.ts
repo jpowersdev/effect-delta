@@ -1278,8 +1278,10 @@ export const load = (
     }
     History.record(history, change, past)
   }
-  // Changes that don't make up the version can't go with its texts.
-  if (history.pending.size > 0 || VersionVector.compare(history.version, version) !== "equal") return undefined
+  // Changes that don't make up the version can't go with its texts. Any left
+  // waiting once they do are behind their replica's sequence numbers, as
+  // forged ones can be, so they could never be applied: they wait here too.
+  if (VersionVector.compare(history.version, version) !== "equal") return undefined
   const byPath = new Map(saved.map(({ path, text }) => [Path.key(path), text]))
   for (const [k, entry] of parts) {
     const text = byPath.get(k)
