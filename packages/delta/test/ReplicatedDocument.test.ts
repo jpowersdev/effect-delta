@@ -463,6 +463,44 @@ describe("ReplicatedDocument", () => {
         }
       }))
 
+    it.effect("a removal wins over edits to the entry's own text or counter it hadn't seen, and the merge says so", () =>
+      Effect.gen(function*() {
+        // Entries and an optional field that are a text or a counter.
+        const Sheet = Schema.Struct({
+          note: Schema.optionalKey(ReplicatedDocument.Text),
+          cells: Schema.Record(Schema.String, ReplicatedDocument.Text),
+          counts: Schema.Record(Schema.String, ReplicatedDocument.Counter)
+        })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Sheet, {
+            initial: { cells: {}, counts: {} },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* open("ada")
+        const ben = yield* open("ben")
+        yield* ReplicatedDocument.set(ada, { note: "Hi", cells: { a1: "Hi" }, counts: { yes: 1 } })
+        yield* Replica.exchange(ada, ben)
+        yield* ReplicatedDocument.set(ada, { cells: {}, counts: {} })
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ben, ["note"]), 2, "!")
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ben, ["cells", "a1"]), 2, "!")
+        yield* ReplicatedDocument.update(ben, (sheet) => ({ ...sheet, counts: { yes: 2 } }))
+        const removed = [["cells", "a1"], ["counts", "yes"], ["note"]].map((path): Replica.Overlap => ({
+          _tag: "Removed",
+          path,
+          replicas: [Replica.ReplicaId.make("ada"), Replica.ReplicaId.make("ben")]
+        }))
+        const byPath = (overlaps: ReadonlyArray<Replica.Overlap>) =>
+          [...overlaps].sort((a, b) => JSON.stringify(a.path).localeCompare(JSON.stringify(b.path)))
+        // Whether the replica had the removal or the edits.
+        const fromBen = yield* Replica.delta(ben, yield* Replica.version(ada))
+        const fromAda = yield* Replica.delta(ada, yield* Replica.version(ben))
+        assert.deepStrictEqual(byPath(yield* Replica.receive(ada, fromBen)), removed)
+        assert.deepStrictEqual(byPath(yield* Replica.receive(ben, fromAda)), removed)
+        for (const doc of [ada, ben]) {
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(doc), { cells: {}, counts: {} })
+        }
+      }))
+
     it.effect("adding a removed entry back brings back everyone's edits", () =>
       Effect.gen(function*() {
         const { ada, ben } = yield* pair
