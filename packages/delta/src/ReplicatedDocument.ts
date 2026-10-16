@@ -110,7 +110,7 @@ const makeWith = Effect.fnUntraced(function*(schema: Schema.Top, options: {
     model: {
       read: (document) => InternalShape.read(shape, document, options.initial, memo),
       shows: (overlap) => InternalShape.shows(shape, overlap),
-      values: InternalShape.values(shape)
+      reading: InternalShape.reading(shape)
     }
   })
   const self: ReplicatedDocumentImpl = Object.assign(Object.create(Proto), {

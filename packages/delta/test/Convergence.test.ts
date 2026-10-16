@@ -329,7 +329,7 @@ const checkOverlaps = Effect.fnUntraced(function*<A>(
   assert.deepStrictEqual(
     sorted(edit.overlaps),
     sorted(
-      expectedOverlaps(changes, before, after, InternalShape.values(shape)).filter((overlap) =>
+      expectedOverlaps(changes, before, after, InternalShape.reading(shape)).filter((overlap) =>
         InternalShape.shows(shape, overlap)
       )
     ),

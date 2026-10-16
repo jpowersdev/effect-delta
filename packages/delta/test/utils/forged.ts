@@ -102,6 +102,8 @@ const values: ReadonlyArray<Path> = [
   ...each((i) => [["items", i, "id"], ["items", i, "done"], ["items", i, "extra"], ["items", i, "subs", "s", "id"]])
 ]
 const presences: ReadonlyArray<Path> = [
+  // A value that's always there, which no removal takes away.
+  ["status"],
   ["scores", "k"],
   ["notes", "a"],
   ["due"],
@@ -899,21 +901,23 @@ const byPath = (writes: ReadonlyArray<Written>): Map<string, Array<Written>> => 
  * exists, or both moved its item; `Removed` where one removed the part and
  * the other edited inside it or moved it, if it ends removed by a removal
  * that hadn't seen the edit. A value it
- * can't read meets nothing. `changes` are every change the replica has,
- * `before` and `after` its versions around the merge, and `values` how it
- * reads values.
+ * can't read meets nothing, nor does whether a part exists where it's always
+ * there. `changes` are every change the replica has, `before` and `after` its
+ * versions around the merge, and `reading` how it reads what's written.
  */
 export const expectedOverlaps = (
   changes: ReadonlyArray<InternalDocument.AnyChange>,
   before: VersionVector.VersionVector,
   after: VersionVector.VersionVector,
-  values: InternalDocument.Values
+  reading: InternalDocument.Reading
 ): Array<Overlap> => {
   const applied = appliedBy(changes, after)
   const earlier = new Set(appliedBy(changes, before))
   const writes = (changes: ReadonlyArray<InternalDocument.AnyChange>) =>
     changes.flatMap((change) => writesOf(change, applied)).filter((write) =>
-      write.kind !== "value" || values.reads(write.path, write.value!)
+      write.kind === "value"
+        ? reading.reads(write.path, write.value!)
+        : write.kind !== "presence" || reading.comesAndGoes(write.path)
     )
   const had = byPath(writes([...earlier]))
   const received = writes(applied.filter((change) => !earlier.has(change)))
@@ -947,7 +951,7 @@ export const expectedOverlaps = (
       if (saw(write, other)) continue
       if (write.kind === other.kind) {
         const differ = write.kind === "value"
-          ? values.differ(write.path, write.value!, other.value!)
+          ? reading.differ(write.path, write.value!, other.value!)
           : write.kind === "presence"
           ? write.exists !== other.exists
           : write.kind === "place"

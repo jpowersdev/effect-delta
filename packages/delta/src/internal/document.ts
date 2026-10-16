@@ -462,17 +462,20 @@ export type Overlap =
   | { readonly _tag: "Removed"; readonly path: Path.Path; readonly replicas: ReadonlyArray<string> }
 
 /**
- * How a replica reads the values written at each path, so that the overlaps
- * it's told of are ones its value shows: a value it can't read meets nothing,
- * and two it reads as the same don't differ.
+ * How a replica reads what's written at each path, so that the overlaps it's
+ * told of are ones its value shows: a value it can't read meets nothing, two
+ * it reads as the same don't differ, and whether a part exists meets nothing
+ * where the part is always there.
  *
  * @internal
  */
-export interface Values {
+export interface Reading {
   /** Whether it can read a value written at `path`. */
   readonly reads: (path: Path.Path, value: Schema.Json) => boolean
   /** Whether two values written at `path`, both of which it can read, differ as it reads them. */
   readonly differ: (path: Path.Path, a: Schema.Json, b: Schema.Json) => boolean
+  /** Whether the part at `path` comes and goes: an optional field, a record entry or a list item. */
+  readonly comesAndGoes: (path: Path.Path) => boolean
 }
 
 // What concurrent writes met over: a value, whether something exists, or a
@@ -504,9 +507,9 @@ class Found {
   // that both arrive in it, as when a document loads, don't count.
   private readonly fresh = new Set<Write>()
   private readonly insideBefore = new Map<Slot, Record<string, number>>()
-  readonly values: Values
-  constructor(values: Values) {
-    this.values = values
+  readonly reading: Reading
+  constructor(reading: Reading) {
+    this.reading = reading
   }
   /** Notes a write the merge made. */
   wrote(write: Write): void {
@@ -546,7 +549,7 @@ class Found {
   list(document: Document): Array<Overlap> {
     return [...this.found.values()].flatMap(({ lost, over, path, replicas, tag }): Array<Overlap> => {
       if (tag === "Value") {
-        const kept = keptAt(slot(document, path)!, over, (value) => this.values.reads(path, value))
+        const kept = keptAt(slot(document, path)!, over, this.reading)
         return [{ _tag: "Value", path, replicas: [...replicas].sort(compareReplica), kept }]
       }
       // Edits lost to the removal the part ends removed by, made without
@@ -566,15 +569,15 @@ class Found {
 // Whose write shows at a path where writes met: a removal if it won, else the
 // latest of the kind of write they met over (of values, the latest the
 // replica reads).
-const keptAt = (found: Slot, over: ReadonlySet<Over>, reads: (value: Schema.Json) => boolean): string => {
-  const { presence } = found
+const keptAt = (found: Slot, over: ReadonlySet<Over>, reading: Reading): string => {
+  const presence = reading.comesAndGoes(found.path) ? found.presence : undefined
   if (presence !== undefined && (!presence.exists || (over.size === 1 && over.has("presence")))) {
     return presence.replica
   }
   if (!over.has("value")) return found.places.at(-1)!.replica
   // Values it reads met, so there's one.
   let i = found.values.length - 1
-  while (!reads(found.values[i]!.value)) i--
+  while (!reading.reads(found.path, found.values[i]!.value)) i--
   return found.values[i]!.replica
 }
 
@@ -611,14 +614,14 @@ export const integrate = (
  * merge: a bad change is dropped, the changes ready behind it are applied,
  * and the ones made on top of it keep waiting. So what a document shows
  * doesn't depend on how its changes arrived, and replicas and relays drop the
- * same changes. With `overlaps`, how the replica reads values, it collects
- * the overlaps it's told of.
+ * same changes. With `overlaps`, how the replica reads what's written, it
+ * collects the overlaps it's told of.
  *
  * @internal
  */
 export const integrateReady = (
   document: Document,
-  options: { readonly overlaps: Values | undefined }
+  options: { readonly overlaps: Reading | undefined }
 ): Integrated => {
   const { history } = document
   // All in one merge, so changes that arrive together never meet, whatever
@@ -1073,10 +1076,11 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       if (found !== undefined) {
         found.wrote(value)
         // Only values the replica reads meet, as it reads them.
-        const { values } = found
-        const differing = values.reads(op.path, value.value)
+        const { reading } = found
+        const differing = reading.reads(op.path, value.value)
           ? unseenBy(at, value, at.values).filter((other) =>
-            found.had(other) && values.reads(op.path, other.value) && values.differ(op.path, other.value, value.value)
+            found.had(other) && reading.reads(op.path, other.value) &&
+            reading.differ(op.path, other.value, value.value)
           )
           : []
         if (differing.length > 0) {
@@ -1126,9 +1130,11 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
   at.presence = at.presences.at(-1)
   if (found !== undefined) {
     found.wrote(write)
-    const differing = unseenBy(at, write, at.presences).filter((other) =>
-      found.had(other) && other.exists !== write.exists
-    )
+    // Where the part is always there, whether it exists is nothing the
+    // replica shows.
+    const differing = found.reading.comesAndGoes(at.path)
+      ? unseenBy(at, write, at.presences).filter((other) => found.had(other) && other.exists !== write.exists)
+      : []
     if (differing.length > 0) {
       found.add(at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
     }

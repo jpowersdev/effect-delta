@@ -346,13 +346,14 @@ export const shows = (shape: Shape, overlap: InternalDocument.Overlap): boolean 
 }
 
 /**
- * How a value read with `shape` reads the values written at each path, for
- * overlaps: as the value there decodes them, and not at all where there's no
- * value or one doesn't decode.
+ * How a value read with `shape` reads what's written at each path, for
+ * overlaps: values as the value there decodes them, and not at all where
+ * there's no value or one doesn't decode; and whether a part exists only
+ * where it comes and goes.
  *
  * @internal
  */
-export const values = (shape: Shape): InternalDocument.Values => {
+export const reading = (shape: Shape): InternalDocument.Reading => {
   const valueAt = (path: Path.Path): Value | undefined => {
     const found = at(shape, path)
     return typeof found !== "string" && found.shape._tag === "Value" ? found.shape : undefined
@@ -365,6 +366,10 @@ export const values = (shape: Shape): InternalDocument.Values => {
     differ: (path, a, b) => {
       const value = valueAt(path)!
       return !value.equivalence(Result.getOrThrow(value.decode(a)), Result.getOrThrow(value.decode(b)))
+    },
+    comesAndGoes: (path) => {
+      const found = at(shape, path)
+      return typeof found !== "string" && found.presence !== "always"
     }
   }
 }
