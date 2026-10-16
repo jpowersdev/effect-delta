@@ -1,7 +1,15 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Option, Schema, Stream } from "effect"
-import { Authority, Delta, HistoryStore, Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
+import { Effect, Fiber, Layer, Option, Schema, Stream } from "effect"
+import {
+  Authority,
+  Delta,
+  HistoryStore,
+  Replica,
+  ReplicatedDocument,
+  ReplicatedText,
+  VersionVector
+} from "effect-delta"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 
@@ -50,6 +58,16 @@ const recording = (keys: Set<string>) =>
     const store = yield* KeyValueStore.KeyValueStore
     return { ...store, set: (key, value) => Effect.andThen(Effect.sync(() => keys.add(key)), store.set(key, value)) }
   })).pipe(Layer.provide(KeyValueStore.layerMemory))
+
+// A key-value store whose writes empty a key before they fill it, as a file
+// system's do.
+const truncating = Layer.effect(KeyValueStore.KeyValueStore)(Effect.gen(function*() {
+  const store = yield* KeyValueStore.KeyValueStore
+  return {
+    ...store,
+    set: (key, value) => store.set(key, "").pipe(Effect.andThen(Effect.yieldNow), Effect.andThen(store.set(key, value)))
+  }
+})).pipe(Layer.provide(KeyValueStore.layerMemory))
 
 describe("HistoryStore", () => {
   it.effect("persist loads what was saved, and saves what's new", () =>
@@ -136,6 +154,23 @@ describe("HistoryStore", () => {
       )
     )
   })
+
+  it.effect("layerKeyValueStore keeps each record whole when a write is interrupted", () =>
+    Effect.gen(function*() {
+      const laptop = yield* make("laptop")
+      yield* ReplicatedText.insert(laptop, 0, "Hello")
+      const delta = yield* Replica.delta(laptop, VersionVector.empty)
+      for (let steps = 0; steps < 10; steps++) {
+        yield* Effect.gen(function*() {
+          const store = yield* HistoryStore.HistoryStore
+          const appending = yield* Effect.forkChild(store.append(notes, delta))
+          for (let i = 0; i < steps; i++) yield* Effect.yieldNow
+          yield* Fiber.interrupt(appending)
+          // It loads, with the delta or without it.
+          yield* store.load(notes)
+        }).pipe(Effect.provide(HistoryStore.layerKeyValueStore({ prefix: "docs" }).pipe(Layer.provide(truncating))))
+      }
+    }))
 
   describe("snapshots, for the replay strategy", () => {
     const openReplay = (replica: string) =>
