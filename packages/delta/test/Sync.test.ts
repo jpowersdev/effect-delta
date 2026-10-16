@@ -960,7 +960,7 @@ const accepted = (push: Push): Array<InternalDocument.AnyChange> =>
 
 // A replica's document as an authority's proposal has it: its JSON, and which
 // parts exist.
-const proposalOf = (doc: ReplicatedDocument.ReplicatedDocument<unknown>) => {
+const proposalOf = <A>(doc: ReplicatedDocument.ReplicatedDocument<A>) => {
   const state = (doc as unknown as { readonly engine: InternalEngine.Engine }).engine.state.document
   const exists: Array<Replica.Path> = []
   return { json: InternalDocument.toJson(state, exists), exists, text: InternalDocument.textAt(state, []) }

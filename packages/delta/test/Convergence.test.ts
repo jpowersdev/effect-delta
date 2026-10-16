@@ -297,9 +297,9 @@ const partAt = (value: unknown, path: ReadonlyArray<string>): unknown => {
 // gives too, and the replay strategy reports the same as tree for the same
 // edits. Which overlaps a merge reports depends on what the replica had, so
 // they aren't the same however the changes arrive.
-const checkOverlaps = Effect.fnUntraced(function*(
-  doc: ReplicatedDocument.ReplicatedDocument<unknown>,
-  edit: ReplicatedDocument.Edit<unknown>,
+const checkOverlaps = Effect.fnUntraced(function*<A>(
+  doc: ReplicatedDocument.ReplicatedDocument<A>,
+  edit: ReplicatedDocument.Edit<A>,
   merge: {
     readonly before: VersionVector.VersionVector
     readonly after: VersionVector.VersionVector

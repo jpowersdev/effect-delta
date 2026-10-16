@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema"
 import type * as Scope from "effect/Scope"
 import * as Stream from "effect/Stream"
 import * as SubscriptionRef from "effect/SubscriptionRef"
+import type * as Types from "effect/Types"
 import * as Authority from "./Authority.ts"
 import * as InternalConnection from "./internal/connection.ts"
 import type * as InternalDelta from "./internal/delta.ts"
@@ -151,7 +152,7 @@ const makeConfirmedImpl = Effect.fnUntraced(function*(schema: Schema.Top, option
   return Object.assign(self, { connection })
 })
 
-const impl = (self: ReplicatedDocument<unknown>): ReplicatedDocumentImpl => self as ReplicatedDocumentImpl
+const impl = <A>(self: ReplicatedDocument<A>): ReplicatedDocumentImpl => self as unknown as ReplicatedDocumentImpl
 
 const toEdit = (event: InternalEngine.Event): Edit<unknown> => {
   switch (event._tag) {
@@ -164,10 +165,10 @@ const toEdit = (event: InternalEngine.Event): Edit<unknown> => {
   }
 }
 
-const updateImpl = (self: ReplicatedDocument<unknown>, f: (value: unknown) => unknown) => {
+const updateImpl = <A>(self: ReplicatedDocument<A>, f: (value: A) => A) => {
   const { engine, initial, memo, shape, validate } = impl(self)
   return InternalEngine.edit(engine, (document) => {
-    const value = f(engine.model.read(document))
+    const value = f(engine.model.read(document) as A)
     return Result.flatMap(validate(value), () => InternalShape.plan(shape, document, value, initial, memo))
   })
 }
@@ -181,8 +182,9 @@ const updateImpl = (self: ReplicatedDocument<unknown>, f: (value: unknown) => un
  * @category models
  * @since 0.1.0
  */
-export interface ReplicatedDocument<out A> extends Replica.Replica<A> {
-  readonly [TypeId]: typeof TypeId
+export interface ReplicatedDocument<in out A> extends Replica.Replica<A> {
+  // Invariant, as SubscriptionRef is: it's read as an A, and written with one.
+  readonly [TypeId]: { readonly _A: Types.Invariant<A> }
 }
 
 /**
@@ -193,7 +195,7 @@ export interface ReplicatedDocument<out A> extends Replica.Replica<A> {
  * @category models
  * @since 0.1.0
  */
-export interface Confirmed<out A> extends ReplicatedDocument<A> {
+export interface Confirmed<in out A> extends ReplicatedDocument<A> {
   readonly connection: Sync.Connection
 }
 
@@ -687,7 +689,7 @@ type TextPathWithin<A, Steps extends ReadonlyArray<0>> = A extends string ? read
 export const text: {
   <A>(path: TextPath<A>): (self: ReplicatedDocument<A>) => ReplicatedText.Editable
   <A>(self: ReplicatedDocument<A>, path: TextPath<A>): ReplicatedText.Editable
-} = dual(2, (self: ReplicatedDocument<unknown>, path: Replica.Path): ReplicatedText.Editable => {
+} = dual(2, <A>(self: ReplicatedDocument<A>, path: Replica.Path): ReplicatedText.Editable => {
   const found = InternalShape.at(impl(self).shape, path)
   if (typeof found === "string" || found.shape._tag !== "Text") {
     throw new Error(`${JSON.stringify(path)} isn't a text field of the document`)
