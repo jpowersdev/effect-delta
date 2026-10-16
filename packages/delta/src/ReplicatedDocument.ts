@@ -98,8 +98,7 @@ const makeWith = Effect.fnUntraced(function*(schema: Schema.Top, options: {
     replica: options.replica,
     confirmed: options.confirmed,
     model: {
-      read: (document) => InternalShape.read(shape, document, options.initial, memo),
-      check: (change) => InternalShape.check(shape, change)
+      read: (document) => InternalShape.read(shape, document, options.initial, memo)
     }
   })
   const self: ReplicatedDocumentImpl = Object.assign(Object.create(Proto), {

@@ -48,6 +48,12 @@ export class Relay extends Context.Service<Relay, Sync.Server>()("effect-delta/R
  * document is loaded when first asked for, and released a minute after its
  * last use.
  *
+ * **Details**
+ *
+ * It refuses changes it can tell are malformed without the app's schema, and
+ * changes stamped more than a day ahead of its clock. Changes that don't fit
+ * a replica's schema pass through; replicas keep them without showing them.
+ *
  * @stability unstable
  * @category layers
  * @since 0.1.0

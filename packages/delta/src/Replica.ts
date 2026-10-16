@@ -222,8 +222,9 @@ export class StrategyMismatch extends Schema.TaggedError<StrategyMismatch>()("St
 
 /**
  * A delta held a change that can't be applied: for example one that refers to
- * characters the changes it was made on top of don't have, or one that
- * doesn't fit the replica's schema.
+ * characters the changes it was made on top of don't have, or whose write
+ * time isn't later than theirs. A change that only doesn't fit the replica's
+ * schema isn't malformed: it's kept, and doesn't show.
  *
  * @stability unstable
  * @category errors

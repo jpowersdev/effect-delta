@@ -124,6 +124,11 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  * accepted up to the first change `check` rejects; that change and the rest of
  * the push are dropped, because each was made on top of the one before.
  *
+ * Before `check`, the authority refuses changes it can tell are malformed, ones
+ * stamped more than a day ahead of its clock, and ones that would make a path
+ * of a document hold two kinds of thing (a text and a value, say), so the JSON
+ * a `DocumentProposal` has is never ambiguous.
+ *
  * **Example** (Only editors may edit)
  *
  * ```ts import.meta.vitest

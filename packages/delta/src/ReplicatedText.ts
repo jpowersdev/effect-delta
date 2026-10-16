@@ -40,7 +40,6 @@ import * as InternalEditable from "./internal/editable.ts"
 import * as InternalEngine from "./internal/engine.ts"
 import * as InternalPath from "./internal/path.ts"
 import * as InternalReplica from "./internal/replica.ts"
-import * as InternalShape from "./internal/shape.ts"
 import * as InternalText from "./internal/text.ts"
 import type * as Replica from "./Replica.ts"
 import type * as Sync from "./Sync.ts"
@@ -65,8 +64,7 @@ const Proto = {
 
 // A replicated text is a document whose only part is a text at the root.
 const model: InternalEngine.Model = {
-  read: (document) => InternalDocument.textAt(document, InternalPath.root),
-  check: (change) => InternalShape.check(InternalShape.text, change)
+  read: (document) => InternalDocument.textAt(document, InternalPath.root)
 }
 
 const makeWith = Effect.fnUntraced(function*(options: {

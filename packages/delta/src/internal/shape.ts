@@ -6,10 +6,8 @@ import * as SchemaAST from "effect/SchemaAST"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaParser from "effect/SchemaParser"
 import * as TextPatch from "../TextPatch.ts"
-import { key as changeKey } from "./change.ts"
 import * as InternalDocument from "./document.ts"
 import * as Path from "./path.ts"
-import * as Text from "./text.ts"
 
 // A document's merge rules, worked out from its schema: which parts are
 // fields, entries, lists, texts, counters and values. With them a replica
@@ -85,13 +83,6 @@ export interface Value {
   readonly decode: (json: Schema.Json) => Result.Result<unknown, Schema.SchemaError>
   readonly equivalence: Equivalence.Equivalence<unknown>
 }
-
-/**
- * The shape of a replicated text: a text at the root.
- *
- * @internal
- */
-export const text: Shape = { _tag: "Text" }
 
 // Compiling ------------------------------------------------------------------
 
@@ -286,52 +277,6 @@ export const at = (
     }
   }
   return { _tag: "Part", shape: current, presence }
-}
-
-/**
- * Whether a change's ops fit the schema. Parts the schema doesn't describe
- * (written by a newer version of it) fit.
- *
- * @internal
- */
-export const check = (shape: Shape, change: InternalDocument.AnyChange): string | undefined => {
-  for (const op of change.ops) {
-    const found = at(shape, InternalDocument.pathOf(op))
-    if (found === undefined) continue
-    const name = `Change ${changeKey(change)}`
-    if (found._tag === "Inside") return `${name} writes inside a ${describe(found.shape)}`
-    const { presence, shape: here } = found
-    const fits = Text.isOp(op)
-      ? here._tag === "Text"
-      : op._tag === "Increment"
-      ? here._tag === "Counter"
-      : op._tag === "Set"
-      ? here._tag === "Value"
-      : op._tag === "Add"
-      ? presence !== "always" && here._tag !== "Value"
-      : op._tag === "Unset"
-      ? presence !== "always"
-      : presence === "item"
-    if (!fits) return `${name} has a ${op._tag} op where the schema has a ${describe(here)}`
-  }
-  return undefined
-}
-
-const describe = (shape: Shape): string => {
-  switch (shape._tag) {
-    case "Fields":
-      return "struct"
-    case "Entries":
-      return "record"
-    case "List":
-      return "list"
-    case "Text":
-      return "text"
-    case "Counter":
-      return "counter"
-    case "Value":
-      return "value"
-  }
 }
 
 /**

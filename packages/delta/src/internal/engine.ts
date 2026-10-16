@@ -20,14 +20,13 @@ import type * as InternalReplica from "./replica.ts"
 // The replica behind both ReplicatedText and ReplicatedDocument: a document's
 // state, the replica id it writes under, a lock that serializes everything,
 // and what it tells subscribers. A model says how to read the state as a
-// value and which changes fit.
+// value. It keeps every change it can apply, including ones its schema has
+// no place for: those don't show, and they're passed on.
 
 /** @internal */
 export interface Model {
   /** The value, worked out from the state. */
   readonly read: (document: InternalDocument.Document) => unknown
-  /** What's wrong with a change, beyond what every document checks. */
-  readonly check: (change: InternalDocument.AnyChange) => string | undefined
 }
 
 /**
@@ -316,7 +315,7 @@ const receive = (
 
   const ready = History.takeReady(history)
   if (ready.length === 0) return Effect.succeed([])
-  const integrated = InternalDocument.integrate(state.document, ready, { overlaps: true, check: engine.model.check })
+  const integrated = InternalDocument.integrate(state.document, ready, { overlaps: true })
   const overlaps = integrated.overlaps.map(toOverlap)
   const published = integrated.applied === 0
     ? Effect.void

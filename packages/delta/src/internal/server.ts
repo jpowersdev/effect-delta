@@ -1,3 +1,4 @@
+import * as Clock from "effect/Clock"
 import type * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
@@ -120,10 +121,19 @@ export const make = Effect.fnUntraced(function*(options: {
       }))
     }))
 
+  // Stops serving a document, so it's loaded again from the store, which has
+  // everything any subscriber has seen.
+  const reload = (document: Document, error: Sync.SyncError) =>
+    Effect.andThen(Deferred.fail(document.failed, error), RcMap.invalidate(documents, document.id))
+
   const push = (request: Sync.PushRequest): Effect.Effect<Sync.Ack, Sync.SyncError> =>
     Effect.gen(function*() {
       const user = yield* Sync.CurrentUser
       const document = yield* open(request.document)
+      // From the first change to the document until its changes are saved and
+      // sent: interrupted in between, the document holds changes the store
+      // doesn't, so it starts over from the store.
+      let changing = false
       return yield* document.lock.withPermit(Effect.gen(function*() {
         const incoming = [...(request.delta as InternalDelta.DeltaImpl).changes.values()]
         for (const change of incoming) {
@@ -147,6 +157,18 @@ export const make = Effect.fnUntraced(function*(options: {
             )
           }
         }
+        // Write times follow the clock, so one far ahead of this server's is a
+        // broken clock or a forgery, and everyone who saw it couldn't write
+        // later than it.
+        const now = yield* Clock.currentTimeMillis
+        const early = incoming.find((change) => change.time > now + maxAhead)
+        if (early !== undefined) {
+          return yield* syncError(
+            new Replica.DeltaError({
+              reason: new Replica.Malformed({ message: `Change ${key(early)} is stamped too far in the future` })
+            })
+          )
+        }
 
         // Changes that are new here wait as pending until what they build on
         // is here, then they're checked and applied in causal order.
@@ -163,6 +185,7 @@ export const make = Effect.fnUntraced(function*(options: {
           if (existing === undefined && !History.has(state.history, change)) fresh.push(change)
         }
         const pushed = new Set(fresh.map(key))
+        changing = true
         for (const change of fresh) state.history.pending.set(key(change), change)
 
         let rejected: string | undefined
@@ -178,7 +201,11 @@ export const make = Effect.fnUntraced(function*(options: {
             // A change all at the root is a replicated text's.
             const isText = change.ops.every((op) => Path.isRoot(InternalDocument.pathOf(op)))
             const before = isText ? InternalDocument.textAt(state, Path.root) : InternalDocument.toJson(state)
-            const { problem, texts } = InternalDocument.integrate(state, [change], { overlaps: false })
+            // Kept consistent, so its JSON of the document is never ambiguous.
+            const { problem, texts } = InternalDocument.integrate(state, [change], {
+              overlaps: false,
+              check: (change) => InternalDocument.checkPaths(state, change)
+            })
             if (problem !== undefined) {
               malformed = problem
               break
@@ -232,19 +259,13 @@ export const make = Effect.fnUntraced(function*(options: {
         // the store has them, so a reload would learn it from them.
         document.state.strategy ??= InternalDocument.strategyOf(kept)
         if (kept.length > 0) {
-          yield* save(store, document, kept, user).pipe(
-            Effect.tapError((error) =>
-              Effect.andThen(
-                Deferred.fail(document.failed, error),
-                RcMap.invalidate(documents, document.id)
-              )
-            )
-          )
+          yield* save(store, document, kept, user).pipe(Effect.tapError((error) => reload(document, error)))
           yield* PubSub.publish(
             document.updates,
             new Sync.Update({ delta: InternalDelta.fromChanges(kept), version: held(history) })
           )
         }
+        changing = false
 
         if (malformed !== undefined) {
           return yield* syncError(new Replica.DeltaError({ reason: new Replica.Malformed({ message: malformed }) }))
@@ -253,7 +274,16 @@ export const make = Effect.fnUntraced(function*(options: {
         return rejected === undefined
           ? new Sync.Accepted({ confirmed })
           : new Sync.PushRejected({ confirmed, message: rejected })
-      }))
+      })).pipe(
+        Effect.onInterrupt(() =>
+          changing
+            ? reload(
+              document,
+              new Sync.SyncError({ reason: new Sync.Unavailable({ message: "A push was interrupted" }) })
+            )
+            : Effect.void
+        )
+      )
     }).pipe(Effect.scoped)
 
   return { subscribe, push }
@@ -340,6 +370,9 @@ const held = (history: History.History<unknown> | undefined): VersionVector.Vers
 }
 
 const syncError = (reason: Sync.SyncError["reason"]) => Effect.fail(new Sync.SyncError({ reason }))
+
+// How far ahead of a server's clock a change's write time may be.
+const maxAhead = 24 * 60 * 60 * 1000
 
 const unavailable = (error: HistoryStore.HistoryStoreError) =>
   new Sync.SyncError({ reason: new Sync.Unavailable({ message: error.message }) })

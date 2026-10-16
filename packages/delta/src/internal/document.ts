@@ -166,6 +166,20 @@ interface Item {
 // What a path holds. A path that holds none of these has parts under it.
 type Kind = "text" | "counter" | "value"
 
+// What a path holds, judging by what's been written there. Replicas and
+// relays keep every kind written to a path, and each reader takes the one its
+// schema has; an authority keeps one.
+const kindOf = (found: Slot | undefined): Kind | undefined =>
+  found === undefined
+    ? undefined
+    : found.text !== undefined
+    ? "text"
+    : found.counted
+    ? "counter"
+    : found.values.length > 0
+    ? "value"
+    : undefined
+
 /**
  * What one path holds. Mutable: its document serializes every call.
  *
@@ -173,8 +187,8 @@ type Kind = "text" | "counter" | "value"
  */
 export interface Slot {
   readonly path: Path.Path
-  /** Set by the first op that says what the path is. */
-  kind: Kind | undefined
+  /** Whether it was ever incremented. */
+  counted: boolean
   /** Whether it was ever added: an entry or item whose content isn't a value. */
   added: boolean
   /** The names of the paths just under this one. */
@@ -235,7 +249,7 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
   if (found === undefined) {
     found = {
       path,
-      kind: undefined,
+      counted: false,
       added: false,
       children: new Set(),
       text: undefined,
@@ -340,15 +354,19 @@ export const toJson = (document: Document): Schema.Json => jsonAt(document, Path
 const jsonAt = (document: Document, path: Path.Path): Schema.Json | undefined => {
   const found = slot(document, path)
   if (found === undefined || found.presence?.exists === false) return undefined
-  switch (found.kind) {
+  switch (kindOf(found)) {
     case "text":
-      return found.text?.value ?? ""
+      return found.text!.value
     case "counter":
       return Number(found.counter)
     case "value":
-      return found.values.length === 0 ? undefined : found.values[found.values.length - 1]!.value
+      return found.values.at(-1)!.value
   }
-  if (found.list !== undefined) {
+  // A list only if every part under it is one of its items, so a stray
+  // position can't turn a struct into a list.
+  if (
+    found.list !== undefined && [...found.children].every((name) => slot(document, [...path, name])!.places.length > 0)
+  ) {
     const items: Array<Schema.Json> = []
     for (const item of itemsAt(document, path)) {
       const json = jsonAt(document, [...path, item])
@@ -502,9 +520,7 @@ export const integrate = (
           document.strategy ??= strategy
           const { merge, text } = mergeOf(part.path, strategy)
           const patch = merge.apply(part)
-          const at = ensureSlot(document, part.path)
-          at.kind = "text"
-          at.text = text
+          ensureSlot(document, part.path).text = text
           composeText(texts, part.path, patch)
         }
       } else {
@@ -658,7 +674,7 @@ const check = (
   const strategy = document.strategy ?? strategyOf([change])
   if (!fitsStrategy(change, strategy)) return `${name} mixes strategies`
 
-  const problem = checkPaths(document, change) ?? checkPlaces(document, change)
+  const problem = checkPlaces(document, change)
   if (problem !== undefined) return problem
   const textPaths = new Set<string>()
   for (const part of parts) {
@@ -673,15 +689,22 @@ const check = (
   return undefined
 }
 
-// Every op's path must agree with what's there: a text, a counter and a value
-// have nothing under them, a value is never added (writing it says it exists),
-// and the root is a text or has parts.
-const checkPaths = (document: Document, change: AnyChange): string | undefined => {
+/**
+ * Whether a change's ops agree with what's at their paths: a text, a counter
+ * and a value have nothing under them, a value is never added (writing it
+ * says it exists), and the root is a text or has parts. Without a schema, this
+ * is what an authority can check so its JSON of a document is never
+ * ambiguous; replicas and relays keep such changes, and readers ignore what
+ * their schema doesn't have.
+ *
+ * @internal
+ */
+export const checkPaths = (document: Document, change: AnyChange): string | undefined => {
   const name = `Change ${key(change)}`
   const kinds = new Map<string, Kind>()
   const added = new Set<string>()
   const parents = new Set<string>()
-  const kindAt = (path: Path.Path) => kinds.get(Path.key(path)) ?? slot(document, path)?.kind
+  const kindAt = (path: Path.Path) => kinds.get(Path.key(path)) ?? kindOf(slot(document, path))
   const addedAt = (path: Path.Path) => added.has(Path.key(path)) || (slot(document, path)?.added ?? false)
   const hasChildren = (path: Path.Path) => parents.has(Path.key(path)) || (slot(document, path)?.children.size ?? 0) > 0
   for (const op of change.ops) {
@@ -742,7 +765,6 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
   const at = ensureSlot(document, op.path)
   switch (op._tag) {
     case "Set": {
-      at.kind = "value"
       const value: ValueWrite = { ...write, value: op.value }
       insertSorted(at.values, value)
       const differing = unseenBy(value, at.values).filter((other) => !Equal.equals(other.value, value.value))
@@ -760,7 +782,7 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       setPresence(document, at, { ...write, exists: false }, found)
       break
     case "Increment":
-      at.kind = "counter"
+      at.counted = true
       at.counter += BigInt(op.by)
       break
     case "Place": {
@@ -912,9 +934,7 @@ export const edit = (
         const text = slot(document, intent.path)?.text ?? Text.make(document.strategy!)
         const edited = text.edit(intent.patch, { replica: options.replica, seq }, past)
         if (edited === undefined) break
-        const at = ensureSlot(document, intent.path)
-        at.kind = "text"
-        at.text = text
+        ensureSlot(document, intent.path).text = text
         const pathed = Path.isRoot(intent.path) ? {} : { path: intent.path }
         for (const op of edited.ops) {
           ops.push({ ...op, ...pathed })
@@ -1004,7 +1024,6 @@ export const load = (
   for (const [k, entry] of parts) {
     const text = byPath.get(k)
     const at = ensureSlot(document, entry.path)
-    at.kind = "text"
     at.text = Text.make(strategy)
     if (text === undefined || !at.text.load(entry.parts, text)) return undefined
   }

@@ -94,8 +94,9 @@ The alternatives:
 
 What time costs: a device whose clock is far ahead wins concurrent writes until the other clocks catch up,
 and replicas that see its changes stamp their own later changes after them. Changes stay correctly ordered.
-What's off is which concurrent write wins and, later, the times a history view shows. An authority can
-reject changes stamped in the future.
+What's off is which concurrent write wins and, later, the times a history view shows. Relays and
+authorities reject changes stamped more than a day ahead of their own clock, so a broken clock (or a
+forged time) can't spread from them; peers that exchange directly trust each other's.
 
 ### Fields
 
@@ -207,7 +208,9 @@ Apps upgrade one device at a time, so replicas on different versions of a schema
   are kept, stored and sent on, but don't show in its value. A value whose latest write it can't decode
   shows the latest write it can. After the upgrade, they show.
 - **Renaming or removing a field, or changing its rule** (a value becoming text) isn't supported, because
-  paths are field names. Lenses (Cambria) are later.
+  paths are field names. Lenses (Cambria) are later. A replica keeps changes its schema has another rule
+  for, and passes them on, but they don't show: a path keeps a text, values and a counter apart, and each
+  replica reads the one its schema says.
 
 Replicas on the same version always show the same value. Replicas on different versions have the same history,
 but can show different values for the parts only one of them understands.
@@ -230,18 +233,23 @@ they do now, plus `time`.
 | `Increment { path, by }`                                | 1                | Adds to the counter at the path.                                          |
 | `Place { path, parent, side, rightOrigin? }`            | 1                | Gives the list item at the path a new position, placed as a tree `Insert` places a character. |
 
-A path holds a text, a counter or a value, or has parts under it, never two of those. A change's ops on one
-text come together, and its parents are the last ids of changes. Receivers check all three (`Malformed`
-otherwise).
+A change's ops on one text come together, and its parents are the last ids of changes. Receivers check both
+(`Malformed` otherwise), and check text ops and positions against the text and list at their path.
 
 **Servers don't need the schema.** Ops say what they do, so a relay or an authority applies a document's
 changes without the app's code. Values are JSON, texts are texts, counters are numbers. A server checks what
 it can (the envelope, write times, text ops against that path's text) and stores the rest as it is. One
 relay serves every app, and every version of each app's schema.
 
-**Texts and documents don't share a document id.** A text has nothing but its root, and a document's root
-has fields, so each rejects the other's changes as `Malformed`. A change with no text ops fits either
-strategy; servers learn a document's strategy from its first text op, or from the replica that subscribes.
+**Nobody rejects a change for not fitting a schema.** Any one replica that did would refuse what the others
+accept, and a relay that did would cut off everyone it had passed the change to. Replicas keep such changes
+and don't show them, as they do for parts a newer schema adds. An authority also rejects ops that would make
+one path hold two kinds of thing (a text and a value, or a value with parts under it), so the JSON its check
+reads is never ambiguous.
+
+**Texts and documents shouldn't share a document id.** If they do, each keeps the other's changes without
+showing them. A change with no text ops fits either strategy; servers learn a document's strategy from its
+first text op, or from the replica that subscribes.
 
 ## API
 
@@ -526,6 +534,11 @@ All built, each with tests and an example:
   [Latest write](#latest-write)).
 - **Removed entries and items keep their content** until pruning exists.
 - **Replicas on different schema versions** can show different values for the parts only one understands.
+- **An authority's first write to a path decides what it holds.** Without the schema, an authority can't
+  tell which of a value and a text belongs at a path no one has written yet, so a client could claim a path
+  with the wrong kind of write and leave later writes there rejected. An authority with the schema would
+  check each op against it.
+- **Servers refuse a replica whose clock runs more than a day ahead,** until it's fixed.
 - **An authority should have the newest schema.** A proposal has only each value's latest write, so an
   authority on an older schema reads a value it can't decode as its initial value, not as an earlier write.
 - **A server forgets a strategy it only heard from a subscriber.** A document with no text ops yet takes the
@@ -554,6 +567,11 @@ All built, each with tests and an example:
    Eg-walker conformance data has replica ids whose changes aren't in sequence order, which version vectors
    can't describe.
 7. **`readProposal` returns a `Proposed<A>`.**
+8. **Changes that don't fit a schema are kept, not rejected,** by replicas and relays alike (see
+   [How changes look](#how-changes-look)). Rejecting them let one bad change cut every replica off from a
+   relay for good. Authorities still keep each path to one kind of thing.
+9. **Servers reject write times more than a day ahead of their clock.** A change stamped far in the future
+   would leave everyone who saw it unable to write anything later.
 
 ## Later
 
