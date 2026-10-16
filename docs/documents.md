@@ -457,7 +457,7 @@ type Overlap =
   // Both wrote different values here, both moved this list item, or one removed it; `kept` is whose write shows.
   | { readonly _tag: "Value"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId>; readonly kept: ReplicaId }
   // One removed this entry, item or optional field while the other changed something inside it, or moved
-  // it. It stays removed.
+  // it. It stays removed, by a removal made without seeing that change.
   | { readonly _tag: "Removed"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId> }
 ```
 

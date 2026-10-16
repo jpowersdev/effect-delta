@@ -894,7 +894,8 @@ const byPath = (writes: ReadonlyArray<Written>): Map<string, Array<Written>> => 
  * replica had meets one it received that hadn't seen it. `Value` where they
  * wrote values it reads as different, said differently whether the part
  * exists, or both moved its item; `Removed` where one removed the part and
- * the other edited inside it or moved it, if it ends removed. A value it
+ * the other edited inside it or moved it, if it ends removed by a removal
+ * that hadn't seen the edit. A value it
  * can't read meets nothing. `changes` are every change the replica has,
  * `before` and `after` its versions around the merge, and `values` how it
  * reads values.
@@ -917,13 +918,23 @@ export const expectedOverlaps = (
 
   const found = new Map<
     string,
-    { tag: Overlap["_tag"]; path: Path; replicas: Set<string>; over: Set<Written["kind"]> }
+    {
+      tag: Overlap["_tag"]
+      path: Path
+      replicas: Set<string>
+      over: Set<Written["kind"]>
+      // For a removal, the edits it met.
+      edits: Array<{ readonly removal: Written; readonly edit: Written }>
+    }
   >()
   const meet = (tag: Overlap["_tag"], write: Written, other: Written, over: Written["kind"]) => {
     const k = `${tag}${write.key}`
-    const entry = found.get(k) ?? { tag, path: write.path, replicas: new Set(), over: new Set() }
+    const entry = found.get(k) ?? { tag, path: write.path, replicas: new Set(), over: new Set(), edits: [] }
     entry.replicas.add(write.replica).add(other.replica)
     entry.over.add(over)
+    if (tag === "Removed") {
+      entry.edits.push(removes(write) ? { removal: write, edit: other } : { removal: other, edit: write })
+    }
     found.set(k, entry)
   }
   const removes = (write: Written) => write.kind === "presence" && write.exists === false
@@ -947,10 +958,17 @@ export const expectedOverlaps = (
 
   const at = (path: Path, kind: Written["kind"]) =>
     latest((all.get(pathKey(path)) ?? []).filter((write) => write.kind === kind))
-  return [...found.values()].flatMap(({ over, path, replicas, tag }): Array<Overlap> => {
+  return [...found.values()].flatMap(({ edits, over, path, replicas, tag }): Array<Overlap> => {
     const presence = at(path, "presence")
     const sorted = [...replicas].sort()
-    if (tag === "Removed") return presence?.exists === false ? [{ _tag: "Removed", path, replicas: sorted }] : []
+    if (tag === "Removed") {
+      // Only edits lost to the removal it ends removed by, made without
+      // seeing them.
+      if (presence?.exists !== false) return []
+      const lost = edits.filter(({ edit }) => edit.replica !== presence.replica && !saw(presence, edit))
+      const met = [...new Set(lost.flatMap(({ edit, removal }) => [edit.replica, removal.replica]))].sort()
+      return lost.length === 0 ? [] : [{ _tag: "Removed", path, replicas: met }]
+    }
     // Whose write shows: a removal that won, or else the latest of what they
     // wrote.
     const kept = presence !== undefined && (presence.exists === false || (over.size === 1 && over.has("presence")))
