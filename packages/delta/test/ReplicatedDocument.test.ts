@@ -552,6 +552,25 @@ describe("ReplicatedDocument", () => {
         }
       }))
 
+    it.effect("an edit lost to a removal made after it isn't an overlap, though it met one undone since", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, comments: { c1: comment("ada", "") } }))
+        const [ben, cal, dan] = yield* Effect.forEach(["ben", "cal", "dan"], (name) => make(name))
+        for (const other of [ben!, cal!, dan!]) yield* Replica.exchange(ada, other)
+        // Ben types in the comment while Cal removes it and adds it back.
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ben!, ["comments", "c1", "text"]), 0, "Hi")
+        yield* ReplicatedDocument.update(cal!, (doc) => ({ ...doc, comments: {} }))
+        yield* ReplicatedDocument.update(cal!, (doc) => ({ ...doc, comments: { c1: comment("ada", "") } }))
+        yield* Replica.exchange(cal!, dan!)
+        yield* Replica.exchange(cal!, ben!)
+        // Having seen it all, Ben removes it.
+        yield* ReplicatedDocument.update(ben!, (doc) => ({ ...doc, comments: {} }))
+        const fromBen = yield* Replica.delta(ben!, yield* Replica.version(dan!))
+        assert.deepStrictEqual(yield* Replica.receive(dan!, fromBen), [])
+        assert.deepStrictEqual((yield* ReplicatedDocument.get(dan!)).comments, {})
+      }))
+
     it.effect("a removal wins over edits to the entry's own text or counter it hadn't seen, and the merge says so", () =>
       Effect.gen(function*() {
         // Entries and an optional field that are a text or a counter.
