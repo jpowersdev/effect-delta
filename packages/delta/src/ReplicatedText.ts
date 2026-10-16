@@ -459,7 +459,7 @@ export const get: (self: Editable) => Effect.Effect<string> = getImpl
 
 /**
  * Returns a stream of the text: its current value, then each new value after a
- * local edit or a merge.
+ * local edit, a merge, or an authority's rejection rolling an edit back.
  *
  * @stability unstable
  * @category getters

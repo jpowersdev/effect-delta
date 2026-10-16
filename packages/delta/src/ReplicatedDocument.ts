@@ -222,8 +222,8 @@ export interface Options<A> {
 }
 
 /**
- * Marks a string as a text that merges character by character, with the
- * document's strategy. Edit it through `text`. Unmarked strings take the
+ * Schema for a string that merges character by character, with the
+ * document's strategy: a text. Edit it through `text`. Other strings take the
  * latest write.
  *
  * **Gotchas**
@@ -239,7 +239,7 @@ export interface Options<A> {
 export const Text: Schema.String = Schema.String.annotate({ [InternalShape.RuleKey]: { _tag: "Text" } })
 
 /**
- * Marks a whole number as a counter, which merges by adding: two concurrent
+ * Schema for a whole number that merges by adding, a counter: two concurrent
  * increments of 1 make 2. `update` writes the difference between the total
  * and the new value.
  *
@@ -260,20 +260,22 @@ export const Counter: Schema.Int = Schema.Int.annotate({ [InternalShape.RuleKey]
  * The fields of `A` whose values are strings: what can identify a list's items.
  *
  * @stability unstable
- * @category models
+ * @category utility types
  * @since 0.1.0
  */
 export type KeyOf<A> = { readonly [K in keyof A]-?: A[K] extends string ? K : never }[keyof A] & string
 
 /**
- * An array that merges item by item: items inserted, removed, moved and edited
- * concurrently all survive, and an item moved by two replicas at once ends up
- * in one place.
+ * Creates a schema for an array that merges item by item: items inserted,
+ * removed, moved and edited concurrently all survive, and an item moved by two
+ * replicas at once ends up in one place.
  *
  * **Details**
  *
  * With `key`, items are structs (or classes) identified by that field, which
- * the app sets, usually to a random id. `update` compares the old and new
+ * the app sets, usually to a random id. The key must be a required string
+ * that takes the latest write, not a `Text`; `make` refuses a list keyed by
+ * one, as a defect. `update` compares the old and new
  * arrays by key: new keys are inserts, missing ones are removals, keys in a
  * different order are moves, and items in both merge their fields. A removal
  * wins over concurrent edits inside the item.
@@ -421,7 +423,8 @@ export const get = <A>(self: ReplicatedDocument<A>): Effect.Effect<A> =>
 
 /**
  * Returns a stream of the document's value: its current value, then each new
- * value after a local edit or a merge.
+ * value after a local edit, a merge, or an authority's rejection rolling an
+ * edit back.
  *
  * **Details**
  *
@@ -564,7 +567,7 @@ export const set: {
  * that a recursive value, such as a `Schema.Json` field, has paths too.
  *
  * @stability unstable
- * @category models
+ * @category utility types
  * @since 0.1.0
  */
 export type TextPath<A> = TextPathWithin<A, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]>
@@ -589,8 +592,9 @@ type TextPathWithin<A, Steps extends ReadonlyArray<0>> = A extends string ? read
  *
  * Each edit through it is one change to the document. A text field in a
  * record entry or list item that doesn't exist, or was removed, still works:
- * its text is kept, and shows once the entry exists. A path that isn't a
- * `Text` in the schema throws, as a defect.
+ * its text is kept, and shows once the entry exists. The path's type allows
+ * any string in the value, but only a `Text` is a text field: a path to
+ * another string throws, as a defect.
  *
  * **Example** (Editing a text field)
  *
@@ -615,7 +619,7 @@ type TextPathWithin<A, Steps extends ReadonlyArray<0>> = A extends string ? read
  * ```
  *
  * @stability unstable
- * @category text fields
+ * @category getters
  * @since 0.1.0
  */
 export const text: {
@@ -666,7 +670,8 @@ export interface Proposed<A> {
  *
  * Read proposals with the newest version of the schema, and upgrade the
  * authority before the apps that write to it: a change from a newer version
- * doesn't fit an older one.
+ * doesn't fit an older one. A schema or initial value that `make` refuses is a
+ * defect here too.
  *
  * **Example** (Only the owner approves)
  *
@@ -690,7 +695,7 @@ export interface Proposed<A> {
  * ```
  *
  * @stability unstable
- * @category authorities
+ * @category decoding
  * @since 0.1.0
  */
 export const readProposal = <A>(
