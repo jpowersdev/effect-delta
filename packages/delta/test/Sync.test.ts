@@ -963,5 +963,42 @@ describe("Authority", () => {
         }]])
       }).pipe(Effect.scoped, Effect.provide([Recording, CryptoTest]))
     })
+
+    it.effect("reads an item without its key as replicas do, though the key has a default", () => {
+      const Item = Schema.Struct({
+        id: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("new"))),
+        done: Schema.Boolean
+      })
+      const List = Schema.Struct({ items: ReplicatedDocument.List(Item, { key: "id" }) })
+      const empty: typeof List.Type = { items: [] }
+      const read: Array<typeof List.Type> = []
+      const Recording = Authority.layer({
+        check: (proposal) =>
+          proposal._tag === "Text"
+            ? Effect.void
+            : Effect.map(ReplicatedDocument.readProposal(proposal, List, { initial: empty }), ({ after }) => {
+              read.push(after)
+            })
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const delta = InternalDelta.fromChanges([{
+          replica: "other",
+          seq: 0,
+          length: 3,
+          parents: [],
+          time: 0,
+          ops: [
+            { _tag: "Add", path: ["items", "i1"] },
+            { _tag: "Set", path: ["items", "i1", "done"], value: false },
+            { _tag: "Place", path: ["items", "i1"], parent: null, side: "L" }
+          ]
+        }])
+        yield* authority.push({ format: Sync.FORMAT, document: spec, delta })
+        const laptop = yield* ReplicatedDocument.make(List, { initial: empty, replica: Replica.ReplicaId.make("laptop") })
+        yield* Replica.receive(laptop, delta)
+        assert.deepStrictEqual(read, [yield* ReplicatedDocument.get(laptop)])
+      }).pipe(Effect.provide(Recording))
+    })
   })
 })
