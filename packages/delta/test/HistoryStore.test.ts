@@ -10,6 +10,8 @@ import {
   ReplicatedText,
   VersionVector
 } from "effect-delta"
+import * as InternalDelta from "effect-delta/internal/delta"
+import type * as InternalDocument from "effect-delta/internal/document"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 
@@ -120,6 +122,38 @@ describe("HistoryStore", () => {
         const third = yield* Effect.scoped(Effect.flatMap(openDoc("session-3"), ReplicatedDocument.get))
         assert.deepStrictEqual(third, edited)
       }).pipe(Effect.provide(store)), { discard: true }))
+
+  it.effect("persist opens a document that saved a change which turned out bad", () =>
+    Effect.gen(function*() {
+      const review: InternalDocument.AnyChange = {
+        replica: "ada",
+        seq: 0,
+        length: 1,
+        parents: [],
+        time: 10,
+        ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+      }
+      // Made on top of `review`, but stamped earlier: it waits for `review`,
+      // and is saved while it waits, then it's refused.
+      const early: InternalDocument.AnyChange = {
+        replica: "mallory",
+        seq: 0,
+        length: 1,
+        parents: [{ replica: "ada", seq: 0 }],
+        time: 5,
+        ops: [{ _tag: "Set", path: ["status"], value: "approved" }]
+      }
+      const receive = (doc: Replica.Replica<unknown>, change: InternalDocument.AnyChange) =>
+        Effect.exit(Replica.receive(doc, InternalDelta.fromChanges([change])))
+      yield* Effect.scoped(Effect.gen(function*() {
+        const first = yield* openDoc("session-1")
+        yield* receive(first, early)
+        yield* ReplicatedDocument.update(first, (doc) => ({ ...doc, votes: 1 }))
+      }))
+      yield* Effect.scoped(Effect.flatMap(openDoc("session-2"), (second) => receive(second, review)))
+      const third = yield* Effect.scoped(Effect.flatMap(openDoc("session-3"), ReplicatedDocument.get))
+      assert.deepStrictEqual(third, { ...initial, status: "review", votes: 1 })
+    }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
   it.effect("layerKeyValueStore keeps every key under the prefix, and folds", () => {
     const keys = new Set<string>()
