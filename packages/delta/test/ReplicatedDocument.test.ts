@@ -614,6 +614,31 @@ describe("ReplicatedDocument", () => {
         yield* Replica.exchange(old, updated)
         assert.strictEqual((yield* ReplicatedDocument.get(updated)).status, "archived")
       }))
+
+    it.effect("a newer schema fills in an entry's missing field from its constructor default", () =>
+      Effect.gen(function*() {
+        const Label = Schema.Struct({ name: Schema.String })
+        const LabelV2 = Schema.Struct({
+          ...Label.fields,
+          color: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("gray")))
+        })
+        const old = yield* ReplicatedDocument.make(Schema.Struct({ labels: Schema.Record(Schema.String, Label) }), {
+          initial: { labels: {} },
+          replica: Replica.ReplicaId.make("old")
+        })
+        const updated = yield* ReplicatedDocument.make(
+          Schema.Struct({ labels: Schema.Record(Schema.String, LabelV2) }),
+          {
+            initial: { labels: {} },
+            replica: Replica.ReplicaId.make("new")
+          }
+        )
+        yield* ReplicatedDocument.update(old, () => ({ labels: { bug: { name: "Bug" } } }))
+        yield* Replica.exchange(old, updated)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), {
+          labels: { bug: { name: "Bug", color: "gray" } }
+        })
+      }))
   })
 
   describe("changes that don't fit", () => {
