@@ -462,20 +462,23 @@ export const integrate = (
   for (const { parts } of contexts) {
     for (const part of parts) {
       const k = Path.key(part.path)
-      incoming.set(k, [...(incoming.get(k) ?? []), part])
+      const ofText = incoming.get(k)
+      if (ofText === undefined) incoming.set(k, [part])
+      else ofText.push(part)
     }
   }
-  const merges = new Map<string, { readonly path: Path.Path; readonly merge: Text.Merge }>()
-  const mergeOf = (path: Path.Path, strategy: Replica.Strategy): Text.Merge => {
+  // A text nobody has written yet joins the document when a part of it is
+  // applied, so a change that's rejected leaves nothing behind.
+  const merges = new Map<string, { readonly path: Path.Path; readonly text: Text.Text; readonly merge: Text.Merge }>()
+  const mergeOf = (path: Path.Path, strategy: Replica.Strategy) => {
     const k = Path.key(path)
     let found = merges.get(k)
     if (found === undefined) {
-      const at = ensureSlot(document, path)
-      at.text ??= Text.make(strategy)
-      found = { path, merge: at.text.merge(incoming.get(k) ?? []) }
+      const text = slot(document, path)?.text ?? Text.make(strategy)
+      found = { path, text, merge: text.merge(incoming.get(k) ?? []) }
       merges.set(k, found)
     }
-    return found.merge
+    return found
   }
 
   const found = options.overlaps ? new Found() : undefined
@@ -484,7 +487,8 @@ export const integrate = (
   let applied = 0
   for (const [i, change] of changes.entries()) {
     const context = contexts[i]!
-    problem = options.check?.(change) ?? check(document, change, context, mergeOf)
+    problem = options.check?.(change) ??
+      check(document, change, context, (path, strategy) => mergeOf(path, strategy).merge)
     if (problem !== undefined) break
     let seq = change.seq
     for (const op of change.ops) {
@@ -494,8 +498,11 @@ export const integrate = (
         if (part !== undefined) {
           const strategy = Text.strategyOfOp(op)
           document.strategy ??= strategy
-          const patch = mergeOf(part.path, strategy).apply(part)
-          ensureSlot(document, part.path).kind = "text"
+          const { merge, text } = mergeOf(part.path, strategy)
+          const patch = merge.apply(part)
+          const at = ensureSlot(document, part.path)
+          at.kind = "text"
+          at.text = text
           composeText(texts, part.path, patch)
         }
       } else {
@@ -896,11 +903,13 @@ export const edit = (
   for (const [index, intent] of intents.entries()) {
     switch (intent._tag) {
       case "Text": {
-        const at = ensureSlot(document, intent.path)
-        at.text ??= Text.make(document.strategy!)
-        at.kind = "text"
-        const edited = at.text.edit(intent.patch, { replica: options.replica, seq }, past)
+        // As in a merge, a text joins the document only once it's written.
+        const text = slot(document, intent.path)?.text ?? Text.make(document.strategy!)
+        const edited = text.edit(intent.patch, { replica: options.replica, seq }, past)
         if (edited === undefined) break
+        const at = ensureSlot(document, intent.path)
+        at.kind = "text"
+        at.text = text
         const pathed = Path.isRoot(intent.path) ? {} : { path: intent.path }
         for (const op of edited.ops) {
           ops.push({ ...op, ...pathed })

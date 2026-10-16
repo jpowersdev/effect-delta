@@ -137,7 +137,8 @@ export const make = Effect.fnUntraced(function*(options: {
 
         const { state } = document
         if (incoming.length === 0) return new Sync.Accepted({ confirmed: held(state.history) })
-        // A document's strategy is its first text op's.
+        // A document's strategy is its first text op's. It's learned from
+        // the changes that are kept, below.
         const strategy = state.strategy ?? (isAuthority ? "tree" : InternalDocument.strategyOf(incoming))
         for (const change of incoming) {
           if (!InternalDocument.fitsStrategy(change, strategy)) {
@@ -146,7 +147,6 @@ export const make = Effect.fnUntraced(function*(options: {
             )
           }
         }
-        state.strategy = strategy
 
         // Changes that are new here wait as pending until what they build on
         // is here, then they're checked and applied in causal order.
@@ -228,6 +228,9 @@ export const make = Effect.fnUntraced(function*(options: {
         }
 
         const kept = fresh.filter((change) => history.changes.has(key(change)) || history.pending.has(key(change)))
+        // Applying a text op sets it, but kept changes that wait count too:
+        // the store has them, so a reload would learn it from them.
+        document.state.strategy ??= InternalDocument.strategyOf(kept)
         if (kept.length > 0) {
           yield* save(store, document, kept, user).pipe(
             Effect.tapError((error) =>
