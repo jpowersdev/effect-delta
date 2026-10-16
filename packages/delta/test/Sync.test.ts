@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Deferred, Effect, Equal, Fiber, Layer, Option, Schedule, Schema, Stream } from "effect"
+import { Context, Deferred, Effect, Equal, Fiber, Layer, Option, Queue, Schedule, Schema, Stream } from "effect"
 import {
   Authority,
   type Delta,
@@ -81,21 +81,21 @@ const failingOnce = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*
 
 const day = 24 * 60 * 60 * 1000
 
-// A store that holds the next save until interrupted, and tells
-// `holdNextSave.current` when it starts.
-const holdNextSave: { current: Deferred.Deferred<void> | undefined } = { current: undefined }
-const heldSaves = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*() {
-  const store = yield* HistoryStore.HistoryStore
-  return {
-    ...store,
-    append: (document, delta) => {
-      const saving = holdNextSave.current
-      if (saving === undefined) return store.append(document, delta)
-      holdNextSave.current = undefined
-      return Effect.andThen(Deferred.succeed(saving, undefined), Effect.never)
+// A store that holds the next save until interrupted, once `next` is set, and
+// tells `next` when it starts.
+const holdingSaves = (hold: { next: Deferred.Deferred<void> | undefined }) =>
+  Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*() {
+    const store = yield* HistoryStore.HistoryStore
+    return {
+      ...store,
+      append: (document, delta) => {
+        const saving = hold.next
+        if (saving === undefined) return store.append(document, delta)
+        hold.next = undefined
+        return Effect.andThen(Deferred.succeed(saving, undefined), Effect.never)
+      }
     }
-  }
-})).pipe(Layer.provide(HistoryStore.layerMemory))
+  })).pipe(Layer.provide(HistoryStore.layerMemory))
 
 const CryptoTest = TestCrypto.layer("sync").pipe(Layer.provide(NodeCrypto.layer))
 
@@ -506,12 +506,13 @@ describe("Relay", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(later), { status: "Hi" })
       }).pipe(Effect.provide(RelayLive)))
 
-    it.effect("saves a push it was interrupted saving, when it's pushed again", () =>
-      Effect.gen(function*() {
+    it.effect("saves a push it was interrupted saving, when it's pushed again", () => {
+      const hold: { next: Deferred.Deferred<void> | undefined } = { next: undefined }
+      return Effect.gen(function*() {
         const store = yield* HistoryStore.HistoryStore
         const relay = yield* Relay.Relay
         const saving = yield* Deferred.make<void>()
-        holdNextSave.current = saving
+        hold.next = saving
         const laptop = yield* makeDoc("laptop")
         yield* ReplicatedDocument.update(laptop, (doc) => ({ ...doc, status: "review" }))
         const delta = yield* Replica.delta(laptop, VersionVector.empty)
@@ -523,7 +524,49 @@ describe("Relay", () => {
         assert.strictEqual((yield* push)._tag, "Accepted")
         const stored = Option.getOrThrow(yield* store.load(notes))
         assert.isTrue(Equal.equals(stored.history, delta))
-      }).pipe(Effect.provide(Relay.layer.pipe(Layer.provideMerge(heldSaves)))))
+      }).pipe(Effect.provide(Relay.layer.pipe(Layer.provideMerge(holdingSaves(hold)))))
+    })
+
+    it.live("keeps serving a reloaded document's subscribers when a push waited on the old one", () => {
+      const hold: { next: Deferred.Deferred<void> | undefined } = { next: undefined }
+      return Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const push = (delta: Delta.Delta) => relay.push({ format: Sync.FORMAT, document: notes, delta })
+        const laptop = yield* makeDoc("laptop")
+        yield* ReplicatedDocument.update(laptop, (doc) => ({ ...doc, status: "review" }))
+        const fromLaptop = yield* Replica.delta(laptop, VersionVector.empty)
+        const phone = yield* makeDoc("phone")
+        yield* ReplicatedDocument.update(phone, (doc) => ({ ...doc, votes: 1 }))
+        const fromPhone = yield* Replica.delta(phone, VersionVector.empty)
+
+        // The laptop's push is interrupted while saving, with the phone's
+        // waiting behind it, so the document is reloaded.
+        const laptopSaving = yield* Deferred.make<void>()
+        hold.next = laptopSaving
+        const pushing = yield* Effect.forkChild(push(fromLaptop))
+        yield* Deferred.await(laptopSaving)
+        const phoneSaving = yield* Deferred.make<void>()
+        hold.next = phoneSaving
+        const waiting = yield* Effect.forkChild(push(fromPhone), { startImmediately: true })
+        yield* Fiber.interrupt(pushing)
+
+        // A tablet subscribes to the reloaded document. The phone's push then
+        // ends, possibly interrupted too.
+        const updates = yield* Stream.toQueue(
+          relay.subscribe({ format: Sync.FORMAT, document: notes, strategy: "tree", version: {}, authority: false }),
+          { capacity: "unbounded" }
+        )
+        yield* Queue.take(updates)
+        yield* Effect.raceFirst(Deferred.await(phoneSaving), Fiber.await(waiting))
+        yield* Fiber.interrupt(waiting)
+        hold.next = undefined
+
+        // Pushed again, the laptop's change reaches the tablet.
+        assert.strictEqual((yield* push(fromLaptop))._tag, "Accepted")
+        const update = yield* Queue.take(updates).pipe(Effect.timeout("1 second"))
+        assert.isTrue(Equal.equals(update.delta, fromLaptop))
+      }).pipe(Effect.scoped, Effect.provide(Relay.layer.pipe(Layer.provideMerge(holdingSaves(hold)))))
+    })
 
     it.effect("keeps nothing of a change it rejects", () =>
       Effect.gen(function*() {
