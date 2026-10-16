@@ -89,6 +89,7 @@ describe("ReplicatedDocument", () => {
     expect(ReplicatedDocument.List).type.toBeCallableWith(Task, { key: "id" })
     expect(ReplicatedDocument.List).type.not.toBeCallableWith(Task, { key: "done" })
     expect(ReplicatedDocument.List).type.not.toBeCallableWith(Task, { key: "missing" })
+    expect(ReplicatedDocument.List).type.not.toBeCallableWith(Task, { key: "due" })
   })
 
   it("readProposal reads typed values", () => {

@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Schema } from "effect"
-import { VersionVector } from "effect-delta"
+import { Exit, Schema } from "effect"
+import { Delta, Replica, VersionVector } from "effect-delta"
 
 const Vector = Schema.Record(
   Schema.Literals(["a", "b", "c"]),
@@ -27,5 +27,22 @@ describe("VersionVector", () => {
   it("treats a missing replica as nothing seen", () => {
     assert.strictEqual(VersionVector.compare({ a: 0 }, {}), "equal")
     assert.strictEqual(VersionVector.compare({ a: 1 }, {}), "after")
+  })
+
+  it("a replica id can't be __proto__, which a version vector can't hold", () => {
+    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Replica.ReplicaId)("__proto__")))
+    // Parsed, so `__proto__` is a key rather than the object's prototype.
+    assert.isTrue(
+      Exit.isFailure(Schema.decodeUnknownExit(VersionVector.VersionVector)(JSON.parse(`{ "__proto__": 1 }`)))
+    )
+    const change = {
+      replica: "__proto__",
+      seq: 0,
+      length: 1,
+      parents: [],
+      time: 0,
+      ops: [{ _tag: "Unset", path: ["a"] }]
+    }
+    assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Delta.Delta)({ format: 1, changes: [change] })))
   })
 })
