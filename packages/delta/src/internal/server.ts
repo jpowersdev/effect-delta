@@ -211,15 +211,17 @@ export const make = Effect.fnUntraced(function*(options: {
             const before = isText ? InternalDocument.textAt(state, Path.root) : jsonOf(state)
             // Each path holds one kind of thing, so the JSON a check reads is
             // never ambiguous. A change that breaks that is rejected, as a
-            // check rejects, so the replica that made it rolls it back.
+            // check rejects, so the replica that made it rolls it back; but
+            // one that's malformed is refused as that, as replicas refuse it.
             const unkept = InternalDocument.checkPaths(state, change)
-            if (unkept !== undefined) {
-              rejected = unkept
-              break
-            }
             const { problem, texts } = InternalDocument.integrate(state, [change])
             if (problem !== undefined) {
               malformed = problem
+              break
+            }
+            if (unkept !== undefined) {
+              document.state = without(state, (c) => c === change)
+              rejected = unkept
               break
             }
             const verdict = yield* Effect.result(check(
