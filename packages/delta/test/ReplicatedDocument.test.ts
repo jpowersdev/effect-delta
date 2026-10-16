@@ -734,6 +734,25 @@ describe("ReplicatedDocument", () => {
         assert.throws(() => ReplicatedDocument.text(doc, ["status"]), "isn't a text field")
       }))
 
+    it.effect("a handle keeps its path, though the array it was given changes", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
+        const path: ["comments", string, "text"] = ["comments", "c1", "text"]
+        const text = ReplicatedDocument.text(ada, path)
+        yield* ReplicatedText.insert(text, 0, "Hello")
+        path[1] = "c2"
+        yield* ReplicatedText.insert(text, 5, "!")
+        const copy = yield* make("copy")
+        yield* Replica.receive(copy, yield* Replica.delta(ada, VersionVector.empty))
+        for (const doc of [ada, copy]) {
+          assert.strictEqual(
+            yield* ReplicatedText.get(ReplicatedDocument.text(doc, ["comments", "c1", "text"])),
+            "Hello!"
+          )
+          assert.strictEqual(yield* ReplicatedText.get(ReplicatedDocument.text(doc, ["comments", "c2", "text"])), "")
+        }
+      }))
+
     // A document's text field must be a replicated text in every way: the same
     // edits and syncs give the same text, anchors and overlaps, step by step. Only
     // the field is edited, so its characters get the same ids as the text's.
