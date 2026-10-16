@@ -278,8 +278,8 @@ Covers fields, entries, a text field, an anchor stored in a document, and a `Val
 ```ts
 /**
  * A design doc with a title, a body, a status, and comments pinned to the
- * body. Two people work on it offline. Everything they did survives, and the
- * merge says where they both changed the same thing.
+ * body. Two people work on it offline. Their edits merge, and the merge says
+ * where they both changed the same thing.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Console, Effect, Option, Schema } from "effect"
@@ -331,8 +331,8 @@ const program = Effect.gen(function*() {
 
   const doc = yield* ReplicatedDocument.get(ada)
   const pinned = yield* ReplicatedText.locateRange(body, doc.comments.c1!.range)
-  yield* Console.log(Option.map(pinned, ({ end, start }) => doc.body.slice(start, end)))
-  // Some("Tokens refresh daily.")    the comment still points at its sentence
+  yield* Console.log(Option.getOrUndefined(Option.map(pinned, ({ end, start }) => doc.body.slice(start, end))))
+  // Tokens refresh daily.    the comment still points at its sentence
 
   yield* Console.log(doc.status, overlaps)
   // review [{ _tag: "Value", path: ["status"], replicas: [...], kept: <Ada's id> }]
@@ -566,9 +566,9 @@ All built, each with tests and an example:
 - **An authority that loses changes it accepted** (a store restored from a backup, say) leaves confirmed
   replicas to recover one change at a time: a change it has lost is rolled back when it's pushed again,
   and one built on another replica's lost change is refused as malformed, which ends the connection of the
-  replica that pushed it, until that other replica has pushed first. A replica that had saved a lost change
-  as confirmed brings it back each time it reopens, until it's pushed and rolled back again, with any edits
-  made on top of it in the meantime.
+  replica that pushed it; opened again, it's refused again until that other replica has pushed first. A
+  replica that had saved a lost change as confirmed brings it back each time it reopens, until it's pushed
+  and rolled back again, with any edits made on top of it in the meantime.
 - **Counters are exact only within the safe integers.** A counter's increments add up exactly, but it reads
   as a JavaScript number, so a total (with its initial value) beyond 2^53 reads as the nearest safe
   integer.

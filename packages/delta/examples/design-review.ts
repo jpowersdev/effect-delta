@@ -1,7 +1,7 @@
 /**
  * A design doc with a title, a body, a status, and comments pinned to the
- * body. Two people work on it offline. Everything they did survives, and the
- * merge says where they both changed the same thing.
+ * body. Two people work on it offline. Their edits merge, and the merge says
+ * where they both changed the same thing.
  *
  * Strategy: tree.
  *
@@ -57,8 +57,8 @@ const program = Effect.gen(function*() {
 
   const doc = yield* ReplicatedDocument.get(ada)
   const pinned = yield* ReplicatedText.locateRange(body, doc.comments.c1!.range)
-  yield* Console.log(Option.map(pinned, ({ end, start }) => doc.body.slice(start, end)))
-  // Some("Tokens refresh daily.")    the comment still points at its sentence
+  yield* Console.log(Option.getOrUndefined(Option.map(pinned, ({ end, start }) => doc.body.slice(start, end))))
+  // Tokens refresh daily.    the comment still points at its sentence
 
   yield* Console.log(doc.status, overlaps)
   // review [{ _tag: "Value", path: ["status"], replicas: [...], kept: <Ada's id> }]
