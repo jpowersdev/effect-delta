@@ -431,9 +431,9 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         yield* atOnce.edits
 
         // One at a time, shuffled and repeated, to a replica that saves them,
-        // and to a relay whose subscriber takes what it sends. Behind the
-        // relay, a replica that's reopened from what it saved now and then,
-        // so it starts from texts saved partway.
+        // and to a relay whose subscriber takes what it sends: they accept the
+        // same ones. Behind the relay, a replica that's reopened from what it
+        // saved now and then, so it starts from texts saved partway.
         yield* Effect.scoped(Effect.gen(function*() {
           const oneByOne = yield* watched(yield* make("one-by-one"), Project)
           yield* HistoryStore.persist(oneByOne.doc, saved)
@@ -446,8 +446,9 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
           })
           let back = yield* open()
           for (const change of yield* Random.shuffle([...changes, ...changes])) {
-            yield* oneByOne.receive(InternalDelta.fromChanges([change]))
-            yield* Effect.exit(push(relay, shuffled, [change]))
+            const received = yield* oneByOne.receive(InternalDelta.fromChanges([change]))
+            const pushed = yield* Effect.exit(push(relay, shuffled, [change]))
+            assert.strictEqual(Exit.isSuccess(pushed), Exit.isSuccess(received), JSON.stringify(change))
             yield* pull(back.doc, relay, shuffled)
             // Saved before the next arrives.
             yield* Effect.yieldNow
