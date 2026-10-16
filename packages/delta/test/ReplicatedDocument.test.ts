@@ -407,6 +407,18 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual((yield* converged(ada, ben)).labels, { urgent: 3, soon: 4 })
       }))
 
+    it.effect("an entry's key can be any string", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* pair
+        // Parsed, so `__proto__` is a key rather than the object's prototype.
+        const comments = JSON.parse(`{ "__proto__": { "author": "ada", "text": "Hi" } }`)
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, comments, labels: JSON.parse(`{ "__proto__": 1 }`) }))
+        yield* Replica.exchange(ada, ben)
+        const doc = yield* converged(ada, ben)
+        assert.deepStrictEqual(Object.entries(doc.comments), [["__proto__", comment("ada", "Hi")]])
+        assert.deepStrictEqual(Object.entries(doc.labels), [["__proto__", 1]])
+      }))
+
     it.effect("an optional field comes and goes", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")

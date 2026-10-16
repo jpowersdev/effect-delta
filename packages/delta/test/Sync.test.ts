@@ -651,5 +651,28 @@ describe("Authority", () => {
         const error = yield* Effect.flip(Replica.exchange(yield* makeDoc("peer"), confirmed))
         assert.strictEqual(error.reason._tag, "AuthorityOnly")
       }).pipe(Effect.scoped, Effect.provide([NoSecrets, CryptoTest])))
+
+    it.effect("a proposal has every entry, whatever its key", () => {
+      const proposed: Array<DesignDoc> = []
+      const Recording = Authority.layer({
+        check: (proposal) => {
+          if (proposal._tag === "Document") {
+            proposed.push(ReplicatedDocument.readProposal(proposal, DesignDoc, { initial }).after)
+          }
+          return Effect.void
+        }
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      return Effect.gen(function*() {
+        const doc = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
+        // Parsed, so `__proto__` is a key rather than the object's prototype.
+        const comments = JSON.parse(`{ "__proto__": { "author": "ada", "text": "Hi" } }`)
+        yield* ReplicatedDocument.update(doc, (value) => ({ ...value, comments }))
+        yield* doc.connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)
+        assert.deepStrictEqual(Object.entries(proposed.at(-1)!.comments), [["__proto__", {
+          author: "ada",
+          text: "Hi"
+        }]])
+      }).pipe(Effect.scoped, Effect.provide([Recording, CryptoTest]))
+    })
   })
 })
