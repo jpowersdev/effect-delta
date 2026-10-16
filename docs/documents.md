@@ -581,7 +581,8 @@ All built, each with tests and an example:
    Eg-walker conformance data has replica ids whose changes aren't in sequence order, which version vectors
    can't describe.
 7. **`readProposal` is an `Effect` of a `Proposed<A>`,** and fails with `Authority.Rejected` when the change
-   doesn't fit the schema, so a check reads the document exactly as replicas will show it. Reading JSON
+   doesn't fit the schema, so a check reads the document as replicas will show it (with one gap, under
+   [Known limits](#known-limits)). Reading JSON
    alone let a client hide a write from a check: writing over it with a value replicas can't read, or
    removing a required field, which replicas ignore.
 8. **Changes that don't fit a schema are kept, not rejected,** by replicas and relays alike (see
