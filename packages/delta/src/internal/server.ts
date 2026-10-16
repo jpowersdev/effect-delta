@@ -77,9 +77,7 @@ export const make = Effect.fnUntraced(function*(options: {
 
   const open = Effect.fnUntraced(function*(id: Replica.DocumentId) {
     const document = yield* RcMap.get(documents, id)
-    if (yield* Deferred.isDone(document.failed)) {
-      return yield* syncError(new Sync.Unavailable({ message: `Document ${id} is reloading` }))
-    }
+    yield* ensureServing(document)
     return document
   })
 
@@ -122,9 +120,12 @@ export const make = Effect.fnUntraced(function*(options: {
     }))
 
   // Stops serving a document, so it's loaded again from the store, which has
-  // everything any subscriber has seen.
+  // everything any subscriber has seen. Only the push holding its lock calls
+  // this, and pushes after it change nothing, so the id still names this copy.
   const reload = (document: Document, error: Sync.SyncError) =>
-    Effect.andThen(Deferred.fail(document.failed, error), RcMap.invalidate(documents, document.id))
+    Effect.uninterruptible(
+      Effect.andThen(Deferred.fail(document.failed, error), RcMap.invalidate(documents, document.id))
+    )
 
   const push = (request: Sync.PushRequest): Effect.Effect<Sync.Ack, Sync.SyncError> =>
     Effect.gen(function*() {
@@ -134,7 +135,9 @@ export const make = Effect.fnUntraced(function*(options: {
       // sent: interrupted in between, the document holds changes the store
       // doesn't, so it starts over from the store.
       let changing = false
-      return yield* document.lock.withPermit(Effect.gen(function*() {
+      return yield* Effect.gen(function*() {
+        // It may have failed while this push waited.
+        yield* ensureServing(document)
         const incoming = [...(request.delta as InternalDelta.DeltaImpl).changes.values()]
         for (const change of incoming) {
           const owner = document.owners.get(change.replica)
@@ -274,7 +277,8 @@ export const make = Effect.fnUntraced(function*(options: {
         return rejected === undefined
           ? new Sync.Accepted({ confirmed })
           : new Sync.PushRejected({ confirmed, message: rejected })
-      })).pipe(
+      }).pipe(
+        // Under the lock, so no other push sees what this one left.
         Effect.onInterrupt(() =>
           changing
             ? reload(
@@ -282,7 +286,8 @@ export const make = Effect.fnUntraced(function*(options: {
               new Sync.SyncError({ reason: new Sync.Unavailable({ message: "A push was interrupted" }) })
             )
             : Effect.void
-        )
+        ),
+        document.lock.withPermit
       )
     }).pipe(Effect.scoped)
 
@@ -370,6 +375,14 @@ const held = (history: History.History<unknown> | undefined): VersionVector.Vers
 }
 
 const syncError = (reason: Sync.SyncError["reason"]) => Effect.fail(new Sync.SyncError({ reason }))
+
+// Fails once a document has stopped being served, while it's reloaded.
+const ensureServing = (document: Document): Effect.Effect<void, Sync.SyncError> =>
+  Effect.flatMap(
+    Deferred.isDone(document.failed),
+    (failed) =>
+      failed ? syncError(new Sync.Unavailable({ message: `Document ${document.id} is reloading` })) : Effect.void
+  )
 
 // How far ahead of a server's clock a change's write time may be.
 const maxAhead = 24 * 60 * 60 * 1000
