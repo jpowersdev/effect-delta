@@ -12,7 +12,8 @@ import {
 } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
-import { forgedRuns, ForgedSession, forgeSession, initialProject, Project } from "./utils/forged.ts"
+import { KeyValueStore } from "effect/persistence"
+import { forgedRuns, ForgedSession, forgeSession, hop, initialProject, Project } from "./utils/forged.ts"
 import {
   Board,
   documentRuns,
@@ -241,7 +242,8 @@ describe.each(["tree", "replay"] as const)("document convergence (%s)", (strateg
 // Changes made directly, many of them malformed or not fitting the schema, as
 // a buggy or malicious client could send them, several at a time and some
 // late. Replicas and relays must still accept and refuse the same ones, and
-// show the same value however they arrive.
+// show the same value however they arrive: in memory, or as JSON over RPC and
+// in a store.
 
 // The part of a document's value at `path`, if it shows. List items are found
 // by their `id`.
@@ -290,8 +292,11 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
     return { value: yield* ReplicatedDocument.get(doc), version: yield* Replica.version(doc) }
   })
   const key = (change: InternalDocument.AnyChange) => `${change.seq}@${change.replica}`
-  const push = (relay: Sync.Server, document: Replica.DocumentId, changes: ReadonlyArray<InternalDocument.AnyChange>) =>
-    relay.push({ format: Sync.FORMAT, document, delta: InternalDelta.fromChanges(changes) })
+  const push = Effect.fnUntraced(
+    function*(relay: Sync.Server, document: Replica.DocumentId, changes: ReadonlyArray<InternalDocument.AnyChange>) {
+      return yield* relay.push({ format: Sync.FORMAT, document, delta: yield* hop(InternalDelta.fromChanges(changes)) })
+    }
+  )
   const subscribe = (relay: Sync.Server, document: Replica.DocumentId, version: VersionVector.VersionVector) =>
     relay.subscribe({ format: Sync.FORMAT, document, strategy, version, authority: false })
   // Takes in what a relay has applied since the replica's version, as a
@@ -299,7 +304,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
   const pull = Effect.fnUntraced(
     function*(doc: Replica.Replica<unknown>, relay: Sync.Server, document: Replica.DocumentId) {
       const first = yield* Stream.runHead(subscribe(relay, document, yield* Replica.version(doc)))
-      yield* Replica.receive(doc, Option.getOrThrow(first).delta)
+      yield* Replica.receive(doc, yield* hop(Option.getOrThrow(first).delta))
     }
   )
   // What a relay has applied, as a new replica that takes it in shows it.
@@ -316,7 +321,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
     version: VersionVector.VersionVector
   ) {
     while (VersionVector.compare(yield* Replica.version(doc), version) !== "equal") {
-      yield* Replica.receive(doc, (yield* Queue.take(updates)).delta)
+      yield* Replica.receive(doc, yield* hop((yield* Queue.take(updates)).delta))
     }
   })
   // A replica that receives deltas, failing or not, and afterwards says what
@@ -329,7 +334,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
       doc,
       receive: Effect.fnUntraced(function*(changes: ReadonlyArray<InternalDocument.AnyChange>) {
         const before = yield* Replica.version(doc)
-        const received = yield* Effect.exit(Replica.receive(doc, InternalDelta.fromChanges(changes)))
+        const received = yield* Effect.exit(Replica.receive(doc, yield* hop(InternalDelta.fromChanges(changes))))
         // Each merge that applies something is one edit.
         if (VersionVector.compare(yield* Replica.version(doc), before) !== "equal") merges++
         return received
@@ -344,7 +349,8 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
 
   it.effect.prop(
     "replicas, relays and reloads accept the same changes, and show the same value whatever the order",
-    { session: ForgedSession, seed: Schema.Int },
+    // Stored in memory, or as JSON.
+    { session: ForgedSession, seed: Schema.Int, json: Schema.Boolean },
     Effect.fnUntraced(function*({ seed, session }) {
       const expected = yield* Effect.gen(function*() {
         const relay = yield* Relay.Relay
@@ -407,7 +413,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         yield* catchUp(subscriber, updates, fromShuffled.version)
         assert.deepStrictEqual(yield* view(subscriber), expected)
         return expected
-      }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+      }).pipe(Effect.provide(Layer.fresh(Relay.layer)), Random.withSeed(seed))
 
       // Started again from what they stored.
       for (const document of [saved, behind]) {
@@ -422,10 +428,14 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         const relay = yield* Relay.Relay
         for (const document of [inOrder, shuffled]) assert.deepStrictEqual(yield* fromRelay(relay, document), expected)
       }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
-    }, (effect) =>
+    }, (effect, { json }) =>
       effect.pipe(
         Effect.scoped,
-        Effect.provide(HistoryStore.layerMemory),
+        Effect.provide(
+          json
+            ? HistoryStore.layerKeyValueStore({ prefix: "forged" }).pipe(Layer.provide(KeyValueStore.layerMemory))
+            : HistoryStore.layerMemory
+        ),
         Effect.provideService(Sync.CurrentUser, "forger")
       )),
     { arbitrary: forgedRuns }

@@ -1,5 +1,5 @@
-import { Effect, Schema } from "effect"
-import { type Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
+import { Effect, Random, Schema } from "effect"
+import { Delta, type Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { Fraction, gapAt, itemAt, Which } from "./sessions.ts"
 
@@ -404,6 +404,16 @@ export const forgeSession = <E, R>(
     yield* flush(late)
     return changes
   })
+
+// Sending --------------------------------------------------------------------
+
+/** A delta as it arrives after being sent as JSON, as relays over RPC and stores on a `KeyValueStore` send it. */
+export const throughJson = (delta: Delta.Delta): Delta.Delta =>
+  Schema.decodeUnknownSync(Delta.Delta)(JSON.parse(JSON.stringify(Schema.encodeSync(Delta.Delta)(delta))))
+
+/** A delta sent one hop: as it is, as between replicas in one process, or as JSON, picked at random. */
+export const hop = (delta: Delta.Delta): Effect.Effect<Delta.Delta> =>
+  Effect.map(Random.nextBoolean, (json) => json ? throughJson(delta) : delta)
 
 // Honest edits ---------------------------------------------------------------
 
