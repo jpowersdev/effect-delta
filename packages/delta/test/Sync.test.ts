@@ -1081,6 +1081,35 @@ describe("Authority", () => {
       { arbitrary: forgedRuns }
     )
 
+    it.effect("a change that fits the schema can't stop a list from starting", () =>
+      Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        // A task written at, but never placed in the list: replicas don't
+        // show it, and the authority can't tell it from a record's entry.
+        const unplaced: ReadonlyArray<InternalDocument.Op> = [
+          { _tag: "Unset", path: ["tasks", "t9"] },
+          { _tag: "Add", path: ["tasks", "t9"] }
+        ]
+        for (const op of unplaced) {
+          const document = Replica.DocumentId.make(op._tag)
+          const push = (delta: Delta.Delta) => authority.push({ format: Sync.FORMAT, document, delta })
+          const intruder = InternalDelta.fromChanges([{
+            replica: "intruder",
+            seq: 0,
+            length: 1,
+            parents: [],
+            time: 0,
+            ops: [op]
+          }])
+          yield* Effect.exit(push(intruder).pipe(asUser("intruder")))
+          // The list's first task is still accepted.
+          const laptop = yield* makeDoc(`laptop-${op._tag}`)
+          yield* ReplicatedDocument.update(laptop, (doc) => ({ ...doc, tasks: [{ id: "t1", title: "", done: false }] }))
+          const ack = yield* push(yield* Replica.delta(laptop, VersionVector.empty))
+          assert.strictEqual(ack._tag, "Accepted")
+        }
+      }).pipe(Effect.provide(ownerApproves())))
+
     it.effect("accepts a list's first item after text was typed into an item nobody added", () =>
       Effect.gen(function*() {
         const authority = yield* Authority.Authority
