@@ -1173,6 +1173,66 @@ describe("Authority", () => {
       }).pipe(Effect.provide(Gated))
     }).pipe(Effect.scoped, Effect.provide(CryptoTest)))
 
+  it.effect("rolls back what others made on top of a rejected change, when an authority that lost it rejects it", () =>
+    Effect.gen(function*() {
+      // An authority that keeps documents only in memory, restarted with a
+      // stricter check.
+      const Lenient = Authority.layer({ check: () => Effect.void }).pipe(Layer.provide(HistoryStore.layerMemory))
+      const before = Context.get(yield* Layer.build(Layer.fresh(Lenient)), Authority.Authority)
+      const after = Context.get(yield* Layer.build(Layer.fresh(NoSecrets)), Authority.Authority)
+      let current = before
+      // The laptop's answers from before the restart never arrive.
+      const restarted = yield* Deferred.make<void>()
+      const restarting = Authority.Authority.of({
+        subscribe: (request) => Stream.unwrap(Effect.sync(() => current.subscribe(request))),
+        push: (request) =>
+          Effect.suspend(() =>
+            current === before
+              ? before.push(request).pipe(
+                Effect.andThen(Deferred.await(restarted)),
+                Effect.andThen(Effect.fail(new Sync.SyncError({ reason: new Sync.Disconnected({ cause: "restart" }) })))
+              )
+              : current.push(request)
+          )
+      })
+
+      const laptop = yield* ReplicatedText.makeConfirmed({ document: spec, retry: Schedule.forever }).pipe(
+        Effect.provideService(Authority.Authority, restarting)
+      )
+      const tablet = yield* ReplicatedText.makeConfirmed({ document: spec }).pipe(
+        Effect.provideService(Authority.Authority, before)
+      )
+      yield* synced(laptop.connection)
+      yield* synced(tablet.connection)
+      yield* ReplicatedText.insert(laptop, 0, "a secret")
+      // Built on the laptop's change, which the laptop hasn't heard is accepted.
+      yield* showing(tablet, "a secret")
+      yield* ReplicatedText.insert(tablet, 8, " plan")
+      yield* showing(laptop, "a secret plan")
+
+      const { edits } = yield* ReplicatedText.subscribe(laptop)
+      current = after
+      yield* Deferred.succeed(restarted, undefined)
+      // The restarted authority has neither change, and rejects the laptop's.
+      const rejected = yield* Effect.raceFirst(
+        edits.pipe(Stream.filter((edit) => edit._tag === "Rejected"), Stream.runHead),
+        laptop.connection.await
+      )
+      assert.deepStrictEqual(Option.getOrThrow(rejected), {
+        _tag: "Rejected",
+        patch: [{ _tag: "Remove", length: 13 }],
+        message: "No secrets"
+      })
+      assert.strictEqual(yield* ReplicatedText.get(laptop), "")
+
+      // The laptop carries on with the restarted authority.
+      yield* ReplicatedText.insert(laptop, 0, "a plan")
+      const phone = yield* ReplicatedText.makeConfirmed({ document: spec }).pipe(
+        Effect.provideService(Authority.Authority, after)
+      )
+      yield* showing(phone, "a plan")
+    }).pipe(Effect.scoped, Effect.provide(CryptoTest)))
+
   it.effect("accepts a push up to the first change it rejects", () =>
     Effect.gen(function*() {
       const authority = yield* Authority.Authority
