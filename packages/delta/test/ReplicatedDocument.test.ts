@@ -778,6 +778,48 @@ describe("ReplicatedDocument", () => {
       assert.include(error.reason.message, message)
     }
 
+    it.effect("a change can only name what its author had seen, whatever this replica has", () =>
+      Effect.gen(function*() {
+        const Tagged = Schema.Struct({ title: ReplicatedDocument.Text, tags: ReplicatedDocument.List(Schema.String) })
+        const makeTagged = (replica: string) =>
+          ReplicatedDocument.make(Tagged, {
+            initial: { title: "", tags: [] },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* makeTagged("ada")
+        yield* ReplicatedDocument.update(ada, () => ({ title: "a", tags: ["x"] }))
+        const fromAda = yield* Replica.delta(ada, VersionVector.empty)
+        // Changes made without seeing ada's, that name her character and her
+        // item's position.
+        const forged = (ops: InternalDocument.AnyChange["ops"]) =>
+          InternalDelta.fromChanges([{ replica: "mallory", seq: 0, length: 1, parents: [], time: 0, ops }])
+        const text = forged([{
+          _tag: "Insert",
+          path: ["title"],
+          text: "b",
+          parent: { replica: "ada", seq: 0 },
+          side: "R",
+          rightOrigin: null
+        }])
+        const position = forged([{
+          _tag: "Place",
+          path: ["tags", "x"],
+          parent: { replica: "ada", seq: 2 },
+          side: "R",
+          rightOrigin: null
+        }])
+        for (
+          const [delta, message] of [
+            [text, "inserts next to a character it hasn't seen"],
+            [position, "places an item next to a position it hasn't seen"]
+          ] as const
+        ) {
+          const ben = yield* makeTagged("ben")
+          yield* Replica.receive(ben, fromAda)
+          malformed(yield* Effect.flip(Replica.receive(ben, delta)), message)
+        }
+      }))
+
     it.effect("changes the schema has another rule for are kept and passed on, but don't show", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
