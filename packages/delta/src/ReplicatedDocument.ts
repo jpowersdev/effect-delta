@@ -38,7 +38,7 @@ import * as InternalConnection from "./internal/connection.ts"
 import type * as InternalDelta from "./internal/delta.ts"
 import * as InternalEditable from "./internal/editable.ts"
 import * as InternalEngine from "./internal/engine.ts"
-import * as InternalProposal from "./internal/proposal.ts"
+import * as InternalPath from "./internal/path.ts"
 import * as InternalReplica from "./internal/replica.ts"
 import * as InternalShape from "./internal/shape.ts"
 import type * as Replica from "./Replica.ts"
@@ -645,10 +645,6 @@ export interface Proposed<A> {
  * authority before the apps that write to it: a change from a newer version
  * doesn't fit an older one.
  *
- * Read a proposal in the check that receives it: what exists is noted for
- * the authority's own proposals, and one made any other way reads entries
- * and optional fields wherever its JSON has them.
- *
  * **Example** (Only the owner approves)
  *
  * ```ts import.meta.vitest
@@ -686,21 +682,16 @@ export const readProposal = <A>(
       if (misfit !== undefined) return Effect.fail(new Authority.Rejected({ message: misfit }))
     }
     return Effect.succeed({
-      before: InternalShape.readJson(
-        shape,
-        proposal.before,
-        options.initial,
-        InternalProposal.existsIn(proposal, "before")
-      ) as A,
-      after: InternalShape.readJson(
-        shape,
-        proposal.after,
-        options.initial,
-        InternalProposal.existsIn(proposal, "after")
-      ) as A,
+      before: InternalShape.readJson(shape, proposal.before, options.initial, existsIn(proposal.exists.before)) as A,
+      after: InternalShape.readJson(shape, proposal.after, options.initial, existsIn(proposal.exists.after)) as A,
       paths: proposal.paths
     })
   })
+
+const existsIn = (paths: ReadonlyArray<Replica.Path>): (path: Replica.Path) => boolean => {
+  const keys = new Set(paths.map(InternalPath.key))
+  return (path) => keys.has(InternalPath.key(path))
+}
 
 /**
  * Returns `true` when a value is a replicated document.

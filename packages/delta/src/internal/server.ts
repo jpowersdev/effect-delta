@@ -28,7 +28,6 @@ import * as InternalDelta from "./delta.ts"
 import * as InternalDocument from "./document.ts"
 import * as History from "./history.ts"
 import * as Path from "./path.ts"
-import * as InternalProposal from "./proposal.ts"
 
 // The core shared by relays and authorities. Each document is held in memory
 // while it's in use: loaded from the history store when first asked for, and
@@ -210,7 +209,7 @@ export const make = Effect.fnUntraced(function*(options: {
           for (const change of History.takeReady(state.history)) {
             // A change all at the root is a replicated text's.
             const isText = change.ops.every((op) => Path.isRoot(InternalDocument.pathOf(op)))
-            const before = isText ? InternalDocument.textAt(state, Path.root) : InternalProposal.sideOf(state)
+            const before = isText ? InternalDocument.textAt(state, Path.root) : jsonOf(state)
             // Kept consistent, so its JSON of the document is never ambiguous.
             const { problem, texts } = InternalDocument.integrate(state, [change], {
               overlaps: false,
@@ -230,14 +229,14 @@ export const make = Effect.fnUntraced(function*(options: {
                   before: before as string,
                   after: InternalDocument.textAt(state, Path.root)
                 }
-                : InternalProposal.make({
+                : {
+                  _tag: "Document",
                   document: document.id,
                   user,
-                  before: before as InternalProposal.Side,
-                  after: InternalProposal.sideOf(state),
+                  ...proposed(before as ReturnType<typeof jsonOf>, jsonOf(state)),
                   paths: pathsOf(change),
                   delta: InternalDelta.fromChanges([change])
-                })
+                }
             ))
             if (Result.isFailure(verdict)) {
               document.state = without(state, (c) => c === change)
@@ -333,6 +332,19 @@ const without = (
   dropped: (change: InternalDocument.AnyChange) => boolean
 ): InternalDocument.Document =>
   InternalDocument.rebuild(state.strategy, [...state.history.changes.values()].filter((change) => !dropped(change)))
+
+// A document as a proposal has it: its JSON, and the paths in the JSON of the
+// parts that come and go and exist.
+const jsonOf = (state: InternalDocument.Document) => {
+  const exists: Array<Replica.Path> = []
+  return { json: InternalDocument.toJson(state, exists), exists }
+}
+
+const proposed = (before: ReturnType<typeof jsonOf>, after: ReturnType<typeof jsonOf>) => ({
+  before: before.json,
+  after: after.json,
+  exists: { before: before.exists, after: after.exists }
+})
 
 // The paths a change wrote to, in order.
 const pathsOf = (change: InternalDocument.AnyChange): ReadonlyArray<Replica.Path> => {

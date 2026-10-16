@@ -358,14 +358,14 @@ export const texts = (document: Document): ReadonlyArray<{ readonly path: Path.P
  * without what's been removed. For servers, which have no schema to read it
  * with.
  *
- * With `existing`, it also adds the path in the JSON (`Path.key`, with list
- * items by index) of every record entry, optional field and list item that
- * exists. JSON alone can't tell one nobody added, but with something written
- * inside, from a struct field.
+ * With `existing`, it also adds the path in the JSON (with list items by
+ * index) of every record entry, optional field and list item that exists.
+ * JSON alone can't tell one nobody added, but with something written inside,
+ * from a struct field.
  *
  * @internal
  */
-export const toJson = (document: Document, existing?: Set<string>): Schema.Json =>
+export const toJson = (document: Document, existing?: Array<Path.Path>): Schema.Json =>
   jsonAt(document, Path.root, Path.root, existing) ?? {}
 
 const jsonAt = (
@@ -373,12 +373,12 @@ const jsonAt = (
   path: Path.Path,
   // Where it is in the JSON.
   at: Path.Path,
-  existing: Set<string> | undefined
+  existing: Array<Path.Path> | undefined
 ): Schema.Json | undefined => {
   const found = slot(document, path)
   if (found === undefined || found.presence?.exists === false) return undefined
   // What exists always has JSON: a value, or what was added.
-  if (found.presence?.exists === true) existing?.add(Path.key(at))
+  if (found.presence?.exists === true) existing?.push(at)
   switch (kindOf(found)) {
     case "text":
       return found.text!.value
