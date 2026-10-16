@@ -1615,6 +1615,14 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* Replica.receive(ben, InternalDelta.fromChanges([removal])), [])
       }))
 
+    it.effect("a clock that reads part of a millisecond stamps changes with whole ones", () =>
+      Effect.gen(function*() {
+        yield* TestClock.adjust("1.5 millis")
+        const ada = yield* make("ada")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes: 1 }))
+        assert.isTrue(Exit.isSuccess(Schema.encodeExit(Delta.Delta)(yield* Replica.delta(ada, VersionVector.empty))))
+      }))
+
     it.effect("a change must be later than what it was made on top of", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")

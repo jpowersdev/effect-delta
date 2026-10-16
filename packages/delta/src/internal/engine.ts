@@ -161,8 +161,8 @@ export const edit = <E>(
       const intents = yield* Effect.fromResult(plan(state.document))
       if (intents.length === 0) return
       // Later than every change this replica has seen, even if its clock is
-      // behind theirs.
-      const now = yield* Clock.currentTimeMillis
+      // behind theirs, and whole, as a change carries it.
+      const now = Math.floor(yield* Clock.currentTimeMillis)
       const edited = InternalDocument.edit(state.document, {
         replica: state.replica,
         seq: state.nextSeq,
