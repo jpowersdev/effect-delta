@@ -133,10 +133,11 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  * the push are dropped, because each was made on top of the one before.
  *
  * Before `check`, the authority refuses changes it can tell are malformed, ones
- * stamped more than a day ahead of its clock, and ones that would make a path
- * of a document hold two kinds of thing (a text and a value, say), so a
- * `DocumentProposal` has each part where replicas have it. See
- * `ReplicatedDocument.readProposal` for what it can't show.
+ * stamped more than a day ahead of its clock, ones that would make a path of
+ * a document hold two kinds of thing (a text and a value, say), and ones that
+ * remove a part of a document nobody added, so a `DocumentProposal` has each
+ * part where replicas have it. See `ReplicatedDocument.readProposal` for what
+ * it can't show.
  *
  * **Example** (Only editors may edit)
  *

@@ -635,9 +635,10 @@ export interface Proposed<A> {
  * read, say) while every replica shows it. So `readProposal` fails with
  * `Authority.Rejected` when the change writes where the schema has no part,
  * writes a part with an op its rule doesn't take, writes a value the schema
- * can't read, or gives a list item a key field that names another item. A
- * change that fits reads as replicas will show it: entries, items and
- * optional fields only where they exist, and each value as its latest write.
+ * can't read, gives a list item a key field that names another item, or adds
+ * a list item without placing it in its list. A change that fits reads as
+ * replicas will show it: entries, items and optional fields only where they
+ * exist, and each value as its latest write.
  *
  * **Gotchas**
  *

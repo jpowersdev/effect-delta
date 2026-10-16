@@ -303,9 +303,10 @@ export const shows = (shape: Shape, overlap: InternalDocument.Overlap): boolean 
 /**
  * What in a change doesn't fit the schema, if anything: an op at a path the
  * schema doesn't have, or of a kind its rule there doesn't take, a value it
- * can't read, or a record key that isn't one. Replicas keep such changes and
- * don't show them; an authority rejects them, so its check reads the document
- * as replicas show it.
+ * can't read, a record key that isn't one, an item key field that names
+ * another item, or a list item added without a place in its list. Replicas
+ * keep such changes and don't show them; an authority rejects them, so its
+ * check reads the document as replicas show it.
  *
  * @internal
  */
@@ -333,6 +334,15 @@ export const misfit = (shape: Shape, change: InternalDocument.AnyChange): string
     }
     if (op._tag === "Set" && isItemKey(shape, path) && op.value !== path[path.length - 2]) {
       return `${where} a value other than its item's key`
+    }
+    // Replicas place an item as they add it. One with no place doesn't show,
+    // and an authority can't tell it from a record's entry, so it would
+    // refuse every place in the list after it.
+    if (
+      presence === "item" && (op._tag === "Add" || op._tag === "Set") &&
+      !change.ops.some((other) => other._tag === "Place" && Path.equals(other.path, path))
+    ) {
+      return `${where}, adding a list item without placing it`
     }
   }
   return undefined

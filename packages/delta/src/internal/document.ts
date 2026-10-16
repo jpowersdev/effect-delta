@@ -809,11 +809,11 @@ const check = (
 /**
  * Whether a change's ops agree with what's at their paths: a text, a counter
  * and a value have nothing under them, a value is never added (writing it
- * says it exists), the root is a text or has parts, and a list holds items
- * that are values or have parts. Without a schema, this is what an authority
- * can check so its JSON of a document shows what replicas do; replicas and
- * relays keep such changes, and readers ignore what their schema doesn't
- * have.
+ * says it exists), nothing is removed that nobody added, the root is a text
+ * or has parts, and a list holds items that are values or have parts.
+ * Without a schema, this is what an authority can check so its JSON of a
+ * document shows what replicas do; replicas and relays keep such changes,
+ * and readers ignore what their schema doesn't have.
  *
  * @internal
  */
@@ -821,10 +821,13 @@ export const checkPaths = (document: Document, change: AnyChange): string | unde
   const name = `Change ${key(change)}`
   const kinds = new Map<string, Kind>()
   const added = new Set<string>()
+  const existed = new Set<string>()
   const parents = new Set<string>()
   const placed = new Set<string>()
   const kindAt = (path: Path.Path) => kinds.get(Path.key(path)) ?? kindOf(slot(document, path))
   const addedAt = (path: Path.Path) => added.has(Path.key(path)) || (slot(document, path)?.added ?? false)
+  const existedAt = (path: Path.Path) =>
+    existed.has(Path.key(path)) || (slot(document, path)?.presences.length ?? 0) > 0
   const hasChildren = (path: Path.Path) => parents.has(Path.key(path)) || (slot(document, path)?.children.size ?? 0) > 0
   const placedAt = (path: Path.Path) => placed.has(Path.key(path)) || (slot(document, path)?.places.length ?? 0) > 0
   for (const op of change.ops) {
@@ -843,9 +846,16 @@ export const checkPaths = (document: Document, change: AnyChange): string | unde
       }
       if (kind !== "value" && placedAt(path)) return `${name} writes a ${kind} where there's a list item`
       kinds.set(k, kind)
+      if (kind === "value") existed.add(k)
     } else if (op._tag === "Add") {
       if (here === "value") return `${name} adds a value`
       added.add(k)
+      existed.add(k)
+    } else if (op._tag === "Unset") {
+      // Replicas only remove what they show. Removing what was never there
+      // would leave a list item, or what looks like an entry, where no list
+      // could start.
+      if (!existedAt(path)) return `${name} removes something nobody added`
     } else if (op._tag === "Place") {
       if (here === "text" || here === "counter") return `${name} places a ${here} in a list`
       // A path is a list from its first position on, so a struct or record

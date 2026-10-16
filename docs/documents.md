@@ -251,8 +251,9 @@ relay serves every app, and every version of each app's schema.
 refuse what the others accept, and a relay that did would cut off everyone it had passed the change to.
 Replicas keep such changes and don't show them, as they do for parts a newer schema adds. An authority is
 where a change can be turned down, before anyone else has it: it rejects ops that would make one path hold
-two kinds of thing (a text and a value, a value with parts under it, or a list and a struct), and
-`readProposal` rejects anything else that doesn't fit the app's schema.
+two kinds of thing (a text and a value, a value with parts under it, or a list and a struct) or remove
+something nobody added, and `readProposal` rejects anything else that doesn't fit the app's schema,
+including a list item added without a place in its list, which the authority couldn't tell from an entry.
 
 **Texts and documents shouldn't share a document id.** If they do, each keeps the other's changes without
 showing them. A change with no text ops fits either strategy; servers learn a document's strategy from its
