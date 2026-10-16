@@ -210,8 +210,7 @@ export const make = Effect.fnUntraced(function*(options: {
           for (const change of History.takeReady(state.history)) {
             // A change all at the root is a replicated text's.
             const isText = change.ops.every((op) => Path.isRoot(InternalDocument.pathOf(op)))
-            const before = isText ? InternalDocument.textAt(state, Path.root) : InternalDocument.toJson(state)
-            const existedBefore = isText ? undefined : InternalProposal.existingIn(state)
+            const before = isText ? InternalDocument.textAt(state, Path.root) : InternalProposal.sideOf(state)
             // Kept consistent, so its JSON of the document is never ambiguous.
             const { problem, texts } = InternalDocument.integrate(state, [change], {
               overlaps: false,
@@ -234,8 +233,8 @@ export const make = Effect.fnUntraced(function*(options: {
                 : InternalProposal.make({
                   document: document.id,
                   user,
-                  before: { json: before, existing: existedBefore! },
-                  after: { json: InternalDocument.toJson(state), existing: InternalProposal.existingIn(state) },
+                  before: before as InternalProposal.Side,
+                  after: InternalProposal.sideOf(state),
                   paths: pathsOf(change),
                   delta: InternalDelta.fromChanges([change])
                 })

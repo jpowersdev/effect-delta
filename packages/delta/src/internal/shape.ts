@@ -428,7 +428,8 @@ export const readJson = (
   shape: Shape,
   json: Schema.Json,
   initial: unknown,
-  // Which optional fields and entries exist, where JSON alone can't say.
+  // Which optional fields and entries exist, by their paths in `json`, where
+  // JSON alone can't say.
   exists: ((path: Path.Path) => boolean) | undefined
 ): unknown => readRoot(shape, jsonAt(json, Path.root, exists), initial, new Map())
 
@@ -483,7 +484,7 @@ const jsonAt = (
     jsonAt(isJsonObject(json) && Object.hasOwn(json, name) ? json[name] : undefined, [...path, name], exists),
   keys: () => isJsonObject(json) ? Object.keys(json) : [],
   // A list's items are the ones that show, so they exist.
-  items: () => Array.isArray(json) ? json.map((item, i) => jsonAt(item, [...path, String(i)], undefined)) : []
+  items: () => Array.isArray(json) ? json.map((item, i) => jsonAt(item, [...path, String(i)], exists)) : []
 })
 
 const isJsonObject = (json: Schema.Json | undefined): json is Schema.JsonObject =>
