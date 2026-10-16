@@ -1,8 +1,9 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Deferred, Effect, Layer, Option, Schedule, Schema, Stream } from "effect"
+import { Context, Deferred, Effect, Equal, Fiber, Layer, Option, Schedule, Schema, Stream } from "effect"
 import {
   Authority,
+  type Delta,
   HistoryStore,
   Relay,
   Replica,
@@ -74,6 +75,24 @@ const failingOnce = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*
       if (failed) return store.append(document, delta)
       failed = true
       return Effect.fail(new HistoryStore.HistoryStoreError({ message: "Disk full", cause: undefined }))
+    }
+  }
+})).pipe(Layer.provide(HistoryStore.layerMemory))
+
+const day = 24 * 60 * 60 * 1000
+
+// A store that holds the next save until interrupted, and tells
+// `holdNextSave.current` when it starts.
+const holdNextSave: { current: Deferred.Deferred<void> | undefined } = { current: undefined }
+const heldSaves = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*() {
+  const store = yield* HistoryStore.HistoryStore
+  return {
+    ...store,
+    append: (document, delta) => {
+      const saving = holdNextSave.current
+      if (saving === undefined) return store.append(document, delta)
+      holdNextSave.current = undefined
+      return Effect.andThen(Deferred.succeed(saving, undefined), Effect.never)
     }
   }
 })).pipe(Layer.provide(HistoryStore.layerMemory))
@@ -441,11 +460,6 @@ describe("Relay", () => {
           side: "L"
         })
 
-        // A path holds one kind of thing.
-        yield* refuses(
-          [change(0, [set("votes"), { _tag: "Increment", path: ["votes"], by: 1 }])],
-          "writes a counter where there's a value"
-        )
         // A change's ops on one text come together.
         yield* refuses(
           [change(0, [insert("a", null), set("status"), insert("b", { replica: "r", seq: 0 })])],
@@ -461,7 +475,55 @@ describe("Relay", () => {
           [first, change(2, [set("status")], { parents: [{ replica: "r", seq: 1 }] })],
           "has a write time no later than a change it was made on top of"
         )
+        // Write times follow its clock, give or take a day.
+        yield* refuses([change(0, [set("status")], { time: 2 * day })], "is stamped too far in the future")
       }).pipe(Effect.provide(RelayLive)))
+
+    it.effect("passes on changes a replica's schema has another rule for, without cutting it off", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const push = (delta: Delta.Delta) => relay.push({ format: Sync.FORMAT, document: notes, delta })
+        // A schema where `status` is a text, which DesignDoc has as a value.
+        const Other = Schema.Struct({ status: ReplicatedDocument.Text })
+        const makeOther = (replica: string) =>
+          ReplicatedDocument.make(Other, { initial: { status: "" }, replica: Replica.ReplicaId.make(replica) })
+        const phone = yield* makeDoc("phone")
+        const other = yield* makeOther("other")
+        yield* ReplicatedDocument.update(phone, (doc) => ({ ...doc, status: "review" }))
+        yield* ReplicatedText.insert(ReplicatedDocument.text(other, ["status"]), 0, "Hi")
+        assert.strictEqual((yield* push(yield* Replica.delta(phone, VersionVector.empty)))._tag, "Accepted")
+        assert.strictEqual((yield* push(yield* Replica.delta(other, VersionVector.empty)))._tag, "Accepted")
+
+        // Replicas of either schema take everything, and show their own.
+        const everything = (yield* Stream.runHead(
+          relay.subscribe({ format: Sync.FORMAT, document: notes, strategy: "tree", version: {}, authority: false })
+        )).pipe(Option.getOrThrow)
+        const laptop = yield* makeDoc("laptop")
+        yield* Replica.receive(laptop, everything.delta)
+        assert.strictEqual((yield* ReplicatedDocument.get(laptop)).status, "review")
+        const later = yield* makeOther("later")
+        yield* Replica.receive(later, everything.delta)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(later), { status: "Hi" })
+      }).pipe(Effect.provide(RelayLive)))
+
+    it.effect("saves a push it was interrupted saving, when it's pushed again", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        const relay = yield* Relay.Relay
+        const saving = yield* Deferred.make<void>()
+        holdNextSave.current = saving
+        const laptop = yield* makeDoc("laptop")
+        yield* ReplicatedDocument.update(laptop, (doc) => ({ ...doc, status: "review" }))
+        const delta = yield* Replica.delta(laptop, VersionVector.empty)
+        const push = relay.push({ format: Sync.FORMAT, document: notes, delta })
+
+        const pushing = yield* Effect.forkChild(push)
+        yield* Deferred.await(saving)
+        yield* Fiber.interrupt(pushing)
+        assert.strictEqual((yield* push)._tag, "Accepted")
+        const stored = Option.getOrThrow(yield* store.load(notes))
+        assert.isTrue(Equal.equals(stored.history, delta))
+      }).pipe(Effect.provide(Relay.layer.pipe(Layer.provideMerge(heldSaves)))))
 
     it.effect("keeps nothing of a change it rejects", () =>
       Effect.gen(function*() {
@@ -643,6 +705,60 @@ describe("Authority", () => {
         yield* ReplicatedDocument.update(owner, (doc) => ({ ...doc, status: "approved" }))
         yield* until(editor, (doc) => doc.status === "approved")
       }).pipe(Effect.scoped, Effect.provide([OwnerApproves, CryptoTest]))
+    })
+
+    it.effect("refuses a change that would make a path hold two kinds of thing", () =>
+      Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const change: InternalDocument.AnyChange = {
+          replica: "r",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "Set", path: ["votes"], value: 1 }, { _tag: "Increment", path: ["votes"], by: 1 }]
+        }
+        const error = yield* Effect.flip(
+          authority.push({ format: Sync.FORMAT, document: spec, delta: InternalDelta.fromChanges([change]) })
+        )
+        if (error.reason._tag !== "DeltaError" || error.reason.reason._tag !== "Malformed") {
+          return assert.fail(`expected Malformed, got ${error.reason._tag}`)
+        }
+        assert.include(error.reason.reason.message, "writes a counter where there's a value")
+      }).pipe(Effect.provide(NoSecrets)))
+
+    it.effect("a change that doesn't fit the schema can't hide the document from the check", () => {
+      const OwnerApproves = Authority.layer({
+        check: (proposal) => {
+          if (proposal._tag === "Text") return Effect.void
+          const { after, before } = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
+          return after.status === "approved" && before.status !== "approved" && proposal.user !== "owner"
+            ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
+            : Effect.void
+        }
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        // A list position under the root, which is a struct.
+        const intruder: InternalDocument.AnyChange = {
+          replica: "intruder",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "Add", path: ["x"] }, { _tag: "Place", path: ["x"], parent: null, side: "L" }]
+        }
+        yield* authority.push({ format: Sync.FORMAT, document: spec, delta: InternalDelta.fromChanges([intruder]) })
+        const editor = yield* makeDoc("editor")
+        yield* Replica.receive(editor, InternalDelta.fromChanges([intruder]))
+        yield* ReplicatedDocument.update(editor, (doc) => ({ ...doc, status: "approved" }))
+        const ack = yield* authority.push({
+          format: Sync.FORMAT,
+          document: spec,
+          delta: yield* Replica.delta(editor, { intruder: 2 })
+        }).pipe(asUser("editor"))
+        assert.strictEqual(ack._tag, "Rejected")
+      }).pipe(Effect.provide(OwnerApproves))
     })
 
     it.effect("a confirmed document syncs with nothing else", () =>

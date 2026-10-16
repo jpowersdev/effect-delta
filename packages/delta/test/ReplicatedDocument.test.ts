@@ -714,29 +714,37 @@ describe("ReplicatedDocument", () => {
       assert.include(error.reason.message, message)
     }
 
-    it.effect("a document refuses changes its schema has another rule for, and a text and a document each other's", () =>
+    it.effect("changes the schema has another rule for are kept and passed on, but don't show", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
         const text = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("text") })
         yield* ReplicatedText.insert(text, 0, "Hi")
-        malformed(yield* Effect.flip(Replica.exchange(ada, text)), "where the schema has a struct")
-        // The document is no different.
+        // A text and a document under one document id: each keeps the other's
+        // changes, and shows only its own.
+        yield* Replica.exchange(ada, text)
         assert.deepStrictEqual(yield* ReplicatedDocument.get(ada), initial)
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes: 1 }))
+        yield* Replica.exchange(ada, text)
+        assert.strictEqual(yield* ReplicatedText.get(text), "Hi")
 
-        const other = yield* ReplicatedDocument.make(Schema.Struct({ status: ReplicatedDocument.Text }), {
+        // A schema where `status` is a text, which this one has as a value.
+        const Other = Schema.Struct({ status: ReplicatedDocument.Text })
+        const other = yield* ReplicatedDocument.make(Other, {
           initial: { status: "" },
           replica: Replica.ReplicaId.make("other")
         })
         yield* ReplicatedText.insert(ReplicatedDocument.text(other, ["status"]), 0, "Hi")
-        malformed(
-          yield* Effect.flip(Replica.receive(ada, yield* Replica.delta(other, VersionVector.empty))),
-          "where the schema has a value"
-        )
-        malformed(
-          yield* Effect.flip(Replica.receive(text, yield* Replica.delta(other, VersionVector.empty))),
-          "writes inside a text"
-        )
-        assert.strictEqual(yield* ReplicatedText.get(text), "Hi")
+        yield* Replica.exchange(ada, other)
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "review" }))
+        yield* Replica.exchange(ada, other)
+        assert.strictEqual((yield* ReplicatedDocument.get(ada)).status, "review")
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(other), { status: "Hi" })
+        const later = yield* ReplicatedDocument.make(Other, {
+          initial: { status: "" },
+          replica: Replica.ReplicaId.make("later")
+        })
+        yield* Replica.exchange(later, ada)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(later), { status: "Hi" })
       }))
 
     it.effect("a change must be later than what it was made on top of", () =>
