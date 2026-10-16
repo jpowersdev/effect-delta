@@ -332,8 +332,9 @@ export const List: {
  * A class's constructor is given fields that merges combine, which nobody
  * checked together, so it must take any values its fields can hold. One that
  * throws for some, as a check would, is a check `make` can't see: an entry or
- * item holding such a value is left out, and a document whose own fields
- * hold one can't be read, a defect from then on.
+ * item holding such a value is left out, and while the document's own fields
+ * hold one, merges and updates fail as a defect, and it shows its earlier
+ * value.
  *
  * **Example** (Two copies of a document)
  *
@@ -597,9 +598,9 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * `f` must return a new value rather than change the one it's given, which
  * is the one the document shows and, for parts nobody has written, part of
  * `initial`. A value written whole that's changed in place (an array that
- * isn't a `List`, pushed to, say) reads as unchanged, so it isn't written;
- * and one that still shows `initial` changes it, for every document made
- * from it.
+ * isn't a `List`, pushed to, say) reads as unchanged, so it isn't written,
+ * and only this replica shows the change; one that still shows `initial`
+ * changes it, for every document made from it.
  *
  * **Example** (Changing one field)
  *
