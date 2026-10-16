@@ -904,6 +904,17 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(Object.entries(yield* ReplicatedDocument.get(ada)), [["__proto__", 1], ["size", 2]])
       }))
 
+    it.effect("an optional field can be named __proto__", () =>
+      Effect.gen(function*() {
+        const Odd = Schema.Struct({ ["__proto__"]: Schema.optionalKey(Schema.Number), size: Schema.Number })
+        const ada = yield* ReplicatedDocument.make(Odd, {
+          initial: { size: 1 },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        yield* ReplicatedDocument.update(ada, (doc) => JSON.parse(`{ "__proto__": 1, "size": ${doc.size} }`))
+        assert.deepStrictEqual(Object.entries(yield* ReplicatedDocument.get(ada)), [["__proto__", 1], ["size", 1]])
+      }))
+
     it.effect("builds classes", () =>
       Effect.gen(function*() {
         class Person extends Schema.Class<Person>("Person")({ name: Schema.String, bio: ReplicatedDocument.Text }) {}
