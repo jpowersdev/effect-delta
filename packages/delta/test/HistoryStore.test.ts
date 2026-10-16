@@ -416,6 +416,20 @@ describe("HistoryStore", () => {
         })
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+    it.effect("reopening under the replica id that wrote it is refused, from a snapshot too", () =>
+      Effect.gen(function*() {
+        for (const strategy of ["tree", "replay"] as const) {
+          const reopened = yield* Effect.gen(function*() {
+            yield* Effect.scoped(Effect.gen(function*() {
+              const first = yield* openDoc("laptop", strategy)
+              yield* ReplicatedText.insert(ReplicatedDocument.text(first, ["title"]), 0, "Hello")
+            }))
+            return yield* Effect.scoped(Effect.flip(openDoc("laptop", strategy)))
+          }).pipe(Effect.provide(Layer.fresh(HistoryStore.layerMemory)))
+          assert.strictEqual(reopened._tag === "DeltaError" ? reopened.reason._tag : reopened._tag, "ReplicaIdReused")
+        }
+      }))
+
     it.effect("reopening reports no overlaps with what came after the snapshot, as loading never does", () =>
       Effect.gen(function*() {
         const store = yield* HistoryStore.HistoryStore
