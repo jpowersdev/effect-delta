@@ -74,7 +74,9 @@ New terms only; the rest are in [`vocabulary.md`](./vocabulary.md).
 | `ReplicatedDocument.List(item, { key })`, `ReplicatedDocument.List(value)` | items        | inserts, removals and moves all survive; items merge by their schema |
 | anything else: strings, numbers, literals, unions, arrays, `Option`, `Date` | latest write | the later write shows, and the merge reports an overlap              |
 
-The root must be a struct, a class or a record. A document that's one text is a `ReplicatedText`.
+The root must be a struct, a class or a record. A document that's one text is a `ReplicatedText`. A record's
+keys can be strings, template literals or a union of them. Schema makes literal keys fields, so a record with
+both literal keys and others is a struct with a rest, which `make` refuses, as a defect: give each a field.
 
 ### Latest write
 

@@ -162,13 +162,24 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
     const make = compiled.some(({ hasDefault }) => hasDefault) ? SchemaParser.make(Schema.make(ast)) : undefined
     return { _tag: "Fields", fields: compiled, make }
   }
-  if (SchemaAST.isObjects(ast) && ast.propertySignatures.length === 0 && ast.indexSignatures.length === 1) {
+  if (SchemaAST.isObjects(ast)) {
+    // Schema makes a record's literal keys fields.
+    if (ast.propertySignatures.length > 0) {
+      refuse(path, "a struct can't have a rest, nor a record both literal keys and others: give them a field each")
+    }
     if (ast.checks !== undefined) refuse(path, `a record can't have checks: ${onMerged}`)
-    const [signature] = ast.indexSignatures
-    const parameter = SchemaAST.toType(signature!.parameter)
-    if (!isStringKey(parameter)) refuse(path, "a record's keys must be strings")
-    const isKey = SchemaParser.is(Schema.make(parameter))
-    return { _tag: "Entries", isKey: (key) => isKey(key), value: compileAst(signature!.type, [...path, "*"]) }
+    // Keys that fit any of several patterns, such as two template literals,
+    // have a signature each, for the same entries.
+    const [signature, ...others] = ast.indexSignatures
+    if (others.some((other) => other.type !== signature!.type)) refuse(path, "a record's entries must have one schema")
+    const parameters = ast.indexSignatures.map((each) => SchemaAST.toType(each.parameter))
+    if (!parameters.every(isStringKey)) refuse(path, "a record's keys must be strings")
+    const isKeys = parameters.map((parameter) => SchemaParser.is(Schema.make(parameter)))
+    return {
+      _tag: "Entries",
+      isKey: (key) => isKeys.some((isKey) => isKey(key)),
+      value: compileAst(signature!.type, [...path, "*"])
+    }
   }
   if (hasRule(ast, new Set())) {
     refuse(path, "texts, counters and lists can't be inside a value that's written whole (a union, an array, ...)")
