@@ -1,7 +1,7 @@
 import type * as Option from "effect/Option"
 import type * as Replica from "../Replica.ts"
 import * as TextPatch from "../TextPatch.ts"
-import type * as VersionVector from "../VersionVector.ts"
+import * as VersionVector from "../VersionVector.ts"
 import type { Anchor } from "./anchor.ts"
 import { type Change, type Id, idKey, key, lastId } from "./change.ts"
 import * as Fugue from "./fugue.ts"
@@ -170,7 +170,7 @@ const checkTree = (state: TreeText.State, part: Part): string | undefined => {
   const known = (id: Id | null | undefined) =>
     id === null || id === undefined || inserted.has(idKey(id)) ||
     // Only what its author had seen, so it doesn't matter what else is here.
-    ((part.past[id.replica] ?? 0) > id.seq && TreeText.has(state, id))
+    (VersionVector.get(part.past, id.replica) > id.seq && TreeText.has(state, id))
   let seq = part.seq
   for (const op of part.ops) {
     if (op._tag === "Insert") {

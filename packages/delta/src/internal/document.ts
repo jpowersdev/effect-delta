@@ -291,15 +291,17 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
 // Whether `by` had seen `write`. A replica's own writes come in order, and a
 // change's ops see the ones before them.
 const seen = (by: Write, write: Write): boolean =>
-  by.replica === write.replica ? write.seq < by.seq : (by.past[write.replica] ?? 0) > write.seq
+  by.replica === write.replica ? write.seq < by.seq : VersionVector.get(by.past, write.replica) > write.seq
 
 // The writes in `writes`, at `at`, that `write` hadn't seen: the ones it met.
 // Usually it had seen every write there, which `at.written` says without
 // looking at each.
-const unseenBy = <W extends Write>(at: Slot, write: Write, writes: ReadonlyArray<W>): Array<W> =>
-  Object.entries(at.written).every(([replica, next]) => replica === write.replica || (write.past[replica] ?? 0) >= next)
-    ? []
-    : writes.filter((other) => other !== write && !seen(write, other))
+const unseenBy = <W extends Write>(at: Slot, write: Write, writes: ReadonlyArray<W>): Array<W> => {
+  const sawAll = Object.entries(at.written).every(([replica, next]) =>
+    replica === write.replica || VersionVector.get(write.past, replica) >= next
+  )
+  return sawAll ? [] : writes.filter((other) => other !== write && !seen(write, other))
+}
 
 // A value is history: every reader shares it, so nobody may change it in place.
 const freeze = (json: Schema.Json): Schema.Json => {
@@ -315,7 +317,7 @@ const addWrite = <W extends Write>(at: Slot, writes: Array<W>, write: W): void =
   let i = writes.length
   while (i > 0 && compareWrites(writes[i - 1]!, write) > 0) i--
   writes.splice(i, 0, write)
-  at.written[write.replica] = Math.max(at.written[write.replica] ?? 0, write.seq + 1)
+  at.written[write.replica] = Math.max(VersionVector.get(at.written, write.replica), write.seq + 1)
 }
 
 // Reading --------------------------------------------------------------------
@@ -709,8 +711,10 @@ const contextsOf = (history: History.History<Op>, changes: ReadonlyArray<AnyChan
     let parentsAreChanges = true
     for (const parent of change.parents) {
       const found = owner(parent)!
-      for (const [replica, seen] of Object.entries(found.past)) past[replica] = Math.max(past[replica] ?? 0, seen)
-      past[parent.replica] = Math.max(past[parent.replica] ?? 0, parent.seq + 1)
+      for (const [replica, seen] of Object.entries(found.past)) {
+        past[replica] = Math.max(VersionVector.get(past, replica), seen)
+      }
+      past[parent.replica] = Math.max(VersionVector.get(past, parent.replica), parent.seq + 1)
       parentTime = Math.max(parentTime, found.change.time)
       parentsAreChanges &&= found.change.seq + found.change.length - 1 === parent.seq
     }
@@ -984,7 +988,7 @@ const checkPlaces = (
       const known = (id: Id | null | undefined) =>
         id === null || id === undefined || placed.has(inList(id)) ||
         // Only what its author had seen, so it doesn't matter what else is here.
-        ((past[id.replica] ?? 0) > id.seq && list !== undefined && Fugue.find(list, id) !== undefined)
+        (VersionVector.get(past, id.replica) > id.seq && list !== undefined && Fugue.find(list, id) !== undefined)
       if (op.side === "R" ? op.rightOrigin === undefined : op.rightOrigin !== undefined) {
         return `Change ${key(change)} has a position with a mismatched side and right origin`
       }
@@ -1072,7 +1076,7 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
     if (!write.exists) {
       const editors = [
         ...Object.entries(found.inside(at)).filter(([replica, next]) =>
-          replica !== write.replica && next > (write.past[replica] ?? 0)
+          replica !== write.replica && next > VersionVector.get(write.past, replica)
         ),
         ...unseenBy(at, write, at.places).filter((other) => found.had(other)).map((other) => [other.replica] as const)
       ]
@@ -1094,7 +1098,7 @@ const noteInside = (document: Document, op: Op, write: Write, found: Found | und
   for (const inside of paths) {
     const at = ensureSlot(document, inside)
     found?.editingInside(at)
-    at.inside[write.replica] = Math.max(at.inside[write.replica] ?? 0, write.seq + opLength(op))
+    at.inside[write.replica] = Math.max(VersionVector.get(at.inside, write.replica), write.seq + opLength(op))
     if (found !== undefined) reportRemovals(found, at, write)
   }
 }

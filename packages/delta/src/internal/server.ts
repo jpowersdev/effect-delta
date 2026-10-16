@@ -21,7 +21,7 @@ import * as HistoryStore from "../HistoryStore.ts"
 import * as Replica from "../Replica.ts"
 import * as Sync from "../Sync.ts"
 import * as TextPatch from "../TextPatch.ts"
-import type * as VersionVector from "../VersionVector.ts"
+import * as VersionVector from "../VersionVector.ts"
 import { key } from "./change.ts"
 import * as InternalDelta from "./delta.ts"
 import * as InternalDocument from "./document.ts"
@@ -393,7 +393,7 @@ const held = (history: History.History<unknown> | undefined): VersionVector.Vers
   const version: Record<string, number> = { ...history.version }
   const waiting = [...history.pending.values()].sort((a, b) => a.seq - b.seq)
   for (const change of waiting) {
-    if ((version[change.replica] ?? 0) === change.seq) version[change.replica] = change.seq + change.length
+    if (VersionVector.get(version, change.replica) === change.seq) version[change.replica] = change.seq + change.length
   }
   return version
 }

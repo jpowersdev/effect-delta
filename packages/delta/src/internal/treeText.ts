@@ -1,7 +1,7 @@
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import * as TextPatch from "../TextPatch.ts"
-import type * as VersionVector from "../VersionVector.ts"
+import * as VersionVector from "../VersionVector.ts"
 import type { Anchor } from "./anchor.ts"
 import { compareReplica, type Id, Id as IdSchema, type Span, Span as SpanSchema } from "./change.ts"
 import * as Fugue from "./fugue.ts"
@@ -206,7 +206,7 @@ export interface Overlap {
 export const overlaps = (state: State, added: ReadonlySet<Info>): Array<Overlap> => {
   if (added.size === 0) return []
   const unseenBy = (earlier: Info, later: Info): boolean =>
-    (later.past[earlier.replica] ?? 0) < earlier.seq + earlier.length
+    VersionVector.get(later.past, earlier.replica) < earlier.seq + earlier.length
   const concurrent = new Map<Info, boolean>()
   const isConcurrent = (info: Info): boolean => {
     let result = concurrent.get(info)

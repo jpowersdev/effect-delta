@@ -1,4 +1,4 @@
-import type * as VersionVector from "../VersionVector.ts"
+import * as VersionVector from "../VersionVector.ts"
 import { type Change, compareReplica, type Id, key, lastId } from "./change.ts"
 
 // What a replica knows, whatever its strategy: every change it has applied
@@ -69,8 +69,10 @@ export const pastOf = (history: History<unknown>, parents: ReadonlyArray<Id>): V
   for (const parent of parents) {
     const change = containing(history, parent)
     const before = history.pasts.get(key(change))!
-    for (const replica of Object.keys(before)) past[replica] = Math.max(past[replica] ?? 0, before[replica]!)
-    past[parent.replica] = Math.max(past[parent.replica] ?? 0, parent.seq + 1)
+    for (const replica of Object.keys(before)) {
+      past[replica] = Math.max(VersionVector.get(past, replica), before[replica]!)
+    }
+    past[parent.replica] = Math.max(VersionVector.get(past, parent.replica), parent.seq + 1)
   }
   return past
 }
@@ -114,7 +116,7 @@ export const takeReady = <Op>(history: History<Op>): Array<Change<Op>> => {
   // Changes become ready as earlier ones are taken, so track what taking them
   // would have applied without touching the real version vector.
   const version: Record<string, number> = { ...history.version }
-  const seenSoFar = (replica: string) => version[replica] ?? 0
+  const seenSoFar = (replica: string) => VersionVector.get(version, replica)
   let progress = true
   while (progress) {
     progress = false

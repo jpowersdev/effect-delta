@@ -366,7 +366,7 @@ const held = (history: Delta.Delta): VersionVector.VersionVector => {
   const changes = [...(history as InternalDelta.DeltaImpl).changes.values()].sort((a, b) => a.seq - b.seq)
   const version: Record<string, number> = {}
   for (const change of changes) {
-    if ((version[change.replica] ?? 0) === change.seq) version[change.replica] = change.seq + change.length
+    if (VersionVector.get(version, change.replica) === change.seq) version[change.replica] = change.seq + change.length
   }
   return version
 }
