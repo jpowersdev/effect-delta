@@ -324,10 +324,10 @@ const receive = (
       return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
     }
   }
-  let empty: string | undefined
+  let refused: string | undefined
   for (const change of delta.changes.values()) {
-    const problem = InternalDocument.checkLength(change)
-    if (problem !== undefined) empty ??= problem
+    const problem = InternalDocument.checkOnArrival(change)
+    if (problem !== undefined) refused ??= problem
     else if (!History.has(history, change)) history.pending.set(key(change), change)
   }
 
@@ -337,7 +337,7 @@ const receive = (
   const published = integrated.applied === 0
     ? Effect.void
     : publish(engine, { _tag: "Remote", texts: integrated.texts, overlaps, message: "" })
-  const problem = integrated.problems[0]?.message ?? empty
+  const problem = integrated.problems[0]?.message ?? refused
   if (problem === undefined) return Effect.as(published, overlaps)
   return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem }))))
 }

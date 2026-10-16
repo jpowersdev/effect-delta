@@ -186,11 +186,11 @@ export const make = Effect.fnUntraced(function*(options: {
         // Changes that are new here wait as pending until what they build on
         // is here, then they're checked and applied in causal order.
         const fresh: Array<InternalDocument.AnyChange> = []
-        let empty: string | undefined
+        let refused: string | undefined
         for (const change of incoming) {
-          const problem = InternalDocument.checkLength(change)
+          const problem = InternalDocument.checkOnArrival(change)
           if (problem !== undefined) {
-            empty ??= problem
+            refused ??= problem
             continue
           }
           const existing = state.history.changes.get(key(change)) ?? state.history.pending.get(key(change))
@@ -210,7 +210,7 @@ export const make = Effect.fnUntraced(function*(options: {
         const waiting = [...state.history.pending.values()]
 
         let rejected: string | undefined
-        let malformed = empty
+        let malformed = refused
         if (check === undefined) {
           // A relay drops a bad change and carries on. If the bad change came
           // with an earlier push, that push has already been answered.
