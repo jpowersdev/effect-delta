@@ -720,8 +720,10 @@ const planAt = (
       return
     }
     case "Counter": {
-      // From the exact total, which reads only as near as a safe integer
-      // can, in steps an op can carry.
+      // Left as it reads, it's left alone, though its exact total may be
+      // another number. Otherwise from the exact total, in steps an op can
+      // carry.
+      if (readAt(shape, documentAt(document, path), initial, memo) === after) return
       const total = BigInt((initial?.value as number | undefined) ?? 0) + InternalDocument.totalAt(document, path)
       for (let by = BigInt(after as number) - total; by !== zero;) {
         const step = by > largestStep ? largestStep : by < -largestStep ? -largestStep : by

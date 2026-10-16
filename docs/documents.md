@@ -143,8 +143,9 @@ A counter holds whole numbers. Fractions added in a different order on each repl
 floating point, so replicas would disagree. An `update` that takes a counter from 5 to 7 records +2, and
 concurrent +2 and +3 make 10. Totals are kept exactly, because whole numbers past 2^53 round too; a total
 past the safe integers reads as the nearest one, the same on every replica, so it's still an `Int`. `update`
-records the difference from the exact total, in as many increments as it takes, so the counter then shows
-the value it was given.
+leaves a counter that reads as the value it's given alone, and otherwise records the difference from the
+exact total, in as many increments as it takes, so the counter then shows the value it was given (within the
+safe integers: see [Known limits](#known-limits)).
 
 ### Lists
 
@@ -205,6 +206,8 @@ Entries, items and optional fields have no initial value. One that's missing a r
 older version of the schema) is left out, unless the field has a constructor default
 (`Schema.withConstructorDefault`), which fills it in. Every replica fills it in as it reads, so the default
 must be a constant: one that reads the clock or makes a random id would show differently on each replica.
+Only a value is filled in: a text, counter, record or list in an entry starts empty (or at 0), whatever its
+default says.
 A field that shows its default is compared with it, so an `update` that leaves it as it shows doesn't write it,
 nor write over a value only a newer schema can read.
 An optional field can't have one, because it would show while the field is absent; `make` refuses it. Nor can
@@ -580,8 +583,10 @@ All built, each with tests and an example:
   replica that had saved a lost change as confirmed brings it back each time it reopens, until it's pushed
   and rolled back again, with any edits made on top of it in the meantime.
 - **Counters are exact only within the safe integers.** A counter's increments add up exactly, but it reads
-  as a JavaScript number, so a total (with its initial value) beyond 2^53 reads as the nearest safe
-  integer.
+  as a JavaScript number: increments that add up beyond 2^53 are rounded to one before the initial value is
+  added, and the result is clamped to the safe integers. So `update` can't take a counter whose initial
+  value is near 2^53 to the far end of them: it shows the nearest number it can. Servers send counters as
+  JSON numbers, so reading them exactly would need another way to send them.
 - **Values are written whole.** A large array that isn't a list changes as a whole.
 - **A clock far ahead** decides concurrent writes until other clocks catch up (see
   [Latest write](#latest-write)).
