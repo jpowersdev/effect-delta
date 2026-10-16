@@ -1,8 +1,10 @@
+import * as Cause from "effect/Cause"
 import * as Clock from "effect/Clock"
 import type * as Context from "effect/Context"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
+import * as Exit from "effect/Exit"
 import type * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as PubSub from "effect/PubSub"
@@ -46,8 +48,9 @@ interface Document {
   readonly owners: Map<string, string>
   readonly updates: PubSub.PubSub<Sync.Update>
   /**
-   * Fails if saving fails. That ends every subscription, and the document is
-   * loaded again from the store, so nothing in memory gets ahead of it.
+   * Fails if a push stops while saving, failed or interrupted. That ends
+   * every subscription, and the document is loaded again from the store, so
+   * nothing in memory gets ahead of it.
    */
   readonly failed: Deferred.Deferred<never, Sync.SyncError>
 }
@@ -132,10 +135,10 @@ export const make = Effect.fnUntraced(function*(options: {
       const user = yield* Sync.CurrentUser
       const document = yield* open(request.document)
       // Until its changes are saved and sent, the document holds changes the
-      // store doesn't. Interrupted before saving them, it drops them, which
-      // nobody else has seen. Interrupted while saving or sending them, the
-      // store may have them and subscribers don't, so the document starts over
-      // from the store.
+      // store doesn't. Stopped before saving them, by an interruption or a
+      // check that dies, it drops them, which nobody else has seen. Stopped
+      // while saving or sending them, the store may have them and subscribers
+      // don't, so the document starts over from the store.
       let unsaved: ReadonlySet<string> | undefined
       let saving = false
       return yield* Effect.gen(function*() {
@@ -261,7 +264,7 @@ export const make = Effect.fnUntraced(function*(options: {
         document.state.strategy ??= InternalDocument.strategyOf(kept)
         if (kept.length > 0) {
           saving = true
-          yield* save(store, document, kept, user).pipe(Effect.tapError((error) => reload(document, error)))
+          yield* save(store, document, kept, user)
           yield* PubSub.publish(
             document.updates,
             new Sync.Update({ delta: InternalDelta.fromChanges(kept), version: held(history) })
@@ -280,13 +283,10 @@ export const make = Effect.fnUntraced(function*(options: {
       }).pipe(
         // Under the lock, so no other push sees what this one left. Only an
         // authority's check can stop it before it saves.
-        Effect.onInterrupt(() => {
-          if (saving) {
-            return reload(
-              document,
-              new Sync.SyncError({ reason: new Sync.Unavailable({ message: "A push was interrupted" }) })
-            )
-          }
+        Effect.onExit((exit) => {
+          if (Exit.isSuccess(exit)) return Effect.void
+          // Subscribers are told why: the store's error, or that it stopped.
+          if (saving) return reload(document, Option.getOrElse(Cause.findErrorOption(exit.cause), stoppedSaving))
           if (unsaved !== undefined) {
             const dropped = unsaved
             document.state = without(document.state, (change) => dropped.has(key(change)))
@@ -389,6 +389,9 @@ const held = (history: History.History<unknown> | undefined): VersionVector.Vers
 }
 
 const syncError = (reason: Sync.SyncError["reason"]) => Effect.fail(new Sync.SyncError({ reason }))
+
+const stoppedSaving = () =>
+  new Sync.SyncError({ reason: new Sync.Unavailable({ message: "A push stopped while saving" }) })
 
 // Fails once a document has stopped being served, while it's reloaded.
 const ensureServing = (document: Document): Effect.Effect<void, Sync.SyncError> =>
