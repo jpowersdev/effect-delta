@@ -337,6 +337,11 @@ export const delta: {
  * subscribers are told about it, overlaps included; only the returned
  * overlaps are lost.
  *
+ * A delta from outside the process should arrive through the `Delta.Delta`
+ * codec, as sync does: decoding checks what a change can hold (whole-number
+ * sequence numbers and write times, replica ids, JSON values), and a delta
+ * made in memory isn't checked for that.
+ *
  * @stability unstable
  * @category combinators
  * @since 0.1.0
