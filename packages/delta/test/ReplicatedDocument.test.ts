@@ -738,6 +738,27 @@ describe("ReplicatedDocument", () => {
         )
         assert.strictEqual((yield* ReplicatedDocument.get(ben)).votes, 1)
       }))
+
+    it.effect("says which change a bad text op is in", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
+        // The text op comes second, at sequence number 1 of change 0@other.
+        const change: InternalDocument.AnyChange = {
+          replica: "other",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: 0,
+          ops: [
+            { _tag: "Set", path: ["status"], value: "review" },
+            { _tag: "Insert", path: ["title"], text: "a", parent: { replica: "nobody", seq: 0 }, side: "L" }
+          ]
+        }
+        malformed(
+          yield* Effect.flip(Replica.receive(ada, InternalDelta.fromChanges([change]))),
+          "Change 0@other inserts next to a character it hasn't seen"
+        )
+      }))
   })
 
   describe("lists", () => {
