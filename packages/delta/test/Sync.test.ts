@@ -974,21 +974,20 @@ describe("Authority", () => {
       }).pipe(Effect.scoped, Effect.provide([ownerApproves(proposals), CryptoTest]))
     })
 
-    it.effect("refuses a change that would make a path hold two kinds of thing", () =>
+    it.effect("rejects a change that would make a path hold two kinds of thing", () =>
       Effect.gen(function*() {
         const authority = yield* Authority.Authority
-        // Pushes `changes` one at a time to a new document; the last is refused.
+        // Pushes `changes` one at a time to a new document; the last is
+        // rejected, as a check rejects, so a confirmed replica rolls it back.
         const refuses = Effect.fnUntraced(
           function*(changes: ReadonlyArray<InternalDocument.AnyChange>, message: string) {
             const document = Replica.DocumentId.make(message)
             const push = (change: InternalDocument.AnyChange) =>
               authority.push({ format: Sync.FORMAT, document, delta: InternalDelta.fromChanges([change]) })
             for (const change of changes.slice(0, -1)) yield* push(change)
-            const error = yield* Effect.flip(push(changes.at(-1)!))
-            if (error.reason._tag !== "DeltaError" || error.reason.reason._tag !== "Malformed") {
-              return assert.fail(`expected Malformed, got ${error.reason._tag}`)
-            }
-            assert.include(error.reason.reason.message, message)
+            const ack = yield* push(changes.at(-1)!)
+            if (ack._tag !== "Rejected") return assert.fail(`expected Rejected for ${message}`)
+            assert.include(ack.message, message)
           }
         )
         // Each change is made on top of the one before.
