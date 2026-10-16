@@ -16,7 +16,15 @@ import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
-import { forgedRuns, ForgedSession, initialProject, makeForger, Project } from "./utils/forged.ts"
+import {
+  editProject,
+  EditSession,
+  forgedRuns,
+  ForgedSession,
+  forgeSession,
+  initialProject,
+  Project
+} from "./utils/forged.ts"
 import {
   Board,
   documentRuns,
@@ -1042,43 +1050,88 @@ describe("Authority", () => {
     )
 
     it.effect.prop(
-      "accepts only changes replicas accept, and its check reads each one as replicas show it",
-      { session: ForgedSession },
-      Effect.fnUntraced(function*({ session }) {
-        const read: Array<ReplicatedDocument.Proposed<Project>> = []
+      "accepts only changes replicas accept, checks each as replicas show it, and confirmed replicas end where it does",
+      { session: ForgedSession, edits: EditSession },
+      Effect.fnUntraced(function*({ edits, session }) {
+        // Every change checked, with what the check read, in the order they
+        // were checked. It rejects approvals, and more than two votes.
+        const checked: Array<{
+          readonly proposed: ReplicatedDocument.Proposed<Project>
+          readonly delta: Delta.Delta
+          readonly accepted: boolean
+        }> = []
         const Reading = Authority.layer({
           check: (proposal) =>
             proposal._tag === "Text"
               ? Effect.fail(new Authority.Rejected({ message: "Projects aren't texts" }))
-              : Effect.map(
+              : Effect.flatMap(
                 ReplicatedDocument.readProposal(proposal, Project, { initial: initialProject }),
                 (proposed) => {
-                  read.push(proposed)
+                  const accepted = !(proposed.after.status === "done" && proposed.before.status !== "done") &&
+                    proposed.after.votes <= 2
+                  checked.push({ proposed, delta: proposal.delta, accepted })
+                  return accepted ? Effect.void : Effect.fail(new Authority.Rejected({ message: "No" }))
                 }
               )
         }).pipe(Layer.provide(HistoryStore.layerMemory))
         yield* Effect.gen(function*() {
           const authority = yield* Authority.Authority
-          // A replica that receives each change the authority accepts.
+          // An editor making its own edits among the forged changes, some
+          // rejected, and some made on top of ones that will be.
+          const editor = yield* ReplicatedDocument.makeConfirmed(Project, { initial: initialProject, document: spec })
+            .pipe(asUser("editor"))
+          yield* synced(editor.connection)
+          // Until the editor has heard back about everything it sent, and has
+          // everything the authority accepted.
+          const settled = Effect.gen(function*() {
+            for (let i = 0; i < 1000; i++) {
+              const has = Effect.orDie(Stream.runHead(authority.subscribe({
+                format: Sync.FORMAT,
+                document: spec,
+                strategy: "tree",
+                version: yield* Replica.version(editor),
+                authority: true
+              })))
+              if ((yield* unconfirmed(editor.connection)) === 0 && Delta.isEmpty(Option.getOrThrow(yield* has).delta)) {
+                return
+              }
+              yield* Effect.yieldNow
+            }
+            assert.fail("The editor didn't settle")
+          })
+          let next = 0
+          const key = (change: InternalDocument.AnyChange) => `${change.seq}@${change.replica}`
+          yield* forgeSession("tree", session, (changes) =>
+            Effect.gen(function*() {
+              const command = edits[next++]
+              if (command !== undefined) yield* editProject(editor, command, settled)
+              const delta = InternalDelta.fromChanges(changes)
+              yield* Effect.exit(authority.push({ format: Sync.FORMAT, document: spec, delta }).pipe(asUser("forger")))
+              const kept = new Set(
+                checked.flatMap(({ accepted, delta }) =>
+                  accepted ? [...(delta as InternalDelta.DeltaImpl).changes.keys()] : []
+                )
+              )
+              return (change: InternalDocument.AnyChange) => kept.has(key(change))
+            }))
+          for (const command of edits.slice(next)) yield* editProject(editor, command, settled)
+          yield* settled
+
+          // A replica that receives the changes in the order they were
+          // checked, and the authority's accepted.
           const replica = yield* ReplicatedDocument.make(Project, {
             initial: initialProject,
             replica: Replica.ReplicaId.make("replica")
           })
-          const forger = makeForger("tree")
-          for (const command of session) {
-            const change = forger.forge(command)
-            const delta = InternalDelta.fromChanges([change])
-            const before = yield* ReplicatedDocument.get(replica)
-            const ack = yield* Effect.exit(authority.push({ format: Sync.FORMAT, document: spec, delta }))
-            const accepted = Exit.isSuccess(ack) && ack.value._tag === "Accepted"
-            forger.settle(accepted)
+          for (const { accepted, delta, proposed } of checked) {
+            const change = JSON.stringify(delta)
+            assert.deepStrictEqual(proposed.before, yield* ReplicatedDocument.get(replica), change)
             if (!accepted) continue
             yield* Replica.receive(replica, delta)
-            const proposed = read.pop()!
-            assert.deepStrictEqual(proposed.before, before, JSON.stringify(change))
-            assert.deepStrictEqual(proposed.after, yield* ReplicatedDocument.get(replica), JSON.stringify(change))
+            assert.deepStrictEqual(proposed.after, yield* ReplicatedDocument.get(replica), change)
           }
-        }).pipe(Effect.provide(Reading), asUser("forger"))
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(editor), yield* ReplicatedDocument.get(replica))
+        }).pipe(Effect.scoped, Effect.provide([Reading, CryptoTest]))
       }),
       { arbitrary: forgedRuns }
     )

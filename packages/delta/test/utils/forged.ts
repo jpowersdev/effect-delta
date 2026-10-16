@@ -1,18 +1,22 @@
-import { Schema } from "effect"
-import { type Replica, ReplicatedDocument } from "effect-delta"
+import { Effect, Schema } from "effect"
+import { type Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
 import type * as InternalDocument from "effect-delta/internal/document"
-import { Fraction, Which } from "./sessions.ts"
+import { Fraction, gapAt, itemAt, Which } from "./sessions.ts"
 
 // Changes made directly, as a buggy or malicious client could send them,
 // rather than by a replica. Many are fine; the rest write where the schema has
 // nothing, name characters and positions their author hadn't seen or that
-// don't exist, edit outside the text, take no sequence numbers or fewer than
-// none, start or name a parent before any change or in the middle of one, or
-// are stamped no later than what they were made on top of.
+// don't exist, put them on a side that doesn't match their right origin or
+// on the left of the start, edit outside the text, take no sequence numbers
+// or fewer than none, start or name a parent before any change or in the
+// middle of one, or are stamped no later than what they were made on top of.
 //
-// A forger makes them one at a time, each on top of earlier ones. The caller
-// says whether each was kept: one that wasn't is forgotten, and its writer
-// carries on under a new replica id, so later changes don't all wait on it.
+// A forger makes them one at a time, each on top of earlier ones, and sends
+// them as the session says: most on their own, some together with the ones
+// made after them, and some only after those, so they arrive late. Once
+// they're sent, the caller says which were kept: later changes don't build on
+// the rest, and their writers carry on under new replica ids, so later
+// changes don't all wait on them.
 
 const Sub = Schema.Struct({ id: Schema.String, note: Schema.optionalKey(ReplicatedDocument.Text) })
 const Tag = Schema.Struct({ label: ReplicatedDocument.Text, n: ReplicatedDocument.Counter })
@@ -127,6 +131,23 @@ const Ref = Schema.Struct({ at: Fraction, kind: between(0, 5) })
 // with `stray` 0, from anywhere.
 const Where = Schema.Struct({ at: Fraction, stray: between(0, 3) })
 
+// Which side of its parent an insert or position goes: mostly as a replica
+// puts it, on the right when it names a right origin or has no parent and on
+// the left otherwise. 2 is the other side, with a right origin that doesn't
+// match it, and 3 the left, which is malformed without a parent.
+const Side = between(0, 3)
+
+type Placement =
+  | { readonly parent: Id | null; readonly side: "L"; readonly rightOrigin?: Id | null }
+  | { readonly parent: Id | null; readonly side: "R"; readonly rightOrigin?: Id | null }
+
+const placement = (parent: Id | null, right: Id | null | undefined, side: number): Placement => {
+  if (side === 3) return { parent, side: "L" }
+  const onRight = right !== undefined || parent === null
+  if (side === 2) return onRight ? { parent, side: "L", rightOrigin: right ?? null } : { parent, side: "R" }
+  return onRight ? { parent, side: "R", rightOrigin: right ?? null } : { parent, side: "L" }
+}
+
 // How many characters a removal takes: 0 or fewer is malformed.
 const Length = between(-1, 4)
 // Where a replay op edits, which can be past the end of its text.
@@ -139,14 +160,14 @@ const OpCommand = Schema.Union([
     value: Fraction,
     by: Schema.Literals([-1, 0, 1, 2, Number.MAX_SAFE_INTEGER])
   }),
-  // With `swap`, a side that doesn't match whether there's a right origin.
-  Schema.TaggedStruct("Place", { where: Where, parent: Ref, right: Schema.optionalKey(Ref), swap: Schema.Boolean }),
+  Schema.TaggedStruct("Place", { where: Where, parent: Ref, right: Schema.optionalKey(Ref), side: Side }),
   // A tree `Insert`, or a replay `InsertAt` at `index`.
   Schema.TaggedStruct("Insert", {
     where: Where,
     text: Schema.Literals(["x", "yz", "abc", "de", "f", ""]),
     parent: Ref,
     right: Schema.optionalKey(Ref),
+    side: Side,
     index: Index
   }),
   // A tree `Remove` of a span from `target`, or a replay `RemoveAt` at `index`.
@@ -166,7 +187,10 @@ const ChangeCommand = Schema.Struct({
   later: between(-1, 9),
   // Parts written as a replica writes them, before the ops.
   block: Schema.optionalKey(Fraction),
-  ops: Schema.Array(OpCommand).check(Schema.isMaxLength(3))
+  ops: Schema.Array(OpCommand).check(Schema.isMaxLength(3)),
+  // How it's sent: 0 and 1 now, with any sent together with it; 2 together
+  // with the next one; 3 after the next ones sent.
+  send: between(0, 3)
 })
 
 export const ForgedSession = Schema.Array(ChangeCommand).check(Schema.isMaxLength(30))
@@ -180,6 +204,8 @@ interface Made {
   readonly past: ReadonlySet<number>
   /** By path, the characters it inserted into each text and the positions it placed in each list. */
   readonly ids: ReadonlyMap<string, ReadonlyArray<Id>>
+  /** Whether it turned out not to be kept. */
+  dropped: boolean
 }
 
 const pathKey = (path: Path) => JSON.stringify(path)
@@ -188,25 +214,34 @@ const pick = <A>(choices: ReadonlyArray<A>, at: number): A | undefined =>
 const pathIn = (paths: ReadonlyArray<Path>, where: typeof Where.Type): Path =>
   pick(where.stray === 0 ? anywhere : paths, where.at)!
 
-export const makeForger = (strategy: Replica.Strategy) => {
+const makeForger = (strategy: Replica.Strategy) => {
   const made: Array<Made> = []
   const names = ["w0", "w1", "w2"]
   const renamed = [0, 0, 0]
   const next = new Map<string, number>()
   const last = new Map<string, number>()
-  let forged: Made | undefined
+
+  // Two different changes under one key can't both be kept anywhere, so a
+  // writer whose next key is taken carries on under a new id.
+  const used = new Set<string>()
+  const rename = (writer: number) => {
+    renamed[writer]!++
+    names[writer] = `w${writer}-${renamed[writer]}`
+  }
 
   const forge = (command: typeof ChangeCommand.Type): InternalDocument.AnyChange => {
+    const seqOf = (replica: string) => command.quirk === 3 ? -1 : next.get(replica) ?? 0
+    while (used.has(`${seqOf(names[command.writer]!)}@${names[command.writer]}`)) rename(command.writer)
     const replica = names[command.writer]!
     const own = last.get(replica)
-    const others = command.others.flatMap((at) => pick(made.map((_, i) => i), at) ?? [])
+    const others = command.others.flatMap((at) => pick(made.flatMap((other, i) => other.dropped ? [] : [i]), at) ?? [])
     const parents = new Set([...(command.own && own !== undefined ? [own] : []), ...others])
     const past = new Set<number>()
     for (const parent of parents) {
       past.add(parent)
       for (const before of made[parent]!.past) past.add(before)
     }
-    const seq = command.quirk === 3 ? -1 : next.get(replica) ?? 0
+    const seq = seqOf(replica)
     const ids = new Map<string, Array<Id>>()
     const note = (path: Path, id: Id) => {
       const k = pathKey(path)
@@ -234,19 +269,14 @@ export const makeForger = (strategy: Replica.Strategy) => {
       ops.push(op)
       at += length
     }
-    const place = (path: Path, parent: Id | null, right: Id | null | undefined, swap: boolean) => {
+    const place = (path: Path, where: Placement) => {
       note(path.slice(0, -1), { replica, seq: at })
-      push(
-        (right !== undefined) !== swap
-          ? { _tag: "Place", path, parent, side: "R", rightOrigin: right ?? null }
-          : { _tag: "Place", path, parent, side: "L" },
-        1
-      )
+      push({ _tag: "Place", path, ...where }, 1)
     }
     if (command.block !== undefined) {
       const block = pick(blocks, command.block)!
       for (const op of block.ops) push(op, 1)
-      if (block.item !== undefined) place(block.item, null, undefined, false)
+      if (block.item !== undefined) place(block.item, placement(null, undefined, 0))
     }
     for (const op of command.ops) {
       switch (op._tag) {
@@ -265,7 +295,7 @@ export const makeForger = (strategy: Replica.Strategy) => {
         case "Place": {
           const path = pathIn(items, op.where)
           const list = path.slice(0, -1)
-          place(path, resolve(list, op.parent), op.right && resolve(list, op.right), op.swap)
+          place(path, placement(resolve(list, op.parent), op.right && resolve(list, op.right), op.side))
           break
         }
         case "Insert": {
@@ -274,15 +304,13 @@ export const makeForger = (strategy: Replica.Strategy) => {
             push({ _tag: "InsertAt", path, index: op.index, text: op.text }, op.text.length)
             break
           }
-          const parent = resolve(path, op.parent)
-          const right = op.right && resolve(path, op.right)
           const first = at
-          push(
-            right === undefined
-              ? { _tag: "Insert", path, text: op.text, parent, side: "L" }
-              : { _tag: "Insert", path, text: op.text, parent, side: "R", rightOrigin: right },
-            op.text.length
-          )
+          push({
+            _tag: "Insert",
+            path,
+            text: op.text,
+            ...placement(resolve(path, op.parent), op.right && resolve(path, op.right), op.side)
+          }, op.text.length)
           for (let i = 0; i < op.text.length; i++) note(path, { replica, seq: first + i })
           break
         }
@@ -317,24 +345,123 @@ export const makeForger = (strategy: Replica.Strategy) => {
       time: Math.max(-1, ...[...parents].map((i) => made[i]!.change.time)) + command.later,
       ops
     }
-    forged = { change, past, ids }
+    used.add(`${seq}@${replica}`)
+    last.set(replica, made.length)
+    next.set(replica, change.seq + change.length)
+    made.push({ change, past, ids, dropped: false })
     return change
   }
 
-  // Says whether the change just forged was kept.
-  const settle = (kept: boolean): void => {
-    const { change } = forged!
-    if (kept) {
-      last.set(change.replica, made.length)
-      next.set(change.replica, change.seq + change.length)
-      made.push(forged!)
-    } else {
-      const writer = names.indexOf(change.replica)
-      renamed[writer]!++
-      names[writer] = `w${writer}-${renamed[writer]}`
-    }
-    forged = undefined
+  // Says that a change wasn't kept.
+  const drop = (change: InternalDocument.AnyChange): void => {
+    const found = made.find((other) => other.change === change)!
+    if (found.dropped) return
+    found.dropped = true
+    const writer = names.indexOf(change.replica)
+    if (writer !== -1) rename(writer)
   }
 
-  return { forge, settle }
+  return { forge, drop }
 }
+
+/**
+ * Forges a session's changes and sends them as it says. `send` sends changes
+ * together, and says which of those sent so far were kept. Returns every
+ * change, in the order they were made.
+ */
+export const forgeSession = <E, R>(
+  strategy: Replica.Strategy,
+  session: typeof ForgedSession.Type,
+  send: (
+    changes: ReadonlyArray<InternalDocument.AnyChange>
+  ) => Effect.Effect<(change: InternalDocument.AnyChange) => boolean, E, R>
+): Effect.Effect<ReadonlyArray<InternalDocument.AnyChange>, E, R> =>
+  Effect.gen(function*() {
+    const forger = makeForger(strategy)
+    const changes: Array<InternalDocument.AnyChange> = []
+    const sent: Array<InternalDocument.AnyChange> = []
+    let together: Array<InternalDocument.AnyChange> = []
+    let late: Array<InternalDocument.AnyChange> = []
+    const flush = Effect.fnUntraced(function*(batch: ReadonlyArray<InternalDocument.AnyChange>) {
+      if (batch.length === 0) return
+      const kept = yield* send(batch)
+      sent.push(...batch)
+      for (const change of sent) if (!kept(change)) forger.drop(change)
+    })
+    for (const command of session) {
+      const change = forger.forge(command)
+      changes.push(change)
+      if (command.send === 3) late.push(change)
+      else together.push(change)
+      if (command.send < 2) {
+        yield* flush(together)
+        yield* flush(late)
+        together = []
+        late = []
+      }
+    }
+    yield* flush(together)
+    yield* flush(late)
+    return changes
+  })
+
+// Honest edits ---------------------------------------------------------------
+
+// Edits a replica makes to a project, among forged changes to the same parts.
+
+const EditCommand = Schema.Union([
+  Schema.TaggedStruct("Status", { status: Project.fields.status }),
+  Schema.TaggedStruct("Vote", { by: Schema.Literals([-1, 1, 2]) }),
+  Schema.TaggedStruct("Type", { at: Fraction, text: Schema.Literals(["x", "yz"]) }),
+  Schema.TaggedStruct("Note", { pinned: Schema.Boolean, remove: Schema.Boolean }),
+  // Adds or moves an item, or removes it.
+  Schema.TaggedStruct("Item", { key: Schema.Literals(["i1", "i2"]), at: Fraction, remove: Schema.Boolean }),
+  Schema.TaggedStruct("Value", { at: Fraction, value: Schema.Literals(["x", "y"]), remove: Schema.Boolean }),
+  // Waits until the replica has heard back about everything it sent.
+  Schema.TaggedStruct("Wait", {})
+])
+
+export const EditSession = Schema.Array(EditCommand).check(Schema.isMaxLength(20))
+
+/** Makes an edit, or for `Wait`, runs `wait`. */
+export const editProject = Effect.fnUntraced(function*(
+  doc: ReplicatedDocument.ReplicatedDocument<Project>,
+  command: typeof EditCommand.Type,
+  wait: Effect.Effect<void>
+) {
+  const update = (f: (project: Project) => Project) => Effect.orDie(ReplicatedDocument.update(doc, f))
+  switch (command._tag) {
+    case "Status":
+      return yield* update((project) => ({ ...project, status: command.status }))
+    case "Vote":
+      return yield* update((project) => ({ ...project, votes: project.votes + command.by }))
+    case "Type": {
+      const title = ReplicatedDocument.text(doc, ["title"])
+      const before = yield* ReplicatedText.get(title)
+      return yield* Effect.orDie(ReplicatedText.insert(title, gapAt(command.at, before.length), command.text))
+    }
+    case "Note":
+      return yield* update(({ notes: { a, ...notes }, ...project }) => ({
+        ...project,
+        notes: command.remove ? notes : { ...notes, a: { body: a?.body ?? "", pinned: command.pinned } }
+      }))
+    case "Item":
+      return yield* update((project) => {
+        const found = project.items.find(({ id }) => id === command.key)
+        const items = project.items.filter(({ id }) => id !== command.key)
+        if (command.remove) return { ...project, items }
+        const item = found ?? { id: command.key, title: "", done: false, tags: {}, subs: [] }
+        const index = gapAt(command.at, items.length)
+        return { ...project, items: [...items.slice(0, index), item, ...items.slice(index)] }
+      })
+    case "Value":
+      return yield* update((project) => {
+        const { vals } = project
+        if (command.remove) return { ...project, vals: vals.filter((_, i) => i !== itemAt(command.at, vals.length)) }
+        const index = gapAt(command.at, vals.length)
+        return { ...project, vals: [...vals.slice(0, index), command.value, ...vals.slice(index)] }
+      })
+    case "Wait":
+      return yield* wait
+  }
+})

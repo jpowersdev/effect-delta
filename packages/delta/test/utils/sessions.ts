@@ -130,8 +130,8 @@ export const makeBoards = (strategy: Replica.Strategy) =>
   )
 
 // A gap in, or an item of, something of `length`.
-const gapAt = (at: number, length: number) => Math.floor(at * (length + 1) / 1001)
-const itemAt = (at: number, length: number) => Math.floor(at * length / 1001)
+export const gapAt = (at: number, length: number) => Math.floor(at * (length + 1) / 1001)
+export const itemAt = (at: number, length: number) => Math.floor(at * length / 1001)
 
 const textOf = (doc: BoardDocument, field: "title" | "note" | "task", key: string) =>
   ReplicatedDocument.text(

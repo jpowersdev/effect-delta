@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Equal, Exit, Layer, Queue, Random, Schema, Stream } from "effect"
+import { Effect, Equal, Exit, Layer, Option, Predicate, Queue, Random, Schema, Scope, Stream } from "effect"
 import {
   Delta,
   HistoryStore,
@@ -12,7 +12,7 @@ import {
 } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
-import { forgedRuns, ForgedSession, initialProject, makeForger, Project } from "./utils/forged.ts"
+import { forgedRuns, ForgedSession, forgeSession, initialProject, Project } from "./utils/forged.ts"
 import {
   Board,
   documentRuns,
@@ -239,9 +239,54 @@ describe.each(["tree", "replay"] as const)("document convergence (%s)", (strateg
 // Forged changes ----------------------------------------------------------
 
 // Changes made directly, many of them malformed or not fitting the schema, as
-// a buggy or malicious client could send them. Replicas and relays must still
-// accept and refuse the same ones, and show the same value however they
-// arrive.
+// a buggy or malicious client could send them, several at a time and some
+// late. Replicas and relays must still accept and refuse the same ones, and
+// show the same value however they arrive.
+
+// The part of a document's value at `path`, if it shows. List items are found
+// by their `id`.
+const partAt = (value: unknown, path: ReadonlyArray<string>): unknown => {
+  let current = value
+  for (const segment of path) {
+    if (Array.isArray(current)) {
+      current = current.find((item) => Predicate.hasProperty(item, "id") && item.id === segment)
+    } else if (Predicate.isObject(current) && Object.hasOwn(current, segment)) {
+      current = (current as Record<string, unknown>)[segment]
+    } else return undefined
+  }
+  return current
+}
+
+// The replicas in the value overlaps that edits reported, by path. A merge
+// reports two writes that hadn't seen each other when the later arrives, so
+// these are the same however the changes arrived. Checks the other overlaps
+// against the value they came with: a text overlap's range is in its text, and
+// a removal's entry or item doesn't show.
+const valueOverlaps = (edits: Iterable<ReplicatedDocument.Edit<Project>>): Record<string, ReadonlyArray<string>> => {
+  const found: Record<string, Set<string>> = {}
+  for (const edit of edits) {
+    if (edit._tag !== "Remote") continue
+    for (const overlap of edit.overlaps) {
+      const part = partAt(edit.value, overlap.path)
+      switch (overlap._tag) {
+        case "Text":
+          if (Predicate.isString(part)) {
+            assert.isTrue(
+              0 <= overlap.range.start && overlap.range.start <= overlap.range.end && overlap.range.end <= part.length,
+              `${JSON.stringify(overlap)} in ${JSON.stringify(part)}`
+            )
+          }
+          break
+        case "Removed":
+          assert.isUndefined(part, JSON.stringify(overlap))
+          break
+        case "Value":
+          for (const replica of overlap.replicas) (found[JSON.stringify(overlap.path)] ??= new Set()).add(replica)
+      }
+    }
+  }
+  return Object.fromEntries(Object.entries(found).map(([path, replicas]) => [path, [...replicas].sort()]))
+}
 
 describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => {
   const make = (replica: string) =>
@@ -249,14 +294,25 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
   const view = Effect.fnUntraced(function*(doc: ReplicatedDocument.ReplicatedDocument<Project>) {
     return { value: yield* ReplicatedDocument.get(doc), version: yield* Replica.version(doc) }
   })
-  const one = (change: InternalDocument.AnyChange) => InternalDelta.fromChanges([change])
-  const push = (relay: Sync.Server, document: Replica.DocumentId, change: InternalDocument.AnyChange) =>
-    relay.push({ format: Sync.FORMAT, document, delta: one(change) })
-  const subscribe = (relay: Sync.Server, document: Replica.DocumentId) =>
-    Stream.toQueue(
-      relay.subscribe({ format: Sync.FORMAT, document, strategy, version: VersionVector.empty, authority: false }),
-      { capacity: "unbounded" }
-    )
+  const key = (change: InternalDocument.AnyChange) => `${change.seq}@${change.replica}`
+  const push = (relay: Sync.Server, document: Replica.DocumentId, changes: ReadonlyArray<InternalDocument.AnyChange>) =>
+    relay.push({ format: Sync.FORMAT, document, delta: InternalDelta.fromChanges(changes) })
+  const subscribe = (relay: Sync.Server, document: Replica.DocumentId, version: VersionVector.VersionVector) =>
+    relay.subscribe({ format: Sync.FORMAT, document, strategy, version, authority: false })
+  // Takes in what a relay has applied since the replica's version, as a
+  // connection does when it subscribes.
+  const pull = Effect.fnUntraced(
+    function*(doc: Replica.Replica<unknown>, relay: Sync.Server, document: Replica.DocumentId) {
+      const first = yield* Stream.runHead(subscribe(relay, document, yield* Replica.version(doc)))
+      yield* Replica.receive(doc, Option.getOrThrow(first).delta)
+    }
+  )
+  // What a relay has applied, as a new replica that takes it in shows it.
+  const fromRelay = Effect.fnUntraced(function*(relay: Sync.Server, document: Replica.DocumentId) {
+    const doc = yield* make(`from-${document}`)
+    yield* pull(doc, relay, document)
+    return yield* view(doc)
+  })
   // Receives a relay's updates until the replica has `version`, accepting
   // every one, as a connection must.
   const catchUp = Effect.fnUntraced(function*(
@@ -268,9 +324,28 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
       yield* Replica.receive(doc, (yield* Queue.take(updates)).delta)
     }
   })
+  // A replica that receives deltas, failing or not, and afterwards says what
+  // its subscribers were told.
+  const watched = Effect.fnUntraced(function*(replica: string) {
+    const doc = yield* make(replica)
+    const { edits } = yield* ReplicatedDocument.subscribe(doc)
+    let merges = 0
+    return {
+      doc,
+      receive: Effect.fnUntraced(function*(changes: ReadonlyArray<InternalDocument.AnyChange>) {
+        const before = yield* Replica.version(doc)
+        const received = yield* Effect.exit(Replica.receive(doc, InternalDelta.fromChanges(changes)))
+        // Each merge that applies something is one edit.
+        if (VersionVector.compare(yield* Replica.version(doc), before) !== "equal") merges++
+        return received
+      }),
+      edits: Effect.suspend(() => Stream.runCollect(Stream.take(edits, merges)))
+    }
+  })
   const inOrder = Replica.DocumentId.make("in-order")
   const shuffled = Replica.DocumentId.make("shuffled")
   const saved = Replica.DocumentId.make("saved")
+  const behind = Replica.DocumentId.make("behind")
 
   it.effect.prop(
     "replicas, relays and reloads accept the same changes, and show the same value whatever the order",
@@ -278,60 +353,79 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
     Effect.fnUntraced(function*({ seed, session }) {
       const expected = yield* Effect.gen(function*() {
         const relay = yield* Relay.Relay
-        const updates = yield* subscribe(relay, shuffled)
-        // In the order they were made, a replica and a relay accept the same
+        const updates = yield* Stream.toQueue(subscribe(relay, shuffled, VersionVector.empty), {
+          capacity: "unbounded"
+        })
+        // As the session sends them, a replica and a relay accept the same
         // ones.
-        const doc = yield* make("in-order")
-        const forger = makeForger(strategy)
-        const changes: Array<InternalDocument.AnyChange> = []
-        for (const command of session) {
-          const change = forger.forge(command)
-          changes.push(change)
-          const received = yield* Effect.exit(Replica.receive(doc, one(change)))
-          const pushed = yield* Effect.exit(push(relay, inOrder, change))
-          assert.strictEqual(Exit.isSuccess(pushed), Exit.isSuccess(received), JSON.stringify(change))
-          forger.settle(Exit.isSuccess(received))
-        }
-        const expected = yield* view(doc)
+        const doc = yield* watched("in-order")
+        const changes = yield* forgeSession(strategy, session, (batch) =>
+          Effect.gen(function*() {
+            const received = yield* doc.receive(batch)
+            const pushed = yield* Effect.exit(push(relay, inOrder, batch))
+            assert.strictEqual(Exit.isSuccess(pushed), Exit.isSuccess(received), JSON.stringify(batch))
+            const kept = (yield* Replica.delta(doc.doc, VersionVector.empty)) as InternalDelta.DeltaImpl
+            return (change: InternalDocument.AnyChange) => kept.changes.has(key(change))
+          }))
+        const expected = yield* view(doc.doc)
+        const overlaps = valueOverlaps(yield* doc.edits)
+        assert.deepStrictEqual(yield* fromRelay(relay, inOrder), expected)
 
-        const atOnce = yield* make("at-once")
-        yield* Effect.exit(Replica.receive(atOnce, InternalDelta.fromChanges(changes)))
-        assert.deepStrictEqual(yield* view(atOnce), expected)
+        const atOnce = yield* watched("at-once")
+        yield* atOnce.receive(changes)
+        assert.deepStrictEqual(yield* view(atOnce.doc), expected)
+        assert.deepStrictEqual(valueOverlaps(yield* atOnce.edits), overlaps)
 
         // One at a time, shuffled and repeated, to a replica that saves them,
-        // and to a relay whose subscriber takes what it sends.
-        const order = yield* Random.shuffle([...changes, ...changes]).pipe(Random.withSeed(seed))
+        // and to a relay whose subscriber takes what it sends. Behind the
+        // relay, a replica that's reopened from what it saved now and then,
+        // so it starts from texts saved partway.
         yield* Effect.scoped(Effect.gen(function*() {
-          const oneByOne = yield* make("one-by-one")
-          yield* HistoryStore.persist(oneByOne, saved)
-          for (const change of order) {
-            yield* Effect.exit(Replica.receive(oneByOne, one(change)))
-            yield* Effect.exit(push(relay, shuffled, change))
+          const oneByOne = yield* watched("one-by-one")
+          yield* HistoryStore.persist(oneByOne.doc, saved)
+          let reopened = 0
+          const open = Effect.fnUntraced(function*() {
+            const scope = yield* Scope.make()
+            const doc = yield* make(`behind-${reopened++}`)
+            yield* HistoryStore.persist(doc, behind).pipe(Scope.provide(scope))
+            return { doc, scope }
+          })
+          let back = yield* open()
+          for (const change of yield* Random.shuffle([...changes, ...changes])) {
+            yield* oneByOne.receive([change])
+            yield* Effect.exit(push(relay, shuffled, [change]))
+            yield* pull(back.doc, relay, shuffled)
             // Saved before the next arrives.
             yield* Effect.yieldNow
+            if (yield* Random.nextBoolean) {
+              yield* Scope.close(back.scope, Exit.void)
+              back = yield* open()
+            }
           }
-          assert.deepStrictEqual(yield* view(oneByOne), expected)
-        }))
+          assert.deepStrictEqual(yield* view(oneByOne.doc), expected)
+          assert.deepStrictEqual(valueOverlaps(yield* oneByOne.edits), overlaps)
+          yield* Scope.close(back.scope, Exit.void)
+        })).pipe(Random.withSeed(seed))
+        const fromShuffled = yield* fromRelay(relay, shuffled)
+        assert.deepStrictEqual(fromShuffled, expected)
         const subscriber = yield* make("subscriber")
-        yield* catchUp(subscriber, updates, expected.version)
+        yield* catchUp(subscriber, updates, fromShuffled.version)
         assert.deepStrictEqual(yield* view(subscriber), expected)
         return expected
       }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
 
       // Started again from what they stored.
-      const reopened = yield* Effect.scoped(Effect.gen(function*() {
-        const doc = yield* make("reopened")
-        yield* HistoryStore.persist(doc, saved)
-        return yield* view(doc)
-      }))
-      assert.deepStrictEqual(reopened, expected)
+      for (const document of [saved, behind]) {
+        const reopened = yield* Effect.scoped(Effect.gen(function*() {
+          const doc = yield* make(`reopened-${document}`)
+          yield* HistoryStore.persist(doc, document)
+          return yield* view(doc)
+        }))
+        assert.deepStrictEqual(reopened, expected, document)
+      }
       yield* Effect.gen(function*() {
         const relay = yield* Relay.Relay
-        for (const document of [inOrder, shuffled]) {
-          const doc = yield* make(`from-${document}`)
-          yield* catchUp(doc, yield* subscribe(relay, document), expected.version)
-          assert.deepStrictEqual(yield* view(doc), expected)
-        }
+        for (const document of [inOrder, shuffled]) assert.deepStrictEqual(yield* fromRelay(relay, document), expected)
       }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
     }, (effect) =>
       effect.pipe(
