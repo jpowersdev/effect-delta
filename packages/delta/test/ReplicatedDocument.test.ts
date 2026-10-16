@@ -975,7 +975,7 @@ describe("ReplicatedDocument", () => {
           // fewer than none gives the ops after it ones that came before.
           const forged: ReadonlyArray<InternalDocument.AnyChange["ops"]> = strategy === "tree"
             ? [
-              [status, { _tag: "Insert", path: ["title"], text: "", parent: null, side: "L" }],
+              [status, { _tag: "Insert", path: ["title"], text: "", parent: null, side: "R", rightOrigin: null }],
               [status, { _tag: "Remove", path: ["title"], targets: [] }],
               [{ _tag: "Remove", path: ["title"], targets: [{ replica: "ada", seq: 0, length: -1 }] }, status, status]
             ]
@@ -1333,7 +1333,7 @@ describe("ReplicatedDocument", () => {
           { _tag: "Add", path: ["tasks", key] },
           { _tag: "Set", path: ["tasks", key, "id"], value: "same" },
           { _tag: "Set", path: ["tasks", key, "status"], value: "todo" },
-          { _tag: "Place", path: ["tasks", key], parent: null, side: "L" }
+          { _tag: "Place", path: ["tasks", key], parent: null, side: "R", rightOrigin: null }
         ]
         const change = { replica: "other", seq: 0, length: 8, parents: [], time: 0, ops: [...item("a"), ...item("b")] }
         yield* Replica.receive(board, InternalDelta.fromChanges([change]))
@@ -1355,13 +1355,14 @@ describe("ReplicatedDocument", () => {
           time: 0,
           ops: [
             { _tag: "Set", path: ["tags", "x"], value: "bug" },
-            { _tag: "Place", path: ["tags", "x"], parent: null, side: "L" },
+            { _tag: "Place", path: ["tags", "x"], parent: null, side: "R", rightOrigin: null },
             { _tag: "Add", path: ["tasks", "a"] },
             { _tag: "Place", path: ["tasks", "a"], parent: { replica: "other", seq: 1 }, side: "L" }
           ]
         }
         const error = yield* Effect.flip(Replica.receive(board, InternalDelta.fromChanges([change])))
-        assert.strictEqual(error.reason._tag, "Malformed")
+        if (error.reason._tag !== "Malformed") return assert.fail(`expected Malformed, got ${error.reason._tag}`)
+        assert.include(error.reason.message, "places an item next to a position it hasn't seen")
         assert.deepStrictEqual(yield* ReplicatedDocument.get(board), empty)
         assert.deepStrictEqual(yield* Replica.version(board), VersionVector.empty)
       }))

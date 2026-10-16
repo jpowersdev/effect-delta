@@ -239,8 +239,8 @@ they do now, plus `time`.
 
 A change's ops on one text come together, each op takes at least one sequence number, and its parents are the
 last ids of changes. Receivers check all three (`Malformed` otherwise), and check that text ops and positions
-name only characters and positions their author had seen at their path, so whether a change is accepted
-doesn't depend on what else the receiver has.
+name only characters and positions their author had seen at their path, and put nothing on the left of the
+start, so whether a change is accepted doesn't depend on what else the receiver has.
 
 **Servers don't need the schema.** Ops say what they do, so a relay or an authority applies a document's
 changes without the app's code. Values are JSON, texts are texts, counters are numbers. A server checks what

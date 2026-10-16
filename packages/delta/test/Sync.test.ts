@@ -540,7 +540,8 @@ describe("Relay", () => {
           path: ["body"],
           text,
           parent,
-          side: "L"
+          side: "R",
+          rightOrigin: null
         })
 
         // A change's ops on one text come together.
@@ -927,7 +928,8 @@ describe("Authority", () => {
           _tag: "Place",
           path,
           parent: null,
-          side: "L"
+          side: "R",
+          rightOrigin: null
         })
 
         yield* refuses(
@@ -995,7 +997,7 @@ describe("Authority", () => {
             { _tag: "Add", path: ["tasks", "t1"] },
             { _tag: "Set", path: ["tasks", "t1", "id"], value: "t2" },
             { _tag: "Set", path: ["tasks", "t1", "done"], value: false },
-            { _tag: "Place", path: ["tasks", "t1"], parent: null, side: "L" }
+            { _tag: "Place", path: ["tasks", "t1"], parent: null, side: "R", rightOrigin: null }
           ],
           "a value other than its item's key"
         )
@@ -1285,7 +1287,7 @@ describe("Authority", () => {
           ops: [
             { _tag: "Add", path: ["items", "i1"] },
             { _tag: "Set", path: ["items", "i1", "done"], value: false },
-            { _tag: "Place", path: ["items", "i1"], parent: null, side: "L" }
+            { _tag: "Place", path: ["items", "i1"], parent: null, side: "R", rightOrigin: null }
           ]
         }])
         yield* authority.push({ format: Sync.FORMAT, document: spec, delta })

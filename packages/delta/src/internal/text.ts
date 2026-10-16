@@ -177,6 +177,10 @@ const checkTree = (state: TreeText.State, part: Part): string | undefined => {
       if (op.side === "R" ? op.rightOrigin === undefined : op.rightOrigin !== undefined) {
         return "has an insert with a mismatched side and right origin"
       }
+      // Replicas put what goes at the start on the right of nothing. On its
+      // left, it would leave the next character typed after it with nothing
+      // to name as its right origin.
+      if (op.parent === null && op.side === "L") return "inserts before the start of the text"
       if (!known(op.parent) || !known(op.rightOrigin)) {
         return "inserts next to a character it hasn't seen"
       }

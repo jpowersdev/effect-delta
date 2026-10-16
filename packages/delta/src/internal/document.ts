@@ -902,6 +902,10 @@ const checkPlaces = (
       if (op.side === "R" ? op.rightOrigin === undefined : op.rightOrigin !== undefined) {
         return `Change ${key(change)} has a position with a mismatched side and right origin`
       }
+      // As for a text's characters.
+      if (op.parent === null && op.side === "L") {
+        return `Change ${key(change)} places an item before the start of its list`
+      }
       if (!known(op.parent) || !known(op.rightOrigin)) {
         return `Change ${key(change)} places an item next to a position it hasn't seen`
       }
