@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Deferred, Effect, Equal, Fiber, Layer, Option, Queue, Schedule, Schema, Stream } from "effect"
+import { Context, Deferred, Effect, Equal, Exit, Fiber, Layer, Option, Queue, Schedule, Schema, Stream } from "effect"
 import {
   Authority,
   Delta,
@@ -711,6 +711,28 @@ describe("Authority", () => {
       const update = yield* Queue.take(updates)
       assert.isTrue(Equal.equals(update.delta, delta))
     }).pipe(Effect.scoped, Effect.provide(Holding))
+  })
+
+  it.effect("drops what a push applied when its check dies", () => {
+    const check = { dies: true }
+    const Dying = Authority.layer({
+      check: () => check.dies ? Effect.die(new Error("A bug in the check")) : Effect.void
+    }).pipe(Layer.provideMerge(HistoryStore.layerMemory))
+    return Effect.gen(function*() {
+      const store = yield* HistoryStore.HistoryStore
+      const authority = yield* Authority.Authority
+      const laptop = yield* make("laptop")
+      yield* ReplicatedText.insert(laptop, 0, "Hello")
+      const delta = yield* Replica.delta(laptop, VersionVector.empty)
+      const push = authority.push({ format: Sync.FORMAT, document: spec, delta })
+
+      assert.isTrue(Exit.hasDies(yield* Effect.exit(push)))
+      // Pushed again once the check is fixed, it's checked and saved.
+      check.dies = false
+      assert.strictEqual((yield* push)._tag, "Accepted")
+      const stored = Option.getOrThrow(yield* store.load(spec))
+      assert.isTrue(Equal.equals(stored.history, delta))
+    }).pipe(Effect.provide(Dying))
   })
 
   it.effect("a confirmed replica syncs with nothing else", () =>
