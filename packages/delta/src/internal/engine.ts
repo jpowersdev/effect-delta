@@ -238,13 +238,16 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
       return locked(
         engine,
         Effect.suspend(() => {
+          const all = InternalDelta.combine(stored.history, stored.unconfirmed)
+          // Refused as receiving them would be, though a snapshot skips that.
+          const refused = refusal(engine, all.changes.values())
+          if (refused !== undefined) return Effect.fail(refused)
           for (const writer of stored.writers) state.writers.add(writer)
           // A store's history holds only what the authority had confirmed;
           // the rest is unconfirmed.
           if (state.confirmed !== undefined) {
             state.confirmed.version = VersionVector.combine(state.confirmed.version, InternalDelta.held(stored.history))
           }
-          const all = InternalDelta.combine(stored.history, stored.unconfirmed)
           const { snapshot } = stored
           const empty = history().changes.size === 0 && history().pending.size === 0
           if (snapshot !== undefined && empty) {
@@ -349,21 +352,11 @@ const receive = (
   options: { readonly overlaps: boolean }
 ): Effect.Effect<ReadonlyArray<Replica.Overlap>, Replica.DeltaError> => {
   const { state } = engine
-  const { history } = state.document
-  const reused = (replica: string) =>
-    Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(replica) })))
   // Checked before anything changes, so a bad delta leaves the replica as it was.
-  for (const change of delta.changes.values()) {
-    if (!InternalDocument.fitsStrategy(change, engine.strategy)) {
-      return Effect.fail(deltaError(new Replica.StrategyMismatch({ expected: engine.strategy })))
-    }
-    // Made under this replica's id by another copy of it.
-    if (change.replica === state.replica && History.get(history, key(change)) === undefined) {
-      return reused(change.replica)
-    }
-  }
+  const refused = refusal(engine, delta.changes.values())
+  if (refused !== undefined) return Effect.fail(refused)
   const arrived = InternalDocument.arrive(state.document, [...delta.changes.values()])
-  if (arrived.reused !== undefined) return reused(arrived.reused)
+  if (arrived.reused !== undefined) return Effect.fail(reusedId(arrived.reused))
 
   // A bad change is dropped, and the rest are applied without it.
   const integrated = InternalDocument.integrateReady(state.document, {
@@ -379,6 +372,25 @@ const receive = (
   if (problem === undefined) return Effect.as(published, overlaps)
   return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem }))))
 }
+
+// Why the replica refuses changes whole, before taking any: one has another
+// strategy, or is under its own replica id but not its own, made by another
+// copy of it.
+const refusal = (engine: Engine, changes: Iterable<InternalDocument.AnyChange>): Replica.DeltaError | undefined => {
+  const { state } = engine
+  for (const change of changes) {
+    if (!InternalDocument.fitsStrategy(change, engine.strategy)) {
+      return deltaError(new Replica.StrategyMismatch({ expected: engine.strategy }))
+    }
+    if (change.replica === state.replica && History.get(state.document.history, key(change)) === undefined) {
+      return reusedId(change.replica)
+    }
+  }
+  return undefined
+}
+
+const reusedId = (replica: string) =>
+  deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(replica) }))
 
 const toOverlap = (overlap: InternalDocument.Overlap): Replica.Overlap => {
   const replicas = overlap.replicas.map((replica) => Replica.ReplicaId.make(replica))
