@@ -910,6 +910,43 @@ describe("ReplicatedDocument", () => {
         }
       }).pipe(Effect.scoped))
 
+    it.effect("every op takes at least one sequence number", () =>
+      Effect.gen(function*() {
+        for (const strategy of ["tree", "replay"] as const) {
+          const ada = yield* make("ada", strategy)
+          yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["title"]), 0, "hello")
+          const fromAda = yield* Replica.delta(ada, VersionVector.empty)
+          const status: InternalDocument.Op = { _tag: "Set", path: ["status"], value: "review" }
+          // Each takes one sequence number in all, so the removal that takes
+          // fewer than none gives the ops after it ones that came before.
+          const forged: ReadonlyArray<InternalDocument.AnyChange["ops"]> = strategy === "tree"
+            ? [
+              [status, { _tag: "Insert", path: ["title"], text: "", parent: null, side: "L" }],
+              [status, { _tag: "Remove", path: ["title"], targets: [] }],
+              [{ _tag: "Remove", path: ["title"], targets: [{ replica: "ada", seq: 0, length: -1 }] }, status, status]
+            ]
+            : [
+              [status, { _tag: "InsertAt", path: ["title"], index: 0, text: "" }],
+              [status, { _tag: "RemoveAt", path: ["title"], index: 0, length: 0 }],
+              [{ _tag: "RemoveAt", path: ["title"], index: 2, length: -1 }, status, status]
+            ]
+          for (const ops of forged) {
+            const ben = yield* make("ben", strategy)
+            yield* Replica.receive(ben, fromAda)
+            const delta = InternalDelta.fromChanges([{
+              replica: "mallory",
+              seq: 0,
+              length: 1,
+              parents: [{ replica: "ada", seq: 4 }],
+              time: 1000,
+              ops
+            }])
+            malformed(yield* Effect.flip(Replica.receive(ben, delta)), "has an op that takes no sequence numbers")
+            assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
+          }
+        }
+      }))
+
     it.effect("says which change a bad text op is in", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
