@@ -123,19 +123,29 @@ describe("HistoryStore", () => {
     })).pipe(Layer.provide(HistoryStore.layerMemory))
     return Effect.gen(function*() {
       const peer = yield* make("peer")
+      const other = yield* make("other")
       yield* ReplicatedText.insert(peer, 0, "a")
       const before = yield* Replica.version(peer)
       yield* ReplicatedText.insert(peer, 1, "b")
-      // Waits for the peer's first change, which never comes.
-      const waiting = yield* Replica.delta(peer, before)
-      yield* Effect.scoped(Effect.gen(function*() {
-        const text = yield* open("session-1")
-        yield* Replica.receive(text, waiting)
-        for (const word of ["one", "two", "three"]) {
-          yield* ReplicatedText.insert(text, 0, word)
-          for (let i = 0; i < 5; i++) yield* Effect.yieldNow
-        }
-      }))
+      yield* ReplicatedText.insert(other, 0, "x")
+      yield* Replica.receive(other, yield* Replica.delta(peer, VersionVector.empty))
+      yield* ReplicatedText.insert(other, 0, "y")
+      // One waits for the peer's first change, and one, after the other's
+      // first change, for that change: neither ever comes.
+      const waiting = Delta.combine(
+        yield* Replica.delta(peer, before),
+        yield* Replica.delta(other, yield* Replica.version(peer))
+      )
+      for (const session of ["session-1", "session-2"]) {
+        yield* Effect.scoped(Effect.gen(function*() {
+          const text = yield* open(session)
+          if (session === "session-1") yield* Replica.receive(text, waiting)
+          for (const word of ["one", "two", "three"]) {
+            yield* ReplicatedText.insert(text, 0, word)
+            for (let i = 0; i < 5; i++) yield* Effect.yieldNow
+          }
+        }))
+      }
       assert.strictEqual(appended.length, new Set(appended).size, `appended ${appended}`)
     }).pipe(Effect.provide(Recording))
   })
