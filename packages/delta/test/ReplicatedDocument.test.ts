@@ -97,6 +97,23 @@ describe("ReplicatedDocument", () => {
         "an optional field can't have a constructor default"
       ))
 
+    it.effect("refuses a struct field with a constructor default, which would show in place of what's in it", () =>
+      refuses(
+        Schema.Struct({
+          tasks: Schema.Record(
+            Schema.String,
+            Schema.Struct({
+              done: Schema.Boolean,
+              meta: Schema.Struct({ label: Schema.String, priority: Schema.Literals(["low", "high"]) }).pipe(
+                Schema.withConstructorDefault(Effect.succeed({ label: "", priority: "low" as const }))
+              )
+            })
+          )
+        }),
+        { tasks: {} },
+        "a struct field can't have a constructor default"
+      ))
+
     it.effect("refuses an initial value that doesn't fit, or writes texts, entries or optional fields", () =>
       Effect.gen(function*() {
         yield* refuses(Doc, { ...initial, title: "Draft" }, "a text starts empty")
