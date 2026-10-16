@@ -517,7 +517,6 @@ describe("ReplicatedDocument", () => {
             }
           }
         }),
-        // The default size allows sessions of only two or three commands.
         { arbitrary: { runs: 100, size: 100 } }
       )
     })

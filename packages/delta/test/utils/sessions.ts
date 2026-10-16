@@ -5,7 +5,9 @@ import { TestClock } from "effect/testing"
 
 // Random sessions across three replicas, with partial syncs along the way.
 // Positions are fractions of what's there by then, so every generated command
-// is valid whatever happened before it.
+// is valid whatever happened before it. Properties generate them at size 100:
+// the default size makes sessions of about five commands, at most ten, which
+// rarely merge much.
 
 export const Which = Schema.Literals([0, 1, 2])
 export const Fraction = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1000 }))
@@ -116,8 +118,6 @@ const DocumentCommand = Schema.Union([
   Schema.TaggedStruct("Sync", { from: Which, to: Which })
 ])
 
-// Commands have several fields each, so sessions need a larger generation
-// size than the default (10), which allows only two or three of them.
 export const DocumentSession = Schema.Array(DocumentCommand).check(Schema.isMaxLength(60))
 export const documentRuns = { runs: 100, size: 100 }
 
