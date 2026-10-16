@@ -822,12 +822,16 @@ export const arrive = (
 }
 
 // What's wrong with a change that the change alone shows: it takes no sequence
-// numbers, which version vectors can't say whether anyone has, or it starts,
-// or names a parent, before any change. It's refused before it can wait or be
-// saved.
+// numbers, which version vectors can't say whether anyone has, or more than
+// they can count, or it starts, or names a parent, before any change. It's
+// refused before it can wait or be saved: nothing checks a waiting change's
+// ops against its length, and servers count changes that wait as held.
 const checkOnArrival = (change: AnyChange): string | undefined => {
   const name = `Change ${key(change)}`
   if (change.length < 1) return `${name} takes no sequence numbers`
+  if (!Number.isSafeInteger(change.seq + change.length)) {
+    return `${name} takes more sequence numbers than can be counted`
+  }
   if (change.seq < 0) return `${name} starts before any change`
   if (change.parents.some((parent) => parent.seq < 0)) return `${name} has a parent before any change`
   return undefined
