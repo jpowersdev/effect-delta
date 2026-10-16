@@ -13,7 +13,19 @@ import {
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { KeyValueStore } from "effect/persistence"
-import { forgedRuns, ForgedSession, forgeSession, hop, initialProject, Project } from "./utils/forged.ts"
+import {
+  asOld,
+  editProject,
+  EditSession,
+  forgedRuns,
+  ForgedSession,
+  forgeSession,
+  hop,
+  initialProject,
+  OldProject,
+  Project,
+  throughJson
+} from "./utils/forged.ts"
 import {
   Board,
   documentRuns,
@@ -263,7 +275,7 @@ const partAt = (value: unknown, path: ReadonlyArray<string>): unknown => {
 // overlap's range is in its text, and a removal's entry or item doesn't show.
 // Which overlaps a merge reports depends on what the replica had before it,
 // so they aren't the same however the changes arrive.
-const checkOverlaps = (edits: Iterable<ReplicatedDocument.Edit<Project>>): void => {
+const checkOverlaps = (edits: Iterable<ReplicatedDocument.Edit<unknown>>): void => {
   for (const edit of edits) {
     if (edit._tag !== "Remote") continue
     for (const overlap of edit.overlaps) {
@@ -324,24 +336,28 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
       yield* Replica.receive(doc, yield* hop((yield* Queue.take(updates)).delta))
     }
   })
-  // A replica that receives deltas, failing or not, and afterwards says what
-  // its subscribers were told.
-  const watched = Effect.fnUntraced(function*(replica: string) {
-    const doc = yield* make(replica)
-    const { edits } = yield* ReplicatedDocument.subscribe(doc)
-    let merges = 0
-    return {
-      doc,
-      receive: Effect.fnUntraced(function*(changes: ReadonlyArray<InternalDocument.AnyChange>) {
-        const before = yield* Replica.version(doc)
-        const received = yield* Effect.exit(Replica.receive(doc, yield* hop(InternalDelta.fromChanges(changes))))
-        // Each merge that applies something is one edit.
-        if (VersionVector.compare(yield* Replica.version(doc), before) !== "equal") merges++
-        return received
-      }),
-      edits: Effect.suspend(() => Stream.runCollect(Stream.take(edits, merges)))
-    }
-  })
+  // A replica that edits and receives, failing or not, and afterwards says
+  // what its subscribers were told.
+  const watched = <A>(doc: ReplicatedDocument.ReplicatedDocument<A>) =>
+    Effect.gen(function*() {
+      const { edits } = yield* ReplicatedDocument.subscribe(doc)
+      let told = 0
+      // Each edit or merge that changes the replica is one edit to tell.
+      const tracked = <B, E, R>(effect: Effect.Effect<B, E, R>) =>
+        Effect.gen(function*() {
+          const before = yield* Replica.version(doc)
+          const exit = yield* Effect.exit(effect)
+          if (VersionVector.compare(yield* Replica.version(doc), before) !== "equal") told++
+          return exit
+        })
+      return {
+        doc,
+        tracked,
+        // Received one hop away.
+        receive: (delta: Delta.Delta) => Effect.flatMap(hop(delta), (sent) => tracked(Replica.receive(doc, sent))),
+        edits: Effect.suspend(() => Stream.runCollect(Stream.take(edits, told)))
+      }
+    })
   const inOrder = Replica.DocumentId.make("in-order")
   const shuffled = Replica.DocumentId.make("shuffled")
   const saved = Replica.DocumentId.make("saved")
@@ -359,10 +375,10 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         })
         // As the session sends them, a replica and a relay accept the same
         // ones.
-        const doc = yield* watched("in-order")
+        const doc = yield* watched(yield* make("in-order"))
         const changes = yield* forgeSession(strategy, session, (batch) =>
           Effect.gen(function*() {
-            const received = yield* doc.receive(batch)
+            const received = yield* doc.receive(InternalDelta.fromChanges(batch))
             const pushed = yield* Effect.exit(push(relay, inOrder, batch))
             assert.strictEqual(Exit.isSuccess(pushed), Exit.isSuccess(received), JSON.stringify(batch))
             const kept = (yield* Replica.delta(doc.doc, VersionVector.empty)) as InternalDelta.DeltaImpl
@@ -372,8 +388,8 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         checkOverlaps(yield* doc.edits)
         assert.deepStrictEqual(yield* fromRelay(relay, inOrder), expected)
 
-        const atOnce = yield* watched("at-once")
-        yield* atOnce.receive(changes)
+        const atOnce = yield* watched(yield* make("at-once"))
+        yield* atOnce.receive(InternalDelta.fromChanges(changes))
         assert.deepStrictEqual(yield* view(atOnce.doc), expected)
         checkOverlaps(yield* atOnce.edits)
 
@@ -382,7 +398,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         // relay, a replica that's reopened from what it saved now and then,
         // so it starts from texts saved partway.
         yield* Effect.scoped(Effect.gen(function*() {
-          const oneByOne = yield* watched("one-by-one")
+          const oneByOne = yield* watched(yield* make("one-by-one"))
           yield* HistoryStore.persist(oneByOne.doc, saved)
           let reopened = 0
           const open = Effect.fnUntraced(function*() {
@@ -393,7 +409,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
           })
           let back = yield* open()
           for (const change of yield* Random.shuffle([...changes, ...changes])) {
-            yield* oneByOne.receive([change])
+            yield* oneByOne.receive(InternalDelta.fromChanges([change]))
             yield* Effect.exit(push(relay, shuffled, [change]))
             yield* pull(back.doc, relay, shuffled)
             // Saved before the next arrives.
@@ -438,6 +454,94 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         ),
         Effect.provideService(Sync.CurrentUser, "forger")
       )),
+    { arbitrary: forgedRuns }
+  )
+
+  it.effect.prop(
+    "direct peers, one on an older schema, accept the same changes and agree, whatever their write times",
+    { session: ForgedSession, edits: EditSession, seed: Schema.Int },
+    Effect.fnUntraced(function*({ edits, seed, session }) {
+      yield* Effect.gen(function*() {
+        const makeOld = (replica: string) =>
+          ReplicatedDocument.make(OldProject, {
+            initial: initialProject,
+            strategy,
+            replica: Replica.ReplicaId.make(replica)
+          })
+        // Two peers on the schema and one on an older version of it, editing
+        // among forged changes, some stamped far ahead, which they take
+        // directly. And one that takes only the forged changes.
+        const peers = [yield* watched(yield* make("a")), yield* watched(yield* make("b"))] as const
+        const old = yield* watched(yield* makeOld("old"))
+        const everyone = [...peers, old] as const
+        const forged = yield* make("forged")
+        const exchange = Effect.fnUntraced(function*(i: number, j: number) {
+          const p = everyone[i % 3]!
+          const q = everyone[j % 3]!
+          const toP = yield* Replica.delta(q.doc, yield* Replica.version(p.doc))
+          const toQ = yield* Replica.delta(p.doc, yield* Replica.version(q.doc))
+          // What one honest peer made, another accepts.
+          for (const exit of [yield* p.receive(toP), yield* q.receive(toQ)]) {
+            assert.isTrue(Exit.isSuccess(exit), String(exit))
+          }
+        })
+        let next = 0
+        // An edit by the next peer, or for `Wait`, an exchange with the one after it.
+        const step = Effect.fnUntraced(function*(command: (typeof edits)[number]) {
+          const at = next++
+          if (command._tag === "Wait") return yield* exchange(at, at + 1)
+          const peer = everyone[at % 3]!
+          assert.isTrue(Exit.isSuccess(yield* peer.tracked(editProject(peer.doc, command, Effect.void))))
+          // A newer one also says when it's due, which the older one can't.
+          const newer = peers.find((other) => other === peer)
+          if (command._tag === "Status" && newer !== undefined) {
+            const due = command.status === "done" ? "fri" : "mon"
+            yield* newer.tracked(ReplicatedDocument.update(newer.doc, (project) => ({ ...project, due })))
+          }
+        })
+
+        yield* forgeSession(strategy, session, (batch) =>
+          Effect.gen(function*() {
+            if (next < edits.length) yield* step(edits[next]!)
+            const delta = InternalDelta.fromChanges(batch)
+            const [received, ...others] = yield* Effect.forEach(everyone, (peer) => peer.receive(delta))
+            for (const exit of others) assert.strictEqual(Exit.isSuccess(exit), Exit.isSuccess(received!), String(exit))
+            yield* Effect.exit(Replica.receive(forged, yield* hop(delta)))
+            const kept = (yield* Replica.delta(forged, VersionVector.empty)) as InternalDelta.DeltaImpl
+            return (change: InternalDocument.AnyChange) => kept.changes.has(key(change))
+          }), { ahead: true })
+        for (const command of edits.slice(next)) yield* step(command)
+        for (let round = 0; round < 2; round++) {
+          for (const [i, j] of [[0, 1], [0, 2], [1, 2]] as const) yield* exchange(i, j)
+        }
+
+        const [a, b] = yield* Effect.forEach(peers, (peer) => view(peer.doc))
+        assert.deepStrictEqual(b, a)
+        // The older one shows the parts it describes, and keeps the rest.
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(old.doc), asOld(a!.value))
+        assert.deepStrictEqual(yield* Replica.version(old.doc), a!.version)
+        const loaded = yield* make("loaded")
+        yield* Replica.receive(loaded, throughJson(yield* Replica.delta(old.doc, VersionVector.empty)))
+        assert.deepStrictEqual(yield* view(loaded), a)
+        // Nobody's edits touched the parts only the newer schema has, but for
+        // when it's due.
+        const alone = yield* ReplicatedDocument.get(forged)
+        assert.deepStrictEqual(a!.value.meta, alone.meta)
+        for (const item of a!.value.items) {
+          const found = alone.items.find(({ id }) => id === item.id)
+          if (found !== undefined) assert.strictEqual(item.extra, found.extra, item.id)
+        }
+        for (const peer of peers) checkOverlaps(yield* peer.edits)
+        // The older one isn't told of overlaps in the parts it doesn't describe.
+        const told = yield* old.edits
+        checkOverlaps(told)
+        for (const edit of told) {
+          for (const { path } of edit._tag === "Remote" ? edit.overlaps : []) {
+            assert.isFalse(path[0] === "due" || path[0] === "meta" || path[2] === "extra", JSON.stringify(path))
+          }
+        }
+      }).pipe(Random.withSeed(seed))
+    }),
     { arbitrary: forgedRuns }
   )
 })

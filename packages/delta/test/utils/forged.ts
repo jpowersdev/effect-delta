@@ -1,4 +1,4 @@
-import { Effect, Random, Schema } from "effect"
+import { Effect, Random, Schema, Struct } from "effect"
 import { Delta, type Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { Fraction, gapAt, itemAt, Which } from "./sessions.ts"
@@ -9,7 +9,8 @@ import { Fraction, gapAt, itemAt, Which } from "./sessions.ts"
 // don't exist, put them on a side that doesn't match their right origin or
 // on the left of the start, edit outside the text, take no sequence numbers
 // or fewer than none, start or name a parent before any change or in the
-// middle of one, or are stamped no later than what they were made on top of.
+// middle of one, or are stamped no later than what they were made on top of,
+// or, for peers that take changes directly, far ahead of any clock.
 //
 // A forger makes them one at a time, each on top of earlier ones, and sends
 // them as the session says: most on their own, some together with the ones
@@ -43,6 +44,20 @@ export const Project = Schema.Struct({
 export type Project = typeof Project.Type
 
 export const initialProject: Project = { status: "draft", title: "", votes: 0, notes: {}, items: [], vals: [] }
+
+// The project as an older version of its schema has it, before the optional
+// fields were added.
+export const OldProject = Schema.Struct({
+  ...Struct.omit(Project.fields, ["due", "meta"]),
+  items: ReplicatedDocument.List(Schema.Struct(Struct.omit(Item.fields, ["extra"])), { key: "id" })
+})
+export type OldProject = typeof OldProject.Type
+
+/** The parts of a project an older replica shows. */
+export const asOld = ({ due: _, meta: __, ...project }: Project): OldProject => ({
+  ...project,
+  items: project.items.map(({ extra: _, ...item }) => item)
+})
 
 type Path = ReadonlyArray<string>
 
@@ -185,6 +200,9 @@ const ChangeCommand = Schema.Struct({
   quirk: between(0, 9),
   // Its write time after the latest of its parents': 0 or less is too early.
   later: between(-1, 9),
+  // Mostly absent: for peers that take changes directly, stamped far ahead, at
+  // one of `farAhead`.
+  ahead: Schema.optionalKey(between(0, 3)),
   // Parts written as a replica writes them, before the ops.
   block: Schema.optionalKey(Fraction),
   ops: Schema.Array(OpCommand).check(Schema.isMaxLength(3)),
@@ -195,6 +213,11 @@ const ChangeCommand = Schema.Struct({
 
 export const ForgedSession = Schema.Array(ChangeCommand).check(Schema.isMaxLength(30))
 export const forgedRuns = { runs: 100, size: 100 }
+
+// Write times far ahead of the test clock: a few days, the latest a clock
+// reads (a `Date`'s last millisecond), and the last safe integers, after which
+// nothing could be stamped.
+const farAhead = [3 * 24 * 60 * 60 * 1000, 8.64e15, Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER]
 
 type Id = { readonly replica: string; readonly seq: number }
 
@@ -214,7 +237,7 @@ const pick = <A>(choices: ReadonlyArray<A>, at: number): A | undefined =>
 const pathIn = (paths: ReadonlyArray<Path>, where: typeof Where.Type): Path =>
   pick(where.stray === 0 ? anywhere : paths, where.at)!
 
-const makeForger = (strategy: Replica.Strategy) => {
+const makeForger = (strategy: Replica.Strategy, options: { readonly ahead: boolean }) => {
   const made: Array<Made> = []
   const names = ["w0", "w1", "w2"]
   const renamed = [0, 0, 0]
@@ -342,7 +365,14 @@ const makeForger = (strategy: Replica.Strategy) => {
         }),
         ...(command.quirk === 2 ? [{ replica, seq: -1 }] : [])
       ],
-      time: Math.max(-1, ...[...parents].map((i) => made[i]!.change.time)) + command.later,
+      // A safe integer, as a change sent as JSON has.
+      time: Math.min(
+        Number.MAX_SAFE_INTEGER,
+        Math.max(
+          Math.max(-1, ...[...parents].map((i) => made[i]!.change.time)) + command.later,
+          options.ahead && command.ahead !== undefined ? farAhead[command.ahead]! : -Infinity
+        )
+      ),
       ops
     }
     used.add(`${seq}@${replica}`)
@@ -366,18 +396,20 @@ const makeForger = (strategy: Replica.Strategy) => {
 
 /**
  * Forges a session's changes and sends them as it says. `send` sends changes
- * together, and says which of those sent so far were kept. Returns every
- * change, in the order they were made.
+ * together, and says which of those sent so far were kept. With `ahead`, some
+ * are stamped far ahead, as servers refuse. Returns every change, in the order
+ * they were made.
  */
 export const forgeSession = <E, R>(
   strategy: Replica.Strategy,
   session: typeof ForgedSession.Type,
   send: (
     changes: ReadonlyArray<InternalDocument.AnyChange>
-  ) => Effect.Effect<(change: InternalDocument.AnyChange) => boolean, E, R>
+  ) => Effect.Effect<(change: InternalDocument.AnyChange) => boolean, E, R>,
+  options: { readonly ahead: boolean } = { ahead: false }
 ): Effect.Effect<ReadonlyArray<InternalDocument.AnyChange>, E, R> =>
   Effect.gen(function*() {
-    const forger = makeForger(strategy)
+    const forger = makeForger(strategy, options)
     const changes: Array<InternalDocument.AnyChange> = []
     const sent: Array<InternalDocument.AnyChange> = []
     let together: Array<InternalDocument.AnyChange> = []
@@ -418,6 +450,7 @@ export const hop = (delta: Delta.Delta): Effect.Effect<Delta.Delta> =>
 // Honest edits ---------------------------------------------------------------
 
 // Edits a replica makes to a project, among forged changes to the same parts.
+// They're the same on an older version of the schema.
 
 const EditCommand = Schema.Union([
   Schema.TaggedStruct("Status", { status: Project.fields.status }),
@@ -435,16 +468,20 @@ export const EditSession = Schema.Array(EditCommand).check(Schema.isMaxLength(20
 
 /** Makes an edit, or for `Wait`, runs `wait`. */
 export const editProject = Effect.fnUntraced(function*(
-  doc: ReplicatedDocument.ReplicatedDocument<Project>,
+  doc: ReplicatedDocument.ReplicatedDocument<OldProject>,
   command: typeof EditCommand.Type,
   wait: Effect.Effect<void>
 ) {
-  const update = (f: (project: Project) => Project) => Effect.orDie(ReplicatedDocument.update(doc, f))
+  const update = (f: (project: OldProject) => OldProject) => Effect.orDie(ReplicatedDocument.update(doc, f))
   switch (command._tag) {
     case "Status":
       return yield* update((project) => ({ ...project, status: command.status }))
     case "Vote":
-      return yield* update((project) => ({ ...project, votes: project.votes + command.by }))
+      // Forged increments can take the votes to the last safe integer.
+      return yield* update((project) => ({
+        ...project,
+        votes: Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, project.votes + command.by))
+      }))
     case "Type": {
       const title = ReplicatedDocument.text(doc, ["title"])
       const before = yield* ReplicatedText.get(title)
