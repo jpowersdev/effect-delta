@@ -12,6 +12,7 @@ import {
   VersionVector
 } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
+import type * as InternalDocument from "effect-delta/internal/document"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 
@@ -408,6 +409,59 @@ describe("Relay", () => {
           }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
         )
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
+    it.effect("refuses what it can tell is malformed without the schema", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        // Pushes `changes` one at a time to a new document; the last is refused.
+        const refuses = Effect.fnUntraced(
+          function*(changes: ReadonlyArray<InternalDocument.AnyChange>, message: string) {
+            const document = Replica.DocumentId.make(message)
+            const push = (change: InternalDocument.AnyChange) =>
+              relay.push({ format: Sync.FORMAT, document, delta: InternalDelta.fromChanges([change]) })
+            for (const change of changes.slice(0, -1)) yield* push(change)
+            const error = yield* Effect.flip(push(changes.at(-1)!))
+            if (error.reason._tag !== "DeltaError" || error.reason.reason._tag !== "Malformed") {
+              return assert.fail(`expected Malformed, got ${error.reason._tag}`)
+            }
+            assert.include(error.reason.reason.message, message)
+          }
+        )
+        const change = (
+          seq: number,
+          ops: InternalDocument.AnyChange["ops"],
+          more?: Partial<InternalDocument.AnyChange>
+        ): InternalDocument.AnyChange => ({ replica: "r", seq, length: ops.length, parents: [], time: 5, ops, ...more })
+        const set = (name: string): InternalDocument.Op => ({ _tag: "Set", path: [name], value: 1 })
+        const insert = (text: string, parent: { replica: string; seq: number } | null): InternalDocument.Op => ({
+          _tag: "Insert",
+          path: ["body"],
+          text,
+          parent,
+          side: "L"
+        })
+
+        // A path holds one kind of thing.
+        yield* refuses(
+          [change(0, [set("votes"), { _tag: "Increment", path: ["votes"], by: 1 }])],
+          "writes a counter where there's a value"
+        )
+        // A change's ops on one text come together.
+        yield* refuses(
+          [change(0, [insert("a", null), set("status"), insert("b", { replica: "r", seq: 0 })])],
+          "edits one text in more than one run of ops"
+        )
+        // Parents are the last ids of changes, and a change is later than its parents.
+        const first = change(0, [set("status"), set("title")])
+        yield* refuses(
+          [first, change(2, [set("status")], { parents: [{ replica: "r", seq: 0 }], time: 6 })],
+          "has a parent in the middle of a change"
+        )
+        yield* refuses(
+          [first, change(2, [set("status")], { parents: [{ replica: "r", seq: 1 }] })],
+          "has a write time no later than a change it was made on top of"
+        )
+      }).pipe(Effect.provide(RelayLive)))
 
     it.effect("keeps nothing of a change it rejects", () =>
       Effect.gen(function*() {

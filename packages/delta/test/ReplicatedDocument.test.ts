@@ -702,7 +702,7 @@ describe("ReplicatedDocument", () => {
       assert.include(error.reason.message, message)
     }
 
-    it.effect("a document refuses changes its schema has another rule for, and a text's", () =>
+    it.effect("a document refuses changes its schema has another rule for, and a text and a document each other's", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
         const text = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("text") })
@@ -720,6 +720,11 @@ describe("ReplicatedDocument", () => {
           yield* Effect.flip(Replica.receive(ada, yield* Replica.delta(other, VersionVector.empty))),
           "where the schema has a value"
         )
+        malformed(
+          yield* Effect.flip(Replica.receive(text, yield* Replica.delta(other, VersionVector.empty))),
+          "writes inside a text"
+        )
+        assert.strictEqual(yield* ReplicatedText.get(text), "Hi")
       }))
 
     it.effect("a change must be later than what it was made on top of", () =>
