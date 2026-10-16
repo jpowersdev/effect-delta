@@ -1123,6 +1123,27 @@ describe("Authority", () => {
         )
       }).pipe(Effect.provide(NoSecrets)))
 
+    it.effect("refuses a malformed change as replicas do, though it would make a path hold two kinds of thing", () =>
+      Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        // Stamped no later than the start of the document, and writing a
+        // counter where it writes a value.
+        const delta = InternalDelta.fromChanges([{
+          replica: "r",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: -1,
+          ops: [{ _tag: "Set", path: ["votes"], value: 1 }, { _tag: "Increment", path: ["votes"], by: 1 }]
+        }])
+        const refused = yield* Effect.flip(Replica.receive(yield* makeDoc("replica"), delta))
+        const pushed = yield* Effect.exit(authority.push({ format: Sync.FORMAT, document: spec, delta }))
+        assert.deepStrictEqual(
+          Exit.map(pushed, (ack) => ack._tag),
+          Exit.fail(new Sync.SyncError({ reason: refused }))
+        )
+      }).pipe(Effect.provide(NoSecrets)))
+
     it.effect("rejects a change that doesn't fit the schema, so a check reads what replicas show", () =>
       Effect.gen(function*() {
         const authority = yield* Authority.Authority
