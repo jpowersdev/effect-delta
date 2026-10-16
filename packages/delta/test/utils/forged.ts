@@ -650,7 +650,7 @@ const editHonestly = Effect.fnUntraced(function*(
       const label = yield* kept(["items", edit.key, "tags", "t", "label"])
       return yield* inItem(edit.key, ({ tags: { t, ...tags }, ...item }) => ({
         ...item,
-        tags: edit.remove ? tags : { ...tags, t: { label: t?.label ?? label, n: (t?.n ?? 0) + edit.by } }
+        tags: edit.remove ? tags : { ...tags, t: { label: t?.label ?? label, n: safely((t?.n ?? 0) + edit.by) } }
       }))
     }
     case "Sub": {
