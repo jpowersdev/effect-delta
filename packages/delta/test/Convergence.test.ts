@@ -317,7 +317,22 @@ const checkOverlaps = (
     sorted(expectedOverlaps(changes, before, after).filter((overlap) => InternalShape.shows(shape, overlap))),
     `receiving ${JSON.stringify(received)}`
   )
+  // A text overlap is where text the replica had met text it received.
+  const edited = (changes: Iterable<InternalDocument.AnyChange>) =>
+    new Set(
+      [...changes].flatMap(({ ops }) =>
+        ops.flatMap((op) => textOps.has(op._tag) ? [JSON.stringify(op.path ?? [])] : [])
+      )
+    )
+  const [had, got] = [edited(earlier), edited(received)]
+  for (const overlap of edit.overlaps) {
+    if (overlap._tag !== "Text") continue
+    const k = JSON.stringify(overlap.path)
+    assert.isTrue(had.has(k) && got.has(k), `${JSON.stringify(overlap)} receiving ${JSON.stringify(received)}`)
+  }
 }
+
+const textOps = new Set(["Insert", "Remove", "InsertAt", "RemoveAt"])
 
 describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => {
   const make = (replica: string) =>
