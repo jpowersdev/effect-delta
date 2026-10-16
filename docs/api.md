@@ -367,7 +367,7 @@ type Overlap = {
   readonly anchors: ReplicatedText.AnchorRange  // follows it from here on
   readonly replicas: ReadonlyArray<ReplicaId>
 }
-// Documents will add { _tag: "Value" } and { _tag: "Removed" }, with a path.
+// Documents add { _tag: "Value" } and { _tag: "Removed" }, with a path (proposed in documents.md).
 
 class DeltaError extends Schema.TaggedError<DeltaError>()("DeltaError", {
   reason: Schema.Union([StrategyMismatch, Malformed, ReplicaIdReused, AuthorityOnly])
@@ -669,7 +669,7 @@ Measured on a 150,000-character text with 2,600 changes (`scratchpad` benchmark,
 
 ## Not in the first release
 
-- Documents (Schema-derived, with text fields), after all three text strategies
+- Documents (Schema-derived, with text fields), proposed in [`documents.md`](./documents.md)
 - A symmetric peer-to-peer mesh
 - Undo
 - Formatting marks

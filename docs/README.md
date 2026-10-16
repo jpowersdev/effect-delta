@@ -33,6 +33,7 @@ a server.
 1. Explore the ecosystem and agree on vocabulary → [`vocabulary.md`](./vocabulary.md) (decided)
 2. Pick the strategies we support → [`strategies.md`](./strategies.md) (decided: tree, authority, replay)
 3. Design the public API → [`api.md`](./api.md) (decided)
-4. Build, with examples (in progress: tree, authority and replay built; documents next)
+4. Build, with examples (tree, authority and replay built)
+5. Documents: the same three steps for Schema-derived documents → [`documents.md`](./documents.md) (proposed)
 
 Raw research notes live in [`research/`](./research).
