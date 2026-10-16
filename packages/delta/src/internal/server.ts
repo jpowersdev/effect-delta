@@ -224,11 +224,15 @@ export const make = Effect.fnUntraced(function*(options: {
             // A change all at the root is a replicated text's.
             const isText = change.ops.every((op) => Path.isRoot(InternalDocument.pathOf(op)))
             const before = isText ? InternalDocument.textAt(state, Path.root) : jsonOf(state)
-            // Kept consistent, so its JSON of the document is never ambiguous.
-            const { problem, texts } = InternalDocument.integrate(state, [change], {
-              overlaps: false,
-              check: (change) => InternalDocument.checkPaths(state, change)
-            })
+            // Each path holds one kind of thing, so the JSON a check reads is
+            // never ambiguous. A change that breaks that is rejected, as a
+            // check rejects, so the replica that made it rolls it back.
+            const unkept = InternalDocument.checkPaths(state, change)
+            if (unkept !== undefined) {
+              rejected = unkept
+              break
+            }
+            const { problem, texts } = InternalDocument.integrate(state, [change], { overlaps: false })
             if (problem !== undefined) {
               malformed = problem
               break
