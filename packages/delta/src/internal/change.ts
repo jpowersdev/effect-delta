@@ -1,10 +1,11 @@
 import * as Schema from "effect/Schema"
 
 // A change is the unit that is stored, sent and never modified: the ops one
-// replica committed together, the sequence numbers they consume, and the
-// frontier they were made on top of. Every inserted or removed character
-// consumes one sequence number, so a change covers the range
-// [seq, seq + length) of its replica's sequence numbers.
+// replica committed together, the sequence numbers they consume, the frontier
+// they were made on top of, and when they were made. Every inserted or removed
+// character consumes one sequence number, and so does every other op, so a
+// change covers the range [seq, seq + length) of its replica's sequence
+// numbers.
 
 /**
  * One sequence number of one replica: the identity of a character, and the
@@ -47,6 +48,11 @@ export interface Change<Op> {
   readonly seq: number
   readonly length: number
   readonly parents: ReadonlyArray<Id>
+  /**
+   * The write time: milliseconds from `Clock`, moved later when needed so it's
+   * later than every change the replica had seen.
+   */
+  readonly time: number
   readonly ops: ReadonlyArray<Op>
 }
 
@@ -57,6 +63,7 @@ export const Change = <Op extends Schema.Top>(op: Op) =>
     seq: Schema.Int,
     length: Schema.Int,
     parents: Schema.Array(Id),
+    time: Schema.Int,
     ops: Schema.Array(op)
   })
 
@@ -76,6 +83,17 @@ export const lastId = (change: Change<unknown>): Id => ({
   replica: change.replica,
   seq: change.seq + change.length - 1
 })
+
+/**
+ * Orders writes: by write time, then replica id, then sequence number. The
+ * largest is the latest write.
+ *
+ * @internal
+ */
+export const compareWrites = (
+  a: { readonly time: number; readonly replica: string; readonly seq: number },
+  b: { readonly time: number; readonly replica: string; readonly seq: number }
+): number => a.time - b.time || compareReplica(a.replica, b.replica) || a.seq - b.seq
 
 /**
  * Orders replica ids. Concurrent inserts at the same spot are ordered by the

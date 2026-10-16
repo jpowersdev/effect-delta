@@ -7,6 +7,7 @@ import type * as Stream from "effect/Stream"
 import type * as Delta from "../Delta.ts"
 import type * as Replica from "../Replica.ts"
 import type * as VersionVector from "../VersionVector.ts"
+import type { Path } from "./path.ts"
 
 // Must match the TypeId in Replica.ts.
 const TypeId = "~effect-delta/Replica"
@@ -23,18 +24,18 @@ export interface Stored {
   readonly unconfirmed: Delta.Delta
   /** Every replica id this document's replicas have written under here. */
   readonly writers: ReadonlyArray<Replica.ReplicaId>
-  /** The text at a version, for strategies that can start from it. */
+  /** The texts at a version, for strategies that can start from them. */
   readonly snapshot: Snapshot | undefined
 }
 
 /**
- * The text at a version.
+ * The texts at a version, by path.
  *
  * @internal
  */
 export interface Snapshot {
   readonly version: VersionVector.VersionVector
-  readonly text: string
+  readonly texts: ReadonlyArray<{ readonly path: Path; readonly text: string }>
 }
 
 /**
@@ -59,14 +60,14 @@ export interface Core {
   readonly changed: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   /**
    * What to save: changes since `since`, the unconfirmed ones, the writer ids,
-   * and the text at `version`, which is what the store will then have.
+   * and the texts at `version`, which is what the store will then have.
    */
   readonly toStore: (since: VersionVector.VersionVector) => Effect.Effect<{
     readonly history: Delta.Delta
     readonly unconfirmed: Delta.Delta
     readonly writers: ReadonlyArray<Replica.ReplicaId>
     readonly version: VersionVector.VersionVector
-    readonly text: string
+    readonly texts: Snapshot["texts"]
   }>
   /** Loads what a store had saved. */
   readonly restore: (stored: Stored) => Effect.Effect<void, Replica.DeltaError>

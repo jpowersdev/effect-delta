@@ -1,0 +1,772 @@
+import type * as Equivalence from "effect/Equivalence"
+import * as Predicate from "effect/Predicate"
+import * as Result from "effect/Result"
+import * as Schema from "effect/Schema"
+import * as SchemaAST from "effect/SchemaAST"
+import * as SchemaIssue from "effect/SchemaIssue"
+import * as SchemaParser from "effect/SchemaParser"
+import * as TextPatch from "../TextPatch.ts"
+import { key as changeKey } from "./change.ts"
+import * as InternalDocument from "./document.ts"
+import * as Path from "./path.ts"
+import * as Text from "./text.ts"
+
+// A document's merge rules, worked out from its schema: which parts are
+// fields, entries, lists, texts, counters and values. With them a replica
+// reads its document's state as a value, turns a new value into writes, and
+// checks that a change it receives fits the schema.
+
+/**
+ * The annotation that marks a part's merge rule. Unmarked parts take theirs
+ * from their shape.
+ *
+ * @internal
+ */
+export const RuleKey = "~effect-delta/ReplicatedDocument/rule"
+
+/** @internal */
+export type Rule =
+  | { readonly _tag: "Text" }
+  | { readonly _tag: "Counter" }
+  | { readonly _tag: "List"; readonly key: string | undefined }
+
+/** @internal */
+export type Shape = Fields | Entries | List | TextShape | Counter | Value
+
+/** @internal */
+export interface Fields {
+  readonly _tag: "Fields"
+  readonly fields: ReadonlyArray<Field>
+  /** Builds a class's instance from its fields; undefined for a plain struct. */
+  readonly make: ((fields: object) => unknown) | undefined
+}
+
+/** @internal */
+export interface Field {
+  readonly name: string
+  readonly shape: Shape
+  readonly optional: boolean
+  /** Whether the schema fills the field in when it's missing. */
+  readonly hasDefault: boolean
+}
+
+/** @internal */
+export interface Entries {
+  readonly _tag: "Entries"
+  readonly isKey: (key: string) => boolean
+  readonly value: Shape
+}
+
+/** @internal */
+export interface List {
+  readonly _tag: "List"
+  readonly item: Shape
+  /** The item field that identifies an item; undefined for a list of values. */
+  readonly key: string | undefined
+}
+
+/** @internal */
+export interface TextShape {
+  readonly _tag: "Text"
+}
+
+/** @internal */
+export interface Counter {
+  readonly _tag: "Counter"
+}
+
+/** @internal */
+export interface Value {
+  readonly _tag: "Value"
+  readonly encode: (value: unknown) => Result.Result<Schema.Json, Schema.SchemaError>
+  readonly decode: (json: Schema.Json) => Result.Result<unknown, Schema.SchemaError>
+  readonly equivalence: Equivalence.Equivalence<unknown>
+}
+
+/**
+ * The shape of a replicated text: a text at the root.
+ *
+ * @internal
+ */
+export const text: Shape = { _tag: "Text" }
+
+// Compiling ------------------------------------------------------------------
+
+/**
+ * Works out a document's merge rules from its schema. Throws for a schema a
+ * document can't have.
+ *
+ * @internal
+ */
+export const compile = (schema: Schema.Top): Fields | Entries => {
+  const shape = compileAst(SchemaAST.toType(schema.ast), [])
+  if (shape._tag !== "Fields" && shape._tag !== "Entries") {
+    throw new Error("A document's schema must be a struct, a class or a record. For one text, use ReplicatedText")
+  }
+  return shape
+}
+
+const ruleOf = (ast: SchemaAST.AST): Rule | undefined => {
+  const own = ast.annotations?.[RuleKey]
+  if (own !== undefined) return own as Rule
+  // Annotations on a schema with checks go on its last check.
+  for (const check of ast.checks ?? []) {
+    const found = check.annotations?.[RuleKey]
+    if (found !== undefined) return found as Rule
+  }
+  return undefined
+}
+
+const refuse = (path: Path.Path, message: string): never => {
+  throw new Error(`${path.length === 0 ? "The document" : `The part at ${Path.key(path)}`}: ${message}`)
+}
+
+const onMerged = "merging concurrent edits could break it, so check it in an authority instead"
+
+const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
+  const rule = ruleOf(ast)
+  switch (rule?._tag) {
+    case "Text":
+      if (ast.checks !== undefined) refuse(path, `a text can't have checks: ${onMerged}`)
+      return { _tag: "Text" }
+    case "Counter":
+      // The integer check is the counter's own; a sum of integers keeps it.
+      if ((ast.checks?.length ?? 0) > 1) refuse(path, `a counter can't have checks: ${onMerged}`)
+      return { _tag: "Counter" }
+    case "List": {
+      if (!SchemaAST.isArrays(ast) || ast.elements.length > 0 || ast.rest.length !== 1) {
+        return refuse(path, "a list must be an array")
+      }
+      if (ast.checks !== undefined) refuse(path, `a list can't have checks: ${onMerged}`)
+      const item = compileAst(ast.rest[0]!, [...path, "*"])
+      if (rule.key === undefined) {
+        if (item._tag !== "Value") refuse(path, "a list of values can't hold texts, counters or other merged parts")
+      } else {
+        const field = item._tag === "Fields" ? item.fields.find(({ name }) => name === rule.key) : undefined
+        if (field === undefined || field.optional || field.shape._tag !== "Value") {
+          refuse(path, `a list's items must be structs or classes with a required "${rule.key}" field`)
+        }
+      }
+      return { _tag: "List", item, key: rule.key }
+    }
+  }
+  const fields = classFields(ast)
+  if (fields !== undefined) {
+    if (ast.checks !== undefined || fields.checks !== undefined) refuse(path, `a class can't have checks: ${onMerged}`)
+    return { _tag: "Fields", fields: compileFields(fields, path), make: SchemaParser.make(Schema.make(ast)) }
+  }
+  if (SchemaAST.isObjects(ast) && ast.indexSignatures.length === 0) {
+    if (ast.checks !== undefined) refuse(path, `a struct can't have checks: ${onMerged}`)
+    return { _tag: "Fields", fields: compileFields(ast, path), make: undefined }
+  }
+  if (SchemaAST.isObjects(ast) && ast.propertySignatures.length === 0 && ast.indexSignatures.length === 1) {
+    if (ast.checks !== undefined) refuse(path, `a record can't have checks: ${onMerged}`)
+    const [signature] = ast.indexSignatures
+    const parameter = SchemaAST.toType(signature!.parameter)
+    if (!isStringKey(parameter)) refuse(path, "a record's keys must be strings")
+    const isKey = SchemaParser.is(Schema.make(parameter))
+    return { _tag: "Entries", isKey: (key) => isKey(key), value: compileAst(signature!.type, [...path, "*"]) }
+  }
+  if (hasRule(ast, new Set())) {
+    refuse(path, "texts, counters and lists can't be inside a value that's written whole (a union, an array, ...)")
+  }
+  return compileValue(ast)
+}
+
+// A class is a declaration encoded as exactly its fields.
+const classFields = (ast: SchemaAST.AST): SchemaAST.Objects | undefined => {
+  if (!SchemaAST.isDeclaration(ast) || ast.typeParameters.length !== 1) return undefined
+  const [fields] = ast.typeParameters
+  const toCodec = ast.annotations?.toCodec
+  if (!SchemaAST.isObjects(fields!) || !Predicate.isFunction(toCodec)) return undefined
+  const link = toCodec([Schema.make(fields)]) as SchemaAST.Link | undefined
+  return link?.to === fields ? fields : undefined
+}
+
+const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<Field> =>
+  ast.propertySignatures.map((signature) => {
+    if (!Predicate.isString(signature.name)) return refuse(path, "a struct's fields must have string names")
+    const optional = SchemaAST.isOptional(signature.type)
+    return {
+      name: signature.name,
+      shape: compileAst(optional ? withoutUndefined(signature.type) : signature.type, [...path, signature.name]),
+      optional,
+      hasDefault: signature.type.context?.constructorDefault !== undefined
+    }
+  })
+
+// An optional field's `undefined` counts as absent.
+const withoutUndefined = (ast: SchemaAST.AST): SchemaAST.AST => {
+  if (!SchemaAST.isUnion(ast)) return ast
+  const defined = ast.types.filter((type) => !SchemaAST.isUndefined(type))
+  return defined.length === 1 ? defined[0]! : ast
+}
+
+const isStringKey = (ast: SchemaAST.AST): boolean =>
+  SchemaAST.isString(ast) || SchemaAST.isTemplateLiteral(ast) ||
+  (SchemaAST.isLiteral(ast) && Predicate.isString(ast.literal)) ||
+  (SchemaAST.isUnion(ast) && ast.types.every(isStringKey))
+
+const hasRule = (ast: SchemaAST.AST, visited: Set<SchemaAST.AST>): boolean => {
+  if (visited.has(ast)) return false
+  visited.add(ast)
+  if (ruleOf(ast) !== undefined) return true
+  switch (ast._tag) {
+    case "Declaration":
+      return ast.typeParameters.some((parameter) => hasRule(parameter, visited))
+    case "Arrays":
+      return [...ast.elements, ...ast.rest].some((element) => hasRule(element, visited))
+    case "Objects":
+      return ast.propertySignatures.some((signature) => hasRule(signature.type, visited)) ||
+        ast.indexSignatures.some((signature) => hasRule(signature.type, visited))
+    case "Union":
+      return ast.types.some((type) => hasRule(type, visited))
+    case "Suspend":
+      return hasRule(ast.thunk(), visited)
+    default:
+      return false
+  }
+}
+
+const compileValue = (ast: SchemaAST.AST): Value => {
+  const schema = Schema.make<Schema.Codec<unknown>>(ast)
+  const codec = Schema.toCodecJson(schema)
+  const encode = Schema.encodeUnknownResult(codec)
+  const decode = Schema.decodeUnknownResult(codec)
+  return {
+    _tag: "Value",
+    encode: (value) => encode(value) as Result.Result<Schema.Json, Schema.SchemaError>,
+    decode: (json) => decode(json),
+    equivalence: Schema.toEquivalence(schema)
+  }
+}
+
+/**
+ * The shape at `path`, and how the part there comes and goes: always there, or
+ * as an optional field, a record entry or a list item. Undefined for a path
+ * the schema doesn't describe; `inside` names the text, counter or value the
+ * path goes into.
+ *
+ * @internal
+ */
+export const at = (
+  shape: Shape,
+  path: Path.Path
+):
+  | { readonly _tag: "Part"; readonly shape: Shape; readonly presence: "always" | "optional" | "entry" | "item" }
+  | { readonly _tag: "Inside"; readonly shape: Shape }
+  | undefined =>
+{
+  let current = shape
+  let presence: "always" | "optional" | "entry" | "item" = "always"
+  for (const segment of path) {
+    switch (current._tag) {
+      case "Fields": {
+        const field = current.fields.find(({ name }) => name === segment)
+        if (field === undefined) return undefined
+        current = field.shape
+        presence = field.optional ? "optional" : "always"
+        break
+      }
+      case "Entries":
+        current = current.value
+        presence = "entry"
+        break
+      case "List":
+        current = current.item
+        presence = "item"
+        break
+      default:
+        return { _tag: "Inside", shape: current }
+    }
+  }
+  return { _tag: "Part", shape: current, presence }
+}
+
+/**
+ * Whether a change's ops fit the schema. Parts the schema doesn't describe
+ * (written by a newer version of it) fit.
+ *
+ * @internal
+ */
+export const check = (shape: Shape, change: InternalDocument.AnyChange): string | undefined => {
+  for (const op of change.ops) {
+    const found = at(shape, InternalDocument.pathOf(op))
+    if (found === undefined) continue
+    const name = `Change ${changeKey(change)}`
+    if (found._tag === "Inside") return `${name} writes inside a ${describe(found.shape)}`
+    const { presence, shape: here } = found
+    const fits = Text.isOp(op)
+      ? here._tag === "Text"
+      : op._tag === "Increment"
+      ? here._tag === "Counter"
+      : op._tag === "Set"
+      ? here._tag === "Value"
+      : op._tag === "Add"
+      ? presence !== "always" && here._tag !== "Value"
+      : op._tag === "Unset"
+      ? presence !== "always"
+      : presence === "item"
+    if (!fits) return `${name} has a ${op._tag} op where the schema has a ${describe(here)}`
+  }
+  return undefined
+}
+
+const describe = (shape: Shape): string => {
+  switch (shape._tag) {
+    case "Fields":
+      return "struct"
+    case "Entries":
+      return "record"
+    case "List":
+      return "list"
+    case "Text":
+      return "text"
+    case "Counter":
+      return "counter"
+    case "Value":
+      return "value"
+  }
+}
+
+/**
+ * Checks a document's initial value: it must fit its merge rules. Texts start
+ * empty, records and lists start empty, and optional fields start absent;
+ * everything else starts as `initial` says.
+ *
+ * @internal
+ */
+export const checkInitial = (shape: Shape, initial: unknown, path: Path.Path = Path.root): void => {
+  switch (shape._tag) {
+    case "Text":
+      if (initial !== "") refuse(path, "a text starts empty: write starting text as a change")
+      return
+    case "Entries":
+      if (Object.keys(initial as object).length > 0) refuse(path, "a record starts empty in the initial value")
+      return
+    case "List":
+      if ((initial as ReadonlyArray<unknown>).length > 0) refuse(path, "a list starts empty in the initial value")
+      return
+    case "Fields":
+      for (const field of shape.fields) {
+        const value = (initial as Record<string, unknown>)[field.name]
+        if (field.optional) {
+          if (value !== undefined) refuse([...path, field.name], "an optional field starts absent in the initial value")
+        } else {
+          checkInitial(field.shape, value, [...path, field.name])
+        }
+      }
+      return
+  }
+}
+
+// Reading --------------------------------------------------------------------
+
+const Missing = Symbol.for("effect-delta/ReplicatedDocument/Missing")
+
+/**
+ * What a document last read, by path, so a new value shares every part that
+ * didn't change, and values aren't decoded again.
+ *
+ * @internal
+ */
+export type Memo = Map<string, { readonly parts: ReadonlyArray<unknown>; readonly value: unknown }>
+
+/**
+ * Reads the document's value. Parts nobody wrote come from `initial`; parts
+ * that can't be read, such as an entry missing a field, are left out.
+ *
+ * @internal
+ */
+export const read = (
+  shape: Shape,
+  document: InternalDocument.Document,
+  initial: unknown,
+  memo: Memo
+): unknown => {
+  const value = readAt(shape, document, Path.root, { value: initial }, memo)
+  if (value === Missing) throw new Error("A document's value couldn't be read")
+  return value
+}
+
+const readAt = (
+  shape: Shape,
+  document: InternalDocument.Document,
+  path: Path.Path,
+  initial: { readonly value: unknown } | undefined,
+  memo: Memo
+): unknown => {
+  switch (shape._tag) {
+    case "Text":
+      return InternalDocument.textAt(document, path)?.value ?? ""
+    case "Counter":
+      return ((initial?.value as number | undefined) ?? 0) + InternalDocument.counterAt(document, path)
+    case "Value": {
+      const writes = InternalDocument.valuesAt(document, path)
+      const k = Path.key(path)
+      // The latest write this schema can read.
+      for (let i = writes.length - 1; i >= 0; i--) {
+        const json = writes[i]!.value
+        const previous = memo.get(k)
+        if (previous !== undefined && previous.parts[0] === json) return previous.value
+        const decoded = shape.decode(json)
+        if (Result.isSuccess(decoded)) {
+          memo.set(k, { parts: [json], value: decoded.success })
+          return decoded.success
+        }
+      }
+      return initial === undefined ? Missing : initial.value
+    }
+    case "Fields": {
+      const parts: Array<unknown> = []
+      const fields: Record<string, unknown> = {}
+      for (const field of shape.fields) {
+        const fieldPath = [...path, field.name]
+        if (field.optional && !InternalDocument.exists(document, fieldPath)) {
+          parts.push(Missing)
+          continue
+        }
+        const fieldInitial = initial === undefined || field.optional
+          ? undefined
+          : { value: (initial.value as Record<string, unknown>)[field.name] }
+        const value = readAt(field.shape, document, fieldPath, fieldInitial, memo)
+        if (value === Missing && !field.hasDefault) return Missing
+        parts.push(value)
+        if (value !== Missing && !(field.optional && value === undefined)) fields[field.name] = value
+      }
+      return share(memo, path, parts, () => {
+        if (shape.make === undefined) return fields
+        try {
+          return shape.make(fields)
+        } catch {
+          return Missing
+        }
+      })
+    }
+    case "Entries": {
+      const parts: Array<unknown> = []
+      const entries: Record<string, unknown> = {}
+      for (const name of InternalDocument.childrenAt(document, path)) {
+        const entryPath = [...path, name]
+        if (!shape.isKey(name) || !InternalDocument.exists(document, entryPath)) continue
+        const value = readAt(shape.value, document, entryPath, undefined, memo)
+        if (value === Missing) continue
+        parts.push(name, value)
+        entries[name] = value
+      }
+      return share(memo, path, parts, () => entries)
+    }
+    case "List": {
+      const items: Array<unknown> = []
+      for (const name of InternalDocument.itemsAt(document, path)) {
+        const value = readAt(shape.item, document, [...path, name], undefined, memo)
+        if (value !== Missing) items.push(value)
+      }
+      return share(memo, path, items, () => items)
+    }
+  }
+}
+
+const share = (memo: Memo, path: Path.Path, parts: ReadonlyArray<unknown>, build: () => unknown): unknown => {
+  const k = Path.key(path)
+  const previous = memo.get(k)
+  if (
+    previous !== undefined && previous.parts.length === parts.length &&
+    previous.parts.every((part, i) => part === parts[i])
+  ) return previous.value
+  const value = build()
+  if (value !== Missing) memo.set(k, { parts, value })
+  return value
+}
+
+/**
+ * Reads a document's value from the JSON a server shows it as.
+ *
+ * @internal
+ */
+export const readJson = (shape: Shape, json: Schema.Json, initial: unknown): unknown => {
+  const value = readJsonAt(shape, json, { value: initial })
+  if (value === Missing) throw new Error("A document's value couldn't be read")
+  return value
+}
+
+const readJsonAt = (
+  shape: Shape,
+  json: Schema.Json | undefined,
+  initial: { readonly value: unknown } | undefined
+): unknown => {
+  switch (shape._tag) {
+    case "Text":
+      return Predicate.isString(json) ? json : ""
+    case "Counter":
+      return ((initial?.value as number | undefined) ?? 0) + (Predicate.isNumber(json) ? json : 0)
+    case "Value": {
+      const decoded = json === undefined ? undefined : shape.decode(json)
+      if (decoded !== undefined && Result.isSuccess(decoded)) return decoded.success
+      return initial === undefined ? Missing : initial.value
+    }
+    case "Fields": {
+      const object = isJsonObject(json) ? json : {}
+      const fields: Record<string, unknown> = {}
+      for (const field of shape.fields) {
+        if (field.optional && !Object.hasOwn(object, field.name)) continue
+        const fieldInitial = initial === undefined || field.optional
+          ? undefined
+          : { value: (initial.value as Record<string, unknown>)[field.name] }
+        const value = readJsonAt(field.shape, object[field.name], fieldInitial)
+        if (value === Missing) {
+          if (field.hasDefault) continue
+          return Missing
+        }
+        if (!(field.optional && value === undefined)) fields[field.name] = value
+      }
+      if (shape.make === undefined) return fields
+      try {
+        return shape.make(fields)
+      } catch {
+        return Missing
+      }
+    }
+    case "Entries": {
+      const entries: Record<string, unknown> = {}
+      for (const [name, entry] of Object.entries(isJsonObject(json) ? json : {})) {
+        if (!shape.isKey(name)) continue
+        const value = readJsonAt(shape.value, entry, undefined)
+        if (value !== Missing) entries[name] = value
+      }
+      return entries
+    }
+    case "List": {
+      const items: Array<unknown> = []
+      for (const item of Array.isArray(json) ? json : []) {
+        const value = readJsonAt(shape.item, item, undefined)
+        if (value !== Missing) items.push(value)
+      }
+      return items
+    }
+  }
+}
+
+const isJsonObject = (json: Schema.Json | undefined): json is Schema.JsonObject =>
+  Predicate.isObject(json) && !Array.isArray(json)
+
+// Writing --------------------------------------------------------------------
+
+/**
+ * Works out the writes that turn the document into `value`, comparing it part
+ * by part with what's there. Fails if a value doesn't encode.
+ *
+ * @internal
+ */
+export const plan = (
+  shape: Shape,
+  document: InternalDocument.Document,
+  value: unknown,
+  initial: unknown,
+  memo: Memo
+): Result.Result<ReadonlyArray<InternalDocument.Intent>, Schema.SchemaError> => {
+  const intents: Array<InternalDocument.Intent> = []
+  try {
+    planAt(shape, document, Path.root, value, { value: initial }, false, intents, memo)
+  } catch (error) {
+    if (Schema.isSchemaError(error)) return Result.fail(error)
+    throw error
+  }
+  return Result.succeed(intents)
+}
+
+const planAt = (
+  shape: Shape,
+  document: InternalDocument.Document,
+  path: Path.Path,
+  after: unknown,
+  initial: { readonly value: unknown } | undefined,
+  // Whether a value must be written even if it's unchanged: when it also says
+  // its entry exists again.
+  force: boolean,
+  intents: Array<InternalDocument.Intent>,
+  memo: Memo
+): void => {
+  switch (shape._tag) {
+    case "Text": {
+      const before = InternalDocument.textAt(document, path)?.value ?? ""
+      if (before !== after) intents.push({ _tag: "Text", path, patch: TextPatch.get(before, after as string) })
+      return
+    }
+    case "Counter": {
+      const by = (after as number) - (readAt(shape, document, path, initial, memo) as number)
+      if (by !== 0) intents.push({ _tag: "Increment", path, by })
+      return
+    }
+    case "Value": {
+      if (!force) {
+        const before = readAt(shape, document, path, initial, memo)
+        if (before !== Missing && shape.equivalence(before, after)) return
+      }
+      intents.push({ _tag: "Set", path, value: Result.getOrThrow(shape.encode(after)) })
+      return
+    }
+    case "Fields": {
+      for (const field of shape.fields) {
+        const fieldPath = [...path, field.name]
+        const fieldAfter = (after as Record<string, unknown>)[field.name]
+        if (!field.optional) {
+          const fieldInitial = initial === undefined
+            ? undefined
+            : { value: (initial.value as Record<string, unknown>)[field.name] }
+          planAt(field.shape, document, fieldPath, fieldAfter, fieldInitial, false, intents, memo)
+          continue
+        }
+        const present = Object.hasOwn(after as object, field.name) && fieldAfter !== undefined
+        planPresence(field.shape, document, fieldPath, present ? { value: fieldAfter } : undefined, intents, memo)
+      }
+      return
+    }
+    case "Entries": {
+      const entries = after as Record<string, unknown>
+      for (const name of InternalDocument.childrenAt(document, path)) {
+        // Entries this schema can't read aren't in `after`, but they stay.
+        if (Object.hasOwn(entries, name) || !shown(shape.value, document, [...path, name], memo, shape.isKey(name))) {
+          continue
+        }
+        intents.push({ _tag: "Unset", path: [...path, name] })
+      }
+      for (const [name, entry] of Object.entries(entries)) {
+        planPresence(shape.value, document, [...path, name], { value: entry }, intents, memo)
+      }
+      return
+    }
+    case "List":
+      return shape.key === undefined
+        ? planValues(shape, document, path, after as ReadonlyArray<unknown>, intents, memo)
+        : planItems(shape, shape.key, document, path, after as ReadonlyArray<Record<string, unknown>>, intents, memo)
+  }
+}
+
+// Whether the part at `path` exists and this schema can read it.
+const shown = (shape: Shape, document: InternalDocument.Document, path: Path.Path, memo: Memo, isKey = true) =>
+  isKey && InternalDocument.exists(document, path) && readAt(shape, document, path, undefined, memo) !== Missing
+
+// An optional field, record entry or list item: whether it exists, then its
+// content. A removed part's content is kept, so adding it back compares with
+// that.
+const planPresence = (
+  shape: Shape,
+  document: InternalDocument.Document,
+  path: Path.Path,
+  after: { readonly value: unknown } | undefined,
+  intents: Array<InternalDocument.Intent>,
+  memo: Memo
+): void => {
+  const existed = InternalDocument.exists(document, path)
+  if (after === undefined) {
+    if (existed) intents.push({ _tag: "Unset", path })
+    return
+  }
+  // A value says it exists by being written; anything else needs adding.
+  if (!existed && shape._tag !== "Value") intents.push({ _tag: "Add", path })
+  planAt(shape, document, path, after.value, undefined, !existed, intents, memo)
+}
+
+const planItems = (
+  shape: List,
+  key: string,
+  document: InternalDocument.Document,
+  path: Path.Path,
+  after: ReadonlyArray<Record<string, unknown>>,
+  intents: Array<InternalDocument.Intent>,
+  memo: Memo
+): void => {
+  const keys = after.map((item) => item[key] as string)
+  const wanted = new Set(keys)
+  if (wanted.size < keys.length) {
+    throw new Schema.SchemaError(
+      new SchemaIssue.InvalidValue({ message: `Two items of the list at ${Path.key(path)} have the same ${key}` })
+    )
+  }
+  // Items this schema can't read aren't in `after`, but they stay.
+  const before = InternalDocument.itemsAt(document, path).filter((name) =>
+    readAt(shape.item, document, [...path, name], undefined, memo) !== Missing
+  )
+  for (const name of before) if (!wanted.has(name)) intents.push({ _tag: "Unset", path: [...path, name] })
+  const showing = new Set(before)
+  // Items that keep their order stay put; the rest move.
+  const staying = new Set(longestCommon(before.filter((name) => wanted.has(name)), keys.filter((k) => showing.has(k))))
+  let previous: string | undefined
+  for (const [index, name] of keys.entries()) {
+    const itemPath = [...path, name]
+    if (!showing.has(name)) {
+      if (!InternalDocument.exists(document, itemPath)) intents.push({ _tag: "Add", path: itemPath })
+      planAt(shape.item, document, itemPath, after[index], undefined, false, intents, memo)
+      intents.push({ _tag: "Place", path: itemPath, after: previous })
+    } else {
+      planAt(shape.item, document, itemPath, after[index], undefined, false, intents, memo)
+      if (!staying.has(name)) intents.push({ _tag: "Place", path: itemPath, after: previous })
+    }
+    previous = name
+  }
+}
+
+const planValues = (
+  shape: List,
+  document: InternalDocument.Document,
+  path: Path.Path,
+  after: ReadonlyArray<unknown>,
+  intents: Array<InternalDocument.Intent>,
+  memo: Memo
+): void => {
+  const item = shape.item as Value
+  const before: Array<{ readonly name: string; readonly value: unknown }> = []
+  for (const name of InternalDocument.itemsAt(document, path)) {
+    const value = readAt(item, document, [...path, name], undefined, memo)
+    if (value !== Missing) before.push({ name, value })
+  }
+  // Values that stay are matched in order; a changed value is a removal and an
+  // insert.
+  const matches = longestCommonBy(before, after, (a, b) => item.equivalence(a.value, b))
+  const matched = new Map(matches.map(([i, j]) => [j, before[i]!.name]))
+  const kept = new Set(matches.map(([i]) => i))
+  for (const [i, { name }] of before.entries()) {
+    if (!kept.has(i)) intents.push({ _tag: "Unset", path: [...path, name] })
+  }
+  let previous: string | number | undefined
+  for (const [j, value] of after.entries()) {
+    const name = matched.get(j)
+    if (name !== undefined) {
+      previous = name
+      continue
+    }
+    intents.push({ _tag: "Insert", path, value: Result.getOrThrow(item.encode(value)), after: previous })
+    previous = intents.length - 1
+  }
+}
+
+const longestCommon = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): Array<string> =>
+  longestCommonBy(a, b, (x, y) => x === y).map(([i]) => a[i]!)
+
+// The longest common subsequence of `a` and `b`, as pairs of indexes.
+const longestCommonBy = <A, B>(
+  a: ReadonlyArray<A>,
+  b: ReadonlyArray<B>,
+  equals: (a: A, b: B) => boolean
+): Array<readonly [number, number]> => {
+  const lengths = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0))
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      lengths[i]![j] = equals(a[i]!, b[j]!)
+        ? lengths[i + 1]![j + 1]! + 1
+        : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!)
+    }
+  }
+  const pairs: Array<readonly [number, number]> = []
+  for (let i = 0, j = 0; i < a.length && j < b.length;) {
+    if (equals(a[i]!, b[j]!)) {
+      pairs.push([i++, j++])
+    } else if (lengths[i + 1]![j]! >= lengths[i]![j + 1]!) {
+      i++
+    } else {
+      j++
+    }
+  }
+  return pairs
+}

@@ -1,0 +1,678 @@
+/**
+ * A replicated document is a value of an ordinary `Schema` (a design doc with a
+ * title, a body, a status and comments) that many replicas edit at once. Every
+ * replica accepts edits immediately, and replicas that have received the same
+ * changes show the same value.
+ *
+ * Its merge rules come from its schema. A struct merges field by field and a
+ * record entry by entry. A `Text` merges character by character, a `Counter`
+ * by adding, and a `List` item by item. Anything else (strings, numbers,
+ * literals, unions, arrays, dates) takes the latest write, and the merge
+ * reports an overlap when two replicas wrote different values.
+ *
+ * Edit it with `update` and `set`, which compare the new value with the old
+ * part by part and write only what changed. Edit its text fields with the
+ * `ReplicatedText` functions, through `text`, which is what editors use.
+ * Observe it with `changes` (each new value) or `subscribe` (each edit).
+ *
+ * It's a replica like any other: `Replica.exchange`, `Relay.connect`,
+ * `HistoryStore.persist` and authorities take it as it is, and servers don't
+ * need its schema.
+ *
+ * @stability unstable
+ * @since 0.1.0
+ */
+import * as Crypto from "effect/Crypto"
+import * as Effect from "effect/Effect"
+import { dual } from "effect/Function"
+import { hasProperty } from "effect/Predicate"
+import * as PubSub from "effect/PubSub"
+import * as Result from "effect/Result"
+import type * as Schedule from "effect/Schedule"
+import * as Schema from "effect/Schema"
+import type * as Scope from "effect/Scope"
+import * as Stream from "effect/Stream"
+import * as SubscriptionRef from "effect/SubscriptionRef"
+import * as Authority from "./Authority.ts"
+import * as InternalConnection from "./internal/connection.ts"
+import * as InternalEditable from "./internal/editable.ts"
+import * as InternalEngine from "./internal/engine.ts"
+import * as InternalReplica from "./internal/replica.ts"
+import * as InternalShape from "./internal/shape.ts"
+import type * as Replica from "./Replica.ts"
+import type * as ReplicatedText from "./ReplicatedText.ts"
+import type * as Sync from "./Sync.ts"
+
+const TypeId = "~effect-delta/ReplicatedDocument"
+
+// Implementation ----------------------------------------------------------
+
+interface ReplicatedDocumentImpl extends ReplicatedDocument<unknown> {
+  readonly core: InternalReplica.Core
+  readonly engine: InternalEngine.Engine
+  readonly schema: Schema.Top
+  readonly shape: InternalShape.Shape
+  readonly initial: unknown
+  readonly memo: InternalShape.Memo
+}
+
+const Proto = {
+  ...InternalReplica.Proto,
+  [TypeId]: TypeId,
+  toJSON(this: ReplicatedDocumentImpl) {
+    return {
+      _id: "ReplicatedDocument",
+      strategy: this.strategy,
+      value: this.engine.model.read(this.engine.state.document)
+    }
+  }
+}
+
+// Schemas are compiled once.
+const shapes = new WeakMap<Schema.Top, InternalShape.Fields | InternalShape.Entries>()
+const shapeOf = (schema: Schema.Top): InternalShape.Fields | InternalShape.Entries => {
+  let shape = shapes.get(schema)
+  if (shape === undefined) {
+    shape = InternalShape.compile(schema)
+    shapes.set(schema, shape)
+  }
+  return shape
+}
+
+const makeWith = (
+  schema: Schema.Top,
+  options: {
+    readonly initial: unknown
+    readonly strategy: Replica.Strategy
+    readonly replica: Replica.ReplicaId
+    readonly confirmed: InternalEngine.ConfirmedState | undefined
+  }
+) =>
+  Effect.suspend(() => {
+    const shape = shapeOf(schema)
+    const initial = Schema.decodeUnknownResult(Schema.toType(schema))(options.initial)
+    if (Result.isFailure(initial)) {
+      return Effect.die(new Error(`A document's initial value must fit its schema: ${initial.failure.message}`))
+    }
+    InternalShape.checkInitial(shape, options.initial)
+    const memo: InternalShape.Memo = new Map()
+    return Effect.map(
+      InternalEngine.make({
+        strategy: options.strategy,
+        replica: options.replica,
+        confirmed: options.confirmed,
+        model: {
+          read: (document) => InternalShape.read(shape, document, options.initial, memo),
+          check: (change) => InternalShape.check(shape, change)
+        }
+      }),
+      (engine): ReplicatedDocumentImpl =>
+        Object.assign(Object.create(Proto), {
+          strategy: options.strategy,
+          engine,
+          core: engine.core,
+          schema,
+          shape,
+          initial: options.initial,
+          memo
+        })
+    )
+  })
+
+const makeImpl = Effect.fnUntraced(function*(schema: Schema.Top, options: Options<unknown>) {
+  const replica = options.replica ?? (yield* InternalEngine.randomReplicaId)
+  return yield* makeWith(schema, {
+    initial: options.initial,
+    strategy: options.strategy ?? "tree",
+    replica,
+    confirmed: undefined
+  })
+})
+
+const makeConfirmedImpl = Effect.fnUntraced(function*(schema: Schema.Top, options: ConfirmedOptions<unknown>) {
+  // Kept for later: a rejection moves the replica to a new id.
+  const crypto = yield* Crypto.Crypto
+  const freshId = Effect.provideService(InternalEngine.randomReplicaId, Crypto.Crypto, crypto)
+  const self = yield* makeWith(schema, {
+    initial: options.initial,
+    strategy: "tree",
+    replica: options.replica ?? (yield* freshId),
+    confirmed: { version: {}, freshId }
+  })
+  const connection = yield* InternalConnection.connect(self, yield* Authority.Authority, {
+    document: options.document,
+    authority: true,
+    retry: options.retry
+  })
+  return Object.assign(self, { connection })
+})
+
+const impl = (self: ReplicatedDocument<unknown>): ReplicatedDocumentImpl => self as ReplicatedDocumentImpl
+
+const toEdit = (event: InternalEngine.Event): Edit<unknown> => {
+  switch (event._tag) {
+    case "Local":
+      return { _tag: "Local", value: event.value }
+    case "Remote":
+      return { _tag: "Remote", value: event.value, overlaps: event.overlaps }
+    case "Rejected":
+      return { _tag: "Rejected", value: event.value, message: event.message }
+  }
+}
+
+const updateImpl = (self: ReplicatedDocument<unknown>, f: (value: unknown) => unknown) => {
+  const { engine, initial, memo, schema, shape } = impl(self)
+  const validate = Schema.decodeUnknownResult(Schema.toType(schema))
+  return InternalEngine.edit(engine, (document) => {
+    const value = f(engine.model.read(document))
+    const valid = validate(value)
+    return Result.isFailure(valid)
+      ? Result.fail(valid.failure)
+      : InternalShape.plan(shape, document, value, initial, memo)
+  })
+}
+
+// Public API --------------------------------------------------------------
+
+/**
+ * A replica of a document whose value is an `A`.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface ReplicatedDocument<out A> extends Replica.Replica<A> {
+  readonly [TypeId]: typeof TypeId
+}
+
+/**
+ * A replicated document that answers to an authority. `connection` is its link
+ * to the authority.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface Confirmed<out A> extends ReplicatedDocument<A> {
+  readonly connection: Sync.Connection
+}
+
+/**
+ * Options for `make`.
+ *
+ * **Details**
+ *
+ * - `initial`: what the document shows for parts nobody has written. It's
+ *   never sent, so every replica must use the same one: define it next to the
+ *   schema, never from local data. Texts, records and lists start empty in it,
+ *   and optional fields start absent; to start with content, write it as a
+ *   change.
+ * - `strategy`: how its texts merge. `"tree"` (the default) or `"replay"`.
+ * - `replica`: the replica id to write changes under. Leave it out to get a
+ *   fresh random one.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface Options<A> {
+  readonly initial: A
+  readonly strategy?: Replica.Strategy | undefined
+  readonly replica?: Replica.ReplicaId | undefined
+}
+
+/**
+ * Marks a string as a text that merges character by character, with the
+ * document's strategy. Edit it through `text`. Unmarked strings take the
+ * latest write.
+ *
+ * **Gotchas**
+ *
+ * A text can't have checks, such as a maximum length: merging edits that each
+ * passed a check can break it. `make` refuses such a schema; put the rule in
+ * an authority's check instead.
+ *
+ * @stability unstable
+ * @category schemas
+ * @since 0.1.0
+ */
+export const Text: Schema.String = Schema.String.annotate({ [InternalShape.RuleKey]: { _tag: "Text" } })
+
+/**
+ * Marks a whole number as a counter, which merges by adding: two concurrent
+ * increments of 1 make 2. `update` writes the difference between the old
+ * value and the new one.
+ *
+ * **Details**
+ *
+ * Counters are whole numbers because fractions added in a different order on
+ * each replica can round differently, and the replicas would disagree. Like a
+ * text, a counter can't have checks.
+ *
+ * @stability unstable
+ * @category schemas
+ * @since 0.1.0
+ */
+export const Counter: Schema.Int = Schema.Int.annotate({ [InternalShape.RuleKey]: { _tag: "Counter" } })
+
+/**
+ * The fields of `A` whose values are strings: what can identify a list's items.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export type KeyOf<A> = { readonly [K in keyof A]-?: A[K] extends string ? K : never }[keyof A] & string
+
+/**
+ * An array that merges item by item: items inserted, removed, moved and edited
+ * concurrently all survive, and an item moved by two replicas at once ends up
+ * in one place.
+ *
+ * **Details**
+ *
+ * With `key`, items are structs (or classes) identified by that field, which
+ * the app sets, usually to a random id. `update` compares the old and new
+ * arrays by key: new keys are inserts, missing ones are removals, keys in a
+ * different order are moves, and items in both merge their fields. A removal
+ * wins over concurrent edits inside the item.
+ *
+ * Without `key`, items are values, compared by value: changing one counts as
+ * removing it and inserting another.
+ *
+ * An array that isn't a `List` is a value, written whole.
+ *
+ * **Example** (A task board)
+ *
+ * ```ts import.meta.vitest
+ * import { Schema } from "effect"
+ * import { ReplicatedDocument } from "effect-delta"
+ *
+ * const Task = Schema.Struct({ id: Schema.String, title: ReplicatedDocument.Text, done: Schema.Boolean })
+ * const Board = Schema.Struct({
+ *   tasks: ReplicatedDocument.List(Task, { key: "id" }),
+ *   tags: ReplicatedDocument.List(Schema.String)
+ * })
+ * ```
+ *
+ * @stability unstable
+ * @category schemas
+ * @since 0.1.0
+ */
+export const List: {
+  <S extends Schema.Top>(item: S, options: { readonly key: KeyOf<S["Type"]> }): Schema.$Array<S>
+  <S extends Schema.Top>(item: S): Schema.$Array<S>
+} = <S extends Schema.Top>(item: S, options?: { readonly key: string }): Schema.$Array<S> =>
+  Schema.Array(item).annotate({ [InternalShape.RuleKey]: { _tag: "List", key: options?.key } })
+
+/**
+ * Creates a document with the value `initial`.
+ *
+ * **Details**
+ *
+ * The schema's root must be a struct, a class or a record. A schema whose
+ * merge rules can't hold, such as a check across a struct's fields or a text
+ * inside a union, is refused with a defect, as is an `initial` that doesn't
+ * fit it.
+ *
+ * Without a `replica` option, a fresh random replica id comes from `Crypto`,
+ * which platform layers such as `NodeServices.layer` provide.
+ *
+ * **Example** (Two copies of a document)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect, Schema } from "effect"
+ * import { Replica, ReplicatedDocument } from "effect-delta"
+ *
+ * const Note = Schema.Struct({ title: ReplicatedDocument.Text, pinned: Schema.Boolean })
+ * const initial = { title: "", pinned: false }
+ *
+ * const program = Effect.gen(function*() {
+ *   const laptop = yield* ReplicatedDocument.make(Note, { initial, replica: Replica.ReplicaId.make("laptop") })
+ *   const phone = yield* ReplicatedDocument.make(Note, { initial, replica: Replica.ReplicaId.make("phone") })
+ *   yield* ReplicatedDocument.update(laptop, (note) => ({ ...note, title: "Groceries" }))
+ *   yield* ReplicatedDocument.update(phone, (note) => ({ ...note, pinned: true }))
+ *   yield* Replica.exchange(laptop, phone)
+ *   return yield* ReplicatedDocument.get(phone)
+ * })
+ *
+ * await Effect.runPromise(program) // => { title: "Groceries", pinned: true }
+ * ```
+ *
+ * @stability unstable
+ * @category constructors
+ * @since 0.1.0
+ */
+export const make: {
+  <A>(
+    schema: Schema.Schema<A>,
+    options: Options<NoInfer<A>> & { readonly replica: Replica.ReplicaId }
+  ): Effect.Effect<ReplicatedDocument<A>>
+  <A>(
+    schema: Schema.Schema<A>,
+    options: Options<NoInfer<A>>
+  ): Effect.Effect<ReplicatedDocument<A>, never, Crypto.Crypto>
+} = makeImpl as any
+
+/**
+ * Options for `makeConfirmed`.
+ *
+ * **Details**
+ *
+ * - `initial`: as for `make`.
+ * - `document`: which document on the authority this is a replica of.
+ * - `replica`: the replica id to start with. Leave it out to get a fresh
+ *   random one.
+ * - `retry`: how to retry a lost connection. The default backs off from 200
+ *   milliseconds to every 10 seconds, indefinitely.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface ConfirmedOptions<A> {
+  readonly initial: A
+  readonly document: Replica.DocumentId
+  readonly replica?: Replica.ReplicaId | undefined
+  readonly retry?: Schedule.Schedule<unknown, Sync.SyncError> | undefined
+}
+
+/**
+ * Creates a document whose changes an authority confirms or rejects, with the
+ * tree strategy. It syncs through the `Authority` it requires, for the life of
+ * the scope, and with nothing else.
+ *
+ * **Details**
+ *
+ * Edits apply immediately and are unconfirmed until the authority
+ * acknowledges them. When the authority rejects a change, the replica drops
+ * it and every unconfirmed change made after it, emits a `Rejected` edit with
+ * the value rolled back, and continues under a new replica id. The authority
+ * checks it through `ReplicatedDocument.readProposal`.
+ *
+ * @stability unstable
+ * @category constructors
+ * @since 0.1.0
+ */
+export const makeConfirmed: <A>(
+  schema: Schema.Schema<A>,
+  options: ConfirmedOptions<NoInfer<A>>
+) => Effect.Effect<Confirmed<A>, never, Authority.Authority | Crypto.Crypto | Scope.Scope> = makeConfirmedImpl as any
+
+/**
+ * Returns the document's value.
+ *
+ * **Details**
+ *
+ * Reading never fails. Parts nobody wrote come from `initial`. Parts this
+ * schema doesn't describe, written by a newer version of it, are left out,
+ * and so are entries and items it can't read; a value whose latest write it
+ * can't decode shows the latest write it can.
+ *
+ * @stability unstable
+ * @category getters
+ * @since 0.1.0
+ */
+export const get = <A>(self: ReplicatedDocument<A>): Effect.Effect<A> =>
+  SubscriptionRef.get(impl(self).engine.value) as Effect.Effect<A>
+
+/**
+ * Returns a stream of the document's value: its current value, then each new
+ * value after a local edit or a merge.
+ *
+ * **Details**
+ *
+ * A new value shares every part that didn't change with the one before, so a
+ * UI can skip re-rendering parts that are the same object as before.
+ *
+ * @stability unstable
+ * @category getters
+ * @since 0.1.0
+ */
+export const changes = <A>(self: ReplicatedDocument<A>): Stream.Stream<A> =>
+  SubscriptionRef.changes(impl(self).engine.value) as Stream.Stream<A>
+
+/**
+ * How the document changed, and why.
+ *
+ * **Details**
+ *
+ * - `Local`: an edit made on this replica.
+ * - `Remote`: changes from another replica merged in, with any overlaps the
+ *   merge found.
+ * - `Rejected`: an authority rejected this replica's edit; `value` is rolled
+ *   back.
+ *
+ * Each has the value after it.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export type Edit<A> =
+  | { readonly _tag: "Local"; readonly value: A }
+  | { readonly _tag: "Remote"; readonly value: A; readonly overlaps: ReadonlyArray<Replica.Overlap> }
+  | { readonly _tag: "Rejected"; readonly value: A; readonly message: string }
+
+/**
+ * The value at the moment of subscribing, and every edit after it.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface Subscription<A> {
+  readonly value: A
+  readonly edits: Stream.Stream<Edit<A>>
+}
+
+/**
+ * Subscribes to the document's edits for the life of the scope. No edit is
+ * missed between reading `value` and the first of `edits`.
+ *
+ * @stability unstable
+ * @category getters
+ * @since 0.1.0
+ */
+export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscription<A>, never, Scope.Scope> => {
+  const { engine } = impl(self)
+  return InternalEngine.locked(
+    engine,
+    Effect.gen(function*() {
+      // Taken under the lock, so no edit lands between reading the value and
+      // subscribing.
+      const subscription = yield* PubSub.subscribe(engine.events)
+      return {
+        value: yield* SubscriptionRef.get(engine.value),
+        edits: Stream.map(Stream.fromSubscription(subscription), toEdit)
+      } as Subscription<A>
+    })
+  )
+}
+
+/**
+ * Replaces the value with `f` of the current value, as one change.
+ *
+ * **Details**
+ *
+ * The new value is compared with the old part by part, and only what changed
+ * is written: values that aren't equal (by `Schema.toEquivalence`), texts as
+ * one replacement each (as `ReplicatedText.set` does), counters by the
+ * difference, and records and lists by which keys appear and disappear. Fails
+ * with `Schema.SchemaError` if the new value doesn't fit the schema.
+ *
+ * Editors should edit text fields through `text`, which says exactly what the
+ * user did; `update` has to work it out.
+ *
+ * **Example** (Changing one field)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect, Schema } from "effect"
+ * import { Replica, ReplicatedDocument } from "effect-delta"
+ *
+ * const Settings = Schema.Struct({ theme: Schema.Literals(["light", "dark"]), fontSize: Schema.Int })
+ *
+ * const program = Effect.gen(function*() {
+ *   const settings = yield* ReplicatedDocument.make(Settings, {
+ *     initial: { theme: "light", fontSize: 14 },
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
+ *   yield* ReplicatedDocument.update(settings, (current) => ({ ...current, theme: "dark" }))
+ *   return yield* ReplicatedDocument.get(settings)
+ * })
+ *
+ * await Effect.runPromise(program) // => { theme: "dark", fontSize: 14 }
+ * ```
+ *
+ * @stability unstable
+ * @category editing
+ * @since 0.1.0
+ */
+export const update: {
+  <A>(f: (value: A) => A): (self: ReplicatedDocument<A>) => Effect.Effect<void, Schema.SchemaError>
+  <A>(self: ReplicatedDocument<A>, f: NoInfer<(value: A) => A>): Effect.Effect<void, Schema.SchemaError>
+} = dual(2, updateImpl)
+
+/**
+ * Replaces the value with `value`, as one change, writing only what changed
+ * (see `update`).
+ *
+ * @stability unstable
+ * @category editing
+ * @since 0.1.0
+ */
+export const set: {
+  <A>(value: NoInfer<A>): (self: ReplicatedDocument<A>) => Effect.Effect<void, Schema.SchemaError>
+  <A>(self: ReplicatedDocument<A>, value: NoInfer<A>): Effect.Effect<void, Schema.SchemaError>
+} = dual(2, <A>(self: ReplicatedDocument<A>, value: A) => updateImpl(self, () => value))
+
+/**
+ * A path through a value's fields, record keys and list item keys that ends
+ * at a string: where a text field can be.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export type TextPath<A> = A extends string ? readonly []
+  : A extends ReadonlyArray<infer Item> ? readonly [string, ...TextPath<Item>]
+  : A extends ((...args: ReadonlyArray<any>) => any) | Date ? never
+  : A extends object ? { readonly [K in keyof A & string]-?: readonly [K, ...TextPath<Exclude<A[K], undefined>>] }[
+      keyof A & string
+    ]
+  : never
+
+/**
+ * Returns the text field at `path`, for the `ReplicatedText` functions:
+ * `insert`, `remove`, `applyPatch`, `set`, `update`, `get`, `changes`,
+ * `subscribe` and the anchor functions.
+ *
+ * **Details**
+ *
+ * Each edit through it is one change to the document. A text field in a
+ * record entry or list item that doesn't exist, or was removed, still works:
+ * its text is kept, and shows once the entry exists. A path that isn't a
+ * `Text` in the schema is a defect.
+ *
+ * **Example** (Editing a text field)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect, Schema } from "effect"
+ * import { Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
+ *
+ * const Post = Schema.Struct({ title: ReplicatedDocument.Text, body: ReplicatedDocument.Text })
+ *
+ * const program = Effect.gen(function*() {
+ *   const post = yield* ReplicatedDocument.make(Post, {
+ *     initial: { title: "", body: "" },
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
+ *   const body = ReplicatedDocument.text(post, ["body"])
+ *   yield* ReplicatedText.insert(body, 0, "Hello")
+ *   yield* ReplicatedText.insert(body, 5, ", world")
+ *   return yield* ReplicatedDocument.get(post)
+ * })
+ *
+ * await Effect.runPromise(program) // => { title: "", body: "Hello, world" }
+ * ```
+ *
+ * @stability unstable
+ * @category text fields
+ * @since 0.1.0
+ */
+export const text: {
+  <A>(path: TextPath<A>): (self: ReplicatedDocument<A>) => ReplicatedText.Editable
+  <A>(self: ReplicatedDocument<A>, path: TextPath<A>): ReplicatedText.Editable
+} = dual(2, (self: ReplicatedDocument<unknown>, path: Replica.Path): ReplicatedText.Editable => {
+  const found = InternalShape.at(impl(self).shape, path)
+  if (found?._tag !== "Part" || found.shape._tag !== "Text") {
+    throw new Error(`${JSON.stringify(path)} isn't a text field of the document`)
+  }
+  return InternalEditable.make(impl(self).engine, path)
+})
+
+/**
+ * A proposal an authority received, read with the document's schema: the
+ * value before and after the change, and where the change wrote.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface Proposed<A> {
+  readonly before: A
+  readonly after: A
+  readonly paths: ReadonlyArray<Replica.Path>
+}
+
+/**
+ * Reads a document proposal with the app's schema and initial value, as
+ * replicas read the document, for an authority's check. The app picks the
+ * schema from the document id, as it already decides who may open which
+ * document.
+ *
+ * **Example** (Only the owner approves)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect, Layer, Schema } from "effect"
+ * import { Authority, HistoryStore, ReplicatedDocument } from "effect-delta"
+ *
+ * const Spec = Schema.Struct({ body: ReplicatedDocument.Text, status: Schema.Literals(["draft", "approved"]) })
+ * const initial = { body: "", status: "draft" } as const
+ *
+ * const OwnerApproves = Authority.layer({
+ *   check: (proposal) => {
+ *     if (proposal._tag === "Text") return Effect.void
+ *     const { after, before } = ReplicatedDocument.readProposal(proposal, Spec, { initial })
+ *     return after.status === "approved" && before.status !== "approved" && proposal.user !== "owner"
+ *       ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
+ *       : Effect.void
+ *   }
+ * }).pipe(Layer.provide(HistoryStore.layerMemory))
+ * ```
+ *
+ * @stability unstable
+ * @category authorities
+ * @since 0.1.0
+ */
+export const readProposal = <A>(
+  proposal: Authority.DocumentProposal,
+  schema: Schema.Schema<A>,
+  options: { readonly initial: NoInfer<A> }
+): Proposed<A> => {
+  const shape = shapeOf(schema)
+  return {
+    before: InternalShape.readJson(shape, proposal.before, options.initial) as A,
+    after: InternalShape.readJson(shape, proposal.after, options.initial) as A,
+    paths: proposal.paths
+  }
+}
+
+/**
+ * Returns `true` when a value is a replicated document.
+ *
+ * @stability unstable
+ * @category guards
+ * @since 0.1.0
+ */
+export const isReplicatedDocument = (u: unknown): u is ReplicatedDocument<unknown> => hasProperty(u, TypeId)

@@ -12,102 +12,80 @@
  * Replicas exchange changes with `Replica.exchange`, or over a network with the
  * `Sync`, `Relay` and `Authority` modules.
  *
+ * Every function except the constructors takes an `Editable`: a replicated
+ * text, or a text field of a `ReplicatedDocument`. So one editor binding works
+ * for both.
+ *
  * @stability unstable
  * @since 0.1.0
  */
 import * as Crypto from "effect/Crypto"
 import * as Effect from "effect/Effect"
-import * as Equal from "effect/Equal"
 import { dual } from "effect/Function"
+import type * as Inspectable from "effect/Inspectable"
 import * as Option from "effect/Option"
+import type { Pipeable } from "effect/Pipeable"
 import { hasProperty } from "effect/Predicate"
 import * as PubSub from "effect/PubSub"
+import * as Result from "effect/Result"
 import type * as Schedule from "effect/Schedule"
 import * as Schema from "effect/Schema"
 import type * as Scope from "effect/Scope"
-import * as Semaphore from "effect/Semaphore"
 import * as Stream from "effect/Stream"
-import * as SubscriptionRef from "effect/SubscriptionRef"
 import * as Authority from "./Authority.ts"
 import * as InternalAnchor from "./internal/anchor.ts"
-import { key } from "./internal/change.ts"
 import * as InternalConnection from "./internal/connection.ts"
-import * as InternalDelta from "./internal/delta.ts"
-import * as History from "./internal/history.ts"
+import * as InternalDocument from "./internal/document.ts"
+import * as InternalEditable from "./internal/editable.ts"
+import * as InternalEngine from "./internal/engine.ts"
+import * as InternalPath from "./internal/path.ts"
 import * as InternalReplica from "./internal/replica.ts"
+import * as InternalShape from "./internal/shape.ts"
 import * as InternalText from "./internal/text.ts"
-import * as Replica from "./Replica.ts"
+import type * as Replica from "./Replica.ts"
 import type * as Sync from "./Sync.ts"
 import * as TextPatch from "./TextPatch.ts"
-import * as VersionVector from "./VersionVector.ts"
 
 const TypeId = "~effect-delta/ReplicatedText"
 
 // Implementation ----------------------------------------------------------
 
-interface ReplicatedTextImpl extends ReplicatedText {
+interface ReplicatedTextImpl extends ReplicatedText, InternalEditable.EditableImpl {
   readonly core: InternalReplica.Core
-  readonly semaphore: Semaphore.Semaphore
-  readonly state: State
-  readonly textRef: SubscriptionRef.SubscriptionRef<string>
-  readonly edits: PubSub.PubSub<Edit>
-}
-
-interface State {
-  replica: Replica.ReplicaId
-  nextSeq: number
-  /** Every replica id this replica has written under, including ones restored from storage. */
-  readonly writers: Set<string>
-  /** The text and its history, under the replica's strategy. */
-  text: InternalText.Text
-  /** Only for replicas that answer to an authority. */
-  readonly confirmed: ConfirmedState | undefined
-}
-
-interface ConfirmedState {
-  /** What the authority has acknowledged. */
-  version: VersionVector.VersionVector
-  /** Where the next replica id comes from after a rejection. */
-  readonly freshId: Effect.Effect<Replica.ReplicaId>
 }
 
 const Proto = {
   ...InternalReplica.Proto,
   [TypeId]: TypeId,
+  [InternalEditable.TypeId]: InternalEditable.TypeId,
   toJSON(this: ReplicatedTextImpl) {
-    return { _id: "ReplicatedText", strategy: this.strategy, text: this.state.text.value }
+    return { _id: "ReplicatedText", strategy: this.strategy, text: InternalEditable.text(this) }
   }
 }
 
-const randomReplicaId = Effect.gen(function*() {
-  const crypto = yield* Crypto.Crypto
-  return Replica.ReplicaId.make(yield* Effect.orDie(crypto.randomUUIDv4()))
-})
+// A replicated text is a document whose only part is a text at the root.
+const model: InternalEngine.Model = {
+  read: (document) => InternalDocument.textAt(document, InternalPath.root)?.value ?? "",
+  check: (change) => InternalShape.check(InternalShape.text, change)
+}
 
 const makeWith = Effect.fnUntraced(function*(options: {
   readonly strategy: Replica.Strategy
   readonly replica: Replica.ReplicaId
-  readonly confirmed: ConfirmedState | undefined
+  readonly confirmed: InternalEngine.ConfirmedState | undefined
 }) {
-  const state: State = {
-    replica: options.replica,
-    nextSeq: 0,
-    writers: new Set([options.replica]),
-    text: InternalText.make(options.strategy),
-    confirmed: options.confirmed
-  }
+  const engine = yield* InternalEngine.make({ ...options, model })
   const self: ReplicatedTextImpl = Object.assign(Object.create(Proto), {
     strategy: options.strategy,
-    semaphore: yield* Semaphore.make(1),
-    state,
-    textRef: yield* SubscriptionRef.make(""),
-    edits: yield* PubSub.unbounded<Edit>()
+    engine,
+    path: InternalPath.root,
+    core: engine.core
   })
-  return Object.assign(self, { core: makeCore(self) })
+  return self
 })
 
 const makeImpl = Effect.fnUntraced(function*(options?: Options) {
-  const replica = options?.replica ?? (yield* randomReplicaId)
+  const replica = options?.replica ?? (yield* InternalEngine.randomReplicaId)
   return yield* makeWith({ strategy: options?.strategy ?? "tree", replica, confirmed: undefined }) as Effect.Effect<
     ReplicatedText
   >
@@ -116,7 +94,7 @@ const makeImpl = Effect.fnUntraced(function*(options?: Options) {
 const makeConfirmedImpl = Effect.fnUntraced(function*(options: ConfirmedOptions) {
   // Kept for later: a rejection moves the replica to a new id.
   const crypto = yield* Crypto.Crypto
-  const freshId = Effect.provideService(randomReplicaId, Crypto.Crypto, crypto)
+  const freshId = Effect.provideService(InternalEngine.randomReplicaId, Crypto.Crypto, crypto)
   const self = yield* makeWith({
     strategy: "tree",
     replica: options.replica ?? (yield* freshId),
@@ -130,67 +108,87 @@ const makeConfirmedImpl = Effect.fnUntraced(function*(options: ConfirmedOptions)
   return Object.assign(self, { connection }) as Confirmed
 })
 
-const impl = (self: ReplicatedText): ReplicatedTextImpl => self as ReplicatedTextImpl
+const impl = (self: Editable): InternalEditable.EditableImpl => self as InternalEditable.EditableImpl
 
-const locked = <A, E, R>(self: ReplicatedText, effect: Effect.Effect<A, E, R>) =>
-  impl(self).semaphore.withPermit(effect)
+const locked = <A, E, R>(self: Editable, effect: Effect.Effect<A, E, R>) =>
+  InternalEngine.locked(impl(self).engine, effect)
 
-// Publishes how the text changed, to `changes` and `subscribe`.
-const publish = (self: ReplicatedTextImpl, edit: Edit): Effect.Effect<void> =>
-  Effect.andThen(
-    SubscriptionRef.set(self.textRef, self.state.text.value),
-    PubSub.publish(self.edits, edit)
-  )
+// The text, or an empty one if nothing has been written to it yet.
+const textOf = (self: Editable): InternalText.Text =>
+  InternalDocument.textAt(impl(self).engine.state.document, impl(self).path) ??
+    InternalText.make(impl(self).engine.strategy)
 
 // Reading ------------------------------------------------------------------
 
-const getImpl = (self: ReplicatedText): Effect.Effect<string> =>
-  locked(self, Effect.sync(() => impl(self).state.text.value))
+const getImpl = (self: Editable): Effect.Effect<string> => locked(self, Effect.sync(() => InternalEditable.text(self)))
 
-const changesImpl = (self: ReplicatedText): Stream.Stream<string> => SubscriptionRef.changes(impl(self).textRef)
+// Events that change this text, or say something about it.
+const editsOf = (self: Editable, events: Stream.Stream<InternalEngine.Event>): Stream.Stream<Edit> => {
+  const { path } = impl(self)
+  const k = InternalPath.key(path)
+  return events.pipe(
+    Stream.map((event): Edit | undefined => {
+      const patch = event.texts.get(k)?.patch ?? TextPatch.empty
+      switch (event._tag) {
+        case "Local":
+          return patch.length === 0 ? undefined : { _tag: "Local", patch }
+        case "Remote": {
+          const overlaps = event.overlaps.filter((overlap) =>
+            overlap._tag === "Text" && InternalPath.equals(overlap.path, path)
+          )
+          return patch.length === 0 && overlaps.length === 0 ? undefined : { _tag: "Remote", patch, overlaps }
+        }
+        case "Rejected":
+          return { _tag: "Rejected", patch, message: event.message }
+      }
+    }),
+    Stream.filter((edit): edit is Edit => edit !== undefined)
+  )
+}
 
-const subscribeImpl = (
-  self: ReplicatedText
-): Effect.Effect<Subscription, never, Scope.Scope> =>
+const changesImpl = (self: Editable): Stream.Stream<string> =>
+  Stream.unwrap(Effect.map(subscribeImpl(self), ({ edits, text }) =>
+    Stream.concat(
+      Stream.succeed(text),
+      Stream.mapEffect(edits, () => getImpl(self))
+    )))
+
+const subscribeImpl = (self: Editable): Effect.Effect<Subscription, never, Scope.Scope> =>
   locked(
     self,
     Effect.gen(function*() {
       // Taken under the lock, so no edit lands between reading the text and
       // subscribing.
-      const subscription = yield* PubSub.subscribe(impl(self).edits)
-      return { text: impl(self).state.text.value, edits: Stream.fromSubscription(subscription) }
+      const subscription = yield* PubSub.subscribe(impl(self).engine.events)
+      return { text: InternalEditable.text(self), edits: editsOf(self, Stream.fromSubscription(subscription)) }
     })
   )
 
 // Editing ------------------------------------------------------------------
 
-const applyPatchImpl = (
-  self: ReplicatedText,
-  patch: TextPatch.TextPatch
-): Effect.Effect<void, ReplicatedTextError> =>
-  locked(
-    self,
-    Effect.suspend(() => {
-      const s = impl(self).state
-      const invalid = validate(s.text.value, patch)
-      if (invalid !== undefined) return Effect.fail(invalid)
-      const edited = s.text.edit(patch, { replica: s.replica, seq: s.nextSeq })
-      if (edited === undefined) return Effect.void
-      s.nextSeq += edited.change.length
-      return publish(impl(self), { _tag: "Local", patch: edited.patch })
-    })
-  )
+const editText = <E>(
+  self: Editable,
+  patchOf: (text: string) => Result.Result<TextPatch.TextPatch, E>
+): Effect.Effect<void, E> =>
+  InternalEngine.edit(impl(self).engine, (document) => {
+    const { path } = impl(self)
+    return Result.map(
+      patchOf(InternalDocument.textAt(document, path)?.value ?? ""),
+      (patch): ReadonlyArray<InternalDocument.Intent> => [{ _tag: "Text", path, patch }]
+    )
+  })
 
-const setImpl = (self: ReplicatedText, text: string): Effect.Effect<void> =>
-  Effect.orDie(
-    locked(
-      self,
-      Effect.suspend(() => Effect.succeed(TextPatch.get(impl(self).state.text.value, text)))
-    ).pipe(Effect.flatMap((patch) => applyPatchImpl(self, patch)))
-  )
+const applyPatchImpl = (self: Editable, patch: TextPatch.TextPatch): Effect.Effect<void, ReplicatedTextError> =>
+  editText(self, (text) => {
+    const invalid = validate(text, patch)
+    return invalid === undefined ? Result.succeed(patch) : Result.fail(invalid)
+  })
 
-const updateImpl = (self: ReplicatedText, f: (text: string) => string): Effect.Effect<void> =>
-  Effect.flatMap(getImpl(self), (text) => setImpl(self, f(text)))
+const setImpl = (self: Editable, text: string): Effect.Effect<void> =>
+  editText(self, (current) => Result.succeed(TextPatch.get(current, text)))
+
+const updateImpl = (self: Editable, f: (text: string) => string): Effect.Effect<void> =>
+  editText(self, (current) => Result.succeed(TextPatch.get(current, f(current))))
 
 // Checks a patch against the text it's for: it must stay inside the text and
 // never cut a surrogate pair (half of an emoji) apart.
@@ -231,31 +229,31 @@ const isLowSurrogate = (code: number): boolean => code >= 0xdc00 && code <= 0xdf
 // Anchors ------------------------------------------------------------------
 
 const anchorImpl = (
-  self: ReplicatedText,
+  self: Editable,
   index: number,
   side: TextPatch.Side
 ): Effect.Effect<Anchor, ReplicatedTextError> =>
   locked(
     self,
     Effect.suspend(() => {
-      const text = impl(self).state.text
+      const text = textOf(self)
       if (index < 0 || index > text.value.length) return Effect.fail(outOfBounds(index, text.value.length))
       if (splitsPair(text.value, index)) return Effect.fail(splitsSurrogatePair(index))
       return Effect.succeed(text.anchor(index, side))
     })
   )
 
-const locateImpl = (self: ReplicatedText, anchor: Anchor): Effect.Effect<Option.Option<number>> =>
-  locked(self, Effect.sync(() => impl(self).state.text.locate(anchor)))
+const locateImpl = (self: Editable, anchor: Anchor): Effect.Effect<Option.Option<number>> =>
+  locked(self, Effect.sync(() => textOf(self).locate(anchor)))
 
 const anchorRangeImpl = (
-  self: ReplicatedText,
+  self: Editable,
   range: Range
 ): Effect.Effect<AnchorRange, ReplicatedTextError> =>
   locked(
     self,
     Effect.suspend(() => {
-      const text = impl(self).state.text
+      const text = textOf(self)
       const length = text.value.length
       if (range.start < 0 || range.start > range.end) return Effect.fail(outOfBounds(range.start, length))
       if (range.end > length) return Effect.fail(outOfBounds(range.end, length))
@@ -267,179 +265,19 @@ const anchorRangeImpl = (
   )
 
 const locateRangeImpl = (
-  self: ReplicatedText,
+  self: Editable,
   range: AnchorRange
 ): Effect.Effect<Option.Option<Range>> =>
   locked(
     self,
     Effect.sync(() => {
-      const text = impl(self).state.text
+      const text = textOf(self)
       const start = text.locate(range.start)
       const end = text.locate(range.end)
       if (Option.isNone(start) || Option.isNone(end) || end.value <= start.value) return Option.none()
       return Option.some({ start: start.value, end: end.value })
     })
   )
-
-// Syncing ------------------------------------------------------------------
-
-const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
-  const { state } = self
-  const subscribeAll = Effect.map(
-    PubSub.subscribe(self.edits),
-    (subscription) => Stream.map(Stream.fromSubscription(subscription), () => undefined)
-  )
-  return {
-    id: Effect.sync(() => state.replica),
-    version: locked(self, Effect.sync(() => ({ ...state.text.history.version }))),
-    delta: (since) =>
-      locked(
-        self,
-        Effect.sync(() =>
-          InternalDelta.fromChanges(
-            History.since(state.text.history, since).filter((change) => !isUnconfirmed(state, change))
-          )
-        )
-      ),
-    receive: (delta) =>
-      state.confirmed !== undefined
-        ? Effect.fail(deltaError(new Replica.AuthorityOnly()))
-        : locked(self, Effect.suspend(() => receive(self, delta as InternalDelta.DeltaImpl))),
-    accept: (delta) => locked(self, Effect.suspend(() => receive(self, delta as InternalDelta.DeltaImpl))),
-    outgoing: (since) =>
-      locked(
-        self,
-        Effect.sync(() =>
-          InternalDelta.fromChanges(
-            History.since(state.text.history, since).filter((change) => state.writers.has(change.replica))
-          )
-        )
-      ),
-    changed: subscribeAll,
-    toStore: (since) =>
-      locked(
-        self,
-        Effect.sync(() => {
-          const unconfirmed = [...state.text.history.changes.values()].filter((change) => isUnconfirmed(state, change))
-          const version: Record<string, number> = { ...state.text.history.version }
-          for (const change of unconfirmed) version[change.replica] = Math.min(version[change.replica]!, change.seq)
-          return {
-            history: InternalDelta.fromChanges(
-              History.since(state.text.history, since).filter((change) => !isUnconfirmed(state, change))
-            ),
-            unconfirmed: InternalDelta.fromChanges(unconfirmed),
-            writers: [...state.writers].map((writer) => Replica.ReplicaId.make(writer)),
-            version,
-            text: state.text.value
-          }
-        })
-      ),
-    restore: (stored) =>
-      locked(
-        self,
-        Effect.suspend(() => {
-          for (const writer of stored.writers) state.writers.add(writer)
-          const all = InternalDelta.combine(stored.history, stored.unconfirmed)
-          const { snapshot } = stored
-          if (snapshot !== undefined) {
-            // Start from the snapshot's text where the strategy can, and merge
-            // only what came after it.
-            const inSnapshot = (change: InternalText.AnyChange) =>
-              change.seq + change.length <= VersionVector.get(snapshot.version, change.replica)
-            const changes = [...all.changes.values()]
-            if (state.text.load(changes.filter(inSnapshot), snapshot.version, snapshot.text)) {
-              const after = InternalDelta.fromChanges(changes.filter((change) => !inSnapshot(change)))
-              return publish(self, { _tag: "Remote", patch: TextPatch.insert(0, snapshot.text), overlaps: [] }).pipe(
-                Effect.andThen(receive(self, after)),
-                Effect.asVoid
-              )
-            }
-          }
-          return Effect.asVoid(receive(self, all))
-        })
-      ),
-    confirmed: state.confirmed === undefined ? undefined : {
-      acknowledge: (version) =>
-        locked(
-          self,
-          Effect.sync(() => {
-            state.confirmed!.version = VersionVector.combine(state.confirmed!.version, version)
-          })
-        ),
-      reject: (version, message) =>
-        locked(
-          self,
-          Effect.gen(function*() {
-            const confirmed = state.confirmed!
-            confirmed.version = VersionVector.combine(confirmed.version, version)
-            const before = state.text.value
-            // Everything the authority doesn't have was made on top of the
-            // rejected change, and nobody else has seen it, so it all goes.
-            const { changes, pending } = state.text.history
-            state.text = InternalText.rebuild(
-              state.text.strategy,
-              [...changes.values()].filter((change) => !isUnconfirmed(state, change))
-            )
-            for (const change of pending.values()) state.text.history.pending.set(key(change), change)
-            // A new id, so sequence numbers are never reused and never skip.
-            state.replica = yield* confirmed.freshId
-            state.nextSeq = 0
-            state.writers.add(state.replica)
-            yield* publish(self, { _tag: "Rejected", patch: TextPatch.get(before, state.text.value), message })
-          })
-        )
-    }
-  }
-}
-
-// A confirmed replica's own changes that its authority hasn't acknowledged.
-const isUnconfirmed = (state: State, change: InternalText.AnyChange): boolean =>
-  state.confirmed !== undefined && state.writers.has(change.replica) &&
-  change.seq + change.length > VersionVector.get(state.confirmed.version, change.replica)
-
-const receive = (
-  self: ReplicatedTextImpl,
-  delta: InternalDelta.DeltaImpl
-): Effect.Effect<ReadonlyArray<Replica.Overlap>, Replica.DeltaError> => {
-  const { state } = self
-  const { history } = state.text
-  // Checked before anything changes, so a bad delta leaves the replica as it was.
-  for (const change of delta.changes.values()) {
-    if (InternalText.strategyOf(change) !== state.text.strategy) {
-      return Effect.fail(deltaError(new Replica.StrategyMismatch({ expected: state.text.strategy })))
-    }
-    const existing = history.changes.get(key(change)) ?? history.pending.get(key(change))
-    if (
-      (change.replica === state.replica && existing === undefined) ||
-      (existing !== undefined && !Equal.equals(existing, change))
-    ) {
-      return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
-    }
-  }
-  for (const change of delta.changes.values()) {
-    if (!History.has(history, change)) history.pending.set(key(change), change)
-  }
-
-  const ready = History.takeReady(history)
-  if (ready.length === 0) return Effect.succeed([])
-  const { overlaps: found, patch, problem } = state.text.integrate(ready, { overlaps: true })
-  const overlaps: ReadonlyArray<Replica.Overlap> = found.map((overlap) => ({
-    _tag: "Text",
-    range: { start: overlap.start, end: overlap.end },
-    anchors: overlap.anchors,
-    replicas: overlap.replicas.map((replica) => Replica.ReplicaId.make(replica))
-  }))
-  const published = patch.length === 0 && overlaps.length === 0
-    ? Effect.void
-    : publish(self, { _tag: "Remote", patch, overlaps })
-  if (problem === undefined) return Effect.as(published, overlaps)
-  // The bad change is dropped; whatever was ready behind it keeps waiting.
-  const [, ...behind] = ready.filter((change) => !history.changes.has(key(change)))
-  for (const change of behind) history.pending.set(key(change), change)
-  return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem }))))
-}
-
-const deltaError = (reason: Replica.DeltaError["reason"]) => new Replica.DeltaError({ reason })
 
 // Public API --------------------------------------------------------------
 
@@ -450,8 +288,22 @@ const deltaError = (reason: Replica.DeltaError["reason"]) => new Replica.DeltaEr
  * @category models
  * @since 0.1.0
  */
-export interface ReplicatedText extends Replica.Replica<string> {
+export interface ReplicatedText extends Replica.Replica<string>, Editable {
   readonly [TypeId]: typeof TypeId
+}
+
+const EditableTypeId: typeof InternalEditable.TypeId = InternalEditable.TypeId
+
+/**
+ * A text that can be edited, watched and anchored: a replicated text, or a
+ * text field of a document (see `ReplicatedDocument.text`).
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface Editable extends Pipeable, Inspectable.Inspectable {
+  readonly [EditableTypeId]: typeof EditableTypeId
 }
 
 /**
@@ -599,7 +451,7 @@ export const makeConfirmed: (
  * @category getters
  * @since 0.1.0
  */
-export const get: (self: ReplicatedText) => Effect.Effect<string> = getImpl
+export const get: (self: Editable) => Effect.Effect<string> = getImpl
 
 /**
  * Returns a stream of the text: its current value, then each new value after a
@@ -609,7 +461,7 @@ export const get: (self: ReplicatedText) => Effect.Effect<string> = getImpl
  * @category getters
  * @since 0.1.0
  */
-export const changes: (self: ReplicatedText) => Stream.Stream<string> = changesImpl
+export const changes: (self: Editable) => Stream.Stream<string> = changesImpl
 
 /**
  * How the text changed, and why.
@@ -676,7 +528,7 @@ export interface Subscription {
  * @category getters
  * @since 0.1.0
  */
-export const subscribe: (self: ReplicatedText) => Effect.Effect<Subscription, never, Scope.Scope> = subscribeImpl
+export const subscribe: (self: Editable) => Effect.Effect<Subscription, never, Scope.Scope> = subscribeImpl
 
 /**
  * The index was outside the text.
@@ -725,11 +577,11 @@ const splitsSurrogatePair = (index: number) => new ReplicatedTextError({ reason:
  * @since 0.1.0
  */
 export const insert: {
-  (index: number, text: string): (self: ReplicatedText) => Effect.Effect<void, ReplicatedTextError>
-  (self: ReplicatedText, index: number, text: string): Effect.Effect<void, ReplicatedTextError>
+  (index: number, text: string): (self: Editable) => Effect.Effect<void, ReplicatedTextError>
+  (self: Editable, index: number, text: string): Effect.Effect<void, ReplicatedTextError>
 } = dual(
   3,
-  (self: ReplicatedText, index: number, text: string) =>
+  (self: Editable, index: number, text: string) =>
     applyPatchImpl(self, [{ _tag: "Retain", length: index }, { _tag: "Insert", text }])
 )
 
@@ -741,11 +593,11 @@ export const insert: {
  * @since 0.1.0
  */
 export const remove: {
-  (index: number, length: number): (self: ReplicatedText) => Effect.Effect<void, ReplicatedTextError>
-  (self: ReplicatedText, index: number, length: number): Effect.Effect<void, ReplicatedTextError>
+  (index: number, length: number): (self: Editable) => Effect.Effect<void, ReplicatedTextError>
+  (self: Editable, index: number, length: number): Effect.Effect<void, ReplicatedTextError>
 } = dual(
   3,
-  (self: ReplicatedText, index: number, length: number) =>
+  (self: Editable, index: number, length: number) =>
     applyPatchImpl(self, [{ _tag: "Retain", length: index }, { _tag: "Remove", length }])
 )
 
@@ -758,8 +610,8 @@ export const remove: {
  * @since 0.1.0
  */
 export const applyPatch: {
-  (patch: TextPatch.TextPatch): (self: ReplicatedText) => Effect.Effect<void, ReplicatedTextError>
-  (self: ReplicatedText, patch: TextPatch.TextPatch): Effect.Effect<void, ReplicatedTextError>
+  (patch: TextPatch.TextPatch): (self: Editable) => Effect.Effect<void, ReplicatedTextError>
+  (self: Editable, patch: TextPatch.TextPatch): Effect.Effect<void, ReplicatedTextError>
 } = dual(2, applyPatchImpl)
 
 /**
@@ -779,8 +631,8 @@ export const applyPatch: {
  * @since 0.1.0
  */
 export const set: {
-  (text: string): (self: ReplicatedText) => Effect.Effect<void>
-  (self: ReplicatedText, text: string): Effect.Effect<void>
+  (text: string): (self: Editable) => Effect.Effect<void>
+  (self: Editable, text: string): Effect.Effect<void>
 } = dual(2, setImpl)
 
 /**
@@ -808,8 +660,8 @@ export const set: {
  * @since 0.1.0
  */
 export const update: {
-  (f: (text: string) => string): (self: ReplicatedText) => Effect.Effect<void>
-  (self: ReplicatedText, f: (text: string) => string): Effect.Effect<void>
+  (f: (text: string) => string): (self: Editable) => Effect.Effect<void>
+  (self: Editable, f: (text: string) => string): Effect.Effect<void>
 } = dual(2, updateImpl)
 
 /**
@@ -907,11 +759,11 @@ export interface Range {
  * @since 0.1.0
  */
 export const anchor: {
-  (index: number, side?: Side): (self: ReplicatedText) => Effect.Effect<Anchor, ReplicatedTextError>
-  (self: ReplicatedText, index: number, side?: Side): Effect.Effect<Anchor, ReplicatedTextError>
+  (index: number, side?: Side): (self: Editable) => Effect.Effect<Anchor, ReplicatedTextError>
+  (self: Editable, index: number, side?: Side): Effect.Effect<Anchor, ReplicatedTextError>
 } = dual(
-  (args) => isReplicatedText(args[0]),
-  (self: ReplicatedText, index: number, side: Side = "before") => anchorImpl(self, index, side)
+  (args) => InternalEditable.isEditable(args[0]),
+  (self: Editable, index: number, side: Side = "before") => anchorImpl(self, index, side)
 )
 
 /**
@@ -924,8 +776,8 @@ export const anchor: {
  * @since 0.1.0
  */
 export const locate: {
-  (anchor: Anchor): (self: ReplicatedText) => Effect.Effect<Option.Option<number>>
-  (self: ReplicatedText, anchor: Anchor): Effect.Effect<Option.Option<number>>
+  (anchor: Anchor): (self: Editable) => Effect.Effect<Option.Option<number>>
+  (self: Editable, anchor: Anchor): Effect.Effect<Option.Option<number>>
 } = dual(2, locateImpl)
 
 /**
@@ -937,8 +789,8 @@ export const locate: {
  * @since 0.1.0
  */
 export const anchorRange: {
-  (range: Range): (self: ReplicatedText) => Effect.Effect<AnchorRange, ReplicatedTextError>
-  (self: ReplicatedText, range: Range): Effect.Effect<AnchorRange, ReplicatedTextError>
+  (range: Range): (self: Editable) => Effect.Effect<AnchorRange, ReplicatedTextError>
+  (self: Editable, range: Range): Effect.Effect<AnchorRange, ReplicatedTextError>
 } = dual(2, anchorRangeImpl)
 
 /**
@@ -950,8 +802,8 @@ export const anchorRange: {
  * @since 0.1.0
  */
 export const locateRange: {
-  (range: AnchorRange): (self: ReplicatedText) => Effect.Effect<Option.Option<Range>>
-  (self: ReplicatedText, range: AnchorRange): Effect.Effect<Option.Option<Range>>
+  (range: AnchorRange): (self: Editable) => Effect.Effect<Option.Option<Range>>
+  (self: Editable, range: AnchorRange): Effect.Effect<Option.Option<Range>>
 } = dual(2, locateRangeImpl)
 
 /**
@@ -962,3 +814,13 @@ export const locateRange: {
  * @since 0.1.0
  */
 export const isReplicatedText = (u: unknown): u is ReplicatedText => hasProperty(u, TypeId)
+
+/**
+ * Returns `true` when a value is an editable text: a replicated text, or a
+ * document's text field.
+ *
+ * @stability unstable
+ * @category guards
+ * @since 0.1.0
+ */
+export const isEditable: (u: unknown) => u is Editable = InternalEditable.isEditable

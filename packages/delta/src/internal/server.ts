@@ -18,26 +18,29 @@ import type * as Authority from "../Authority.ts"
 import * as HistoryStore from "../HistoryStore.ts"
 import * as Replica from "../Replica.ts"
 import * as Sync from "../Sync.ts"
+import * as TextPatch from "../TextPatch.ts"
 import type * as VersionVector from "../VersionVector.ts"
 import { key } from "./change.ts"
 import * as InternalDelta from "./delta.ts"
+import * as InternalDocument from "./document.ts"
 import * as History from "./history.ts"
-import * as InternalText from "./text.ts"
+import * as Path from "./path.ts"
 
 // The core shared by relays and authorities. Each document is held in memory
 // while it's in use: loaded from the history store when first asked for, and
 // released a minute after its last use. Pushed changes are checked, stored and
 // only then sent to subscribers, so no subscriber sees a change the store
-// doesn't have.
+// doesn't have. A server has no schema: changes say what they do, so it
+// applies them as they are.
 
 interface Document {
   readonly id: Replica.DocumentId
   readonly lock: Semaphore.Semaphore
   /**
-   * Undefined until the document's strategy is known: from what's stored, or
-   * else from the first replica to subscribe or push.
+   * Its strategy is undefined until it's known: from what's stored, or else
+   * from the first replica to subscribe or push a text op.
    */
-  text: InternalText.Text | undefined
+  state: InternalDocument.Document
   /** Who each replica id belongs to: the first user who wrote with it. */
   readonly owners: Map<string, string>
   readonly updates: PubSub.PubSub<Sync.Update>
@@ -97,13 +100,13 @@ export const make = Effect.fnUntraced(function*(options: {
       }
       const document = yield* open(request.document)
       return yield* document.lock.withPermit(Effect.gen(function*() {
-        document.text ??= InternalText.make(request.strategy)
-        const { history, strategy } = document.text
-        if (strategy !== request.strategy) {
+        const { history, strategy } = document.state
+        if (strategy !== undefined && strategy !== request.strategy) {
           return yield* syncError(
             new Sync.ProtocolViolation({ message: `Document ${document.id} uses the ${strategy} strategy` })
           )
         }
+        document.state.strategy = request.strategy
         // Subscribed under the lock, so no update lands between the first one
         // and the rest.
         const subscription = yield* PubSub.subscribe(document.updates)
@@ -132,21 +135,24 @@ export const make = Effect.fnUntraced(function*(options: {
           }
         }
 
-        if (incoming.length === 0) return new Sync.Accepted({ confirmed: held(document.text?.history) })
-        // A document's strategy is its first change's.
-        const strategy = document.text?.strategy ?? (isAuthority ? "tree" : InternalText.strategyOf(incoming[0]!))
+        const text = document.state
+        if (incoming.length === 0) return new Sync.Accepted({ confirmed: held(text.history) })
+        // A document's strategy is its first text op's.
+        const strategy = text.strategy ?? (isAuthority
+          ? "tree"
+          : incoming.flatMap((change) => [...InternalDocument.strategiesOf(change)])[0])
         for (const change of incoming) {
-          if (strategy === undefined || InternalText.strategyOf(change) !== strategy) {
+          if ([...InternalDocument.strategiesOf(change)].some((other) => other !== strategy)) {
             return yield* syncError(
               new Replica.DeltaError({ reason: new Replica.StrategyMismatch({ expected: strategy ?? "tree" }) })
             )
           }
         }
-        const text = document.text ??= InternalText.make(strategy!)
+        text.strategy = strategy
 
         // Changes that are new here wait as pending until what they build on
         // is here, then they're checked and applied in causal order.
-        const fresh: Array<InternalText.AnyChange> = []
+        const fresh: Array<InternalDocument.AnyChange> = []
         for (const change of incoming) {
           const existing = text.history.changes.get(key(change)) ?? text.history.pending.get(key(change))
           if (existing !== undefined && !Equal.equals(existing, change)) {
@@ -171,19 +177,37 @@ export const make = Effect.fnUntraced(function*(options: {
           }
         } else {
           for (const change of History.takeReady(text.history)) {
-            const before = text.value
-            const { patch, problem } = text.integrate([change], { overlaps: false })
+            // A change all at the root is a replicated text's.
+            const isText = change.ops.every((op) => Path.isRoot(InternalDocument.pathOf(op)))
+            const before = isText ? rootText(text) : InternalDocument.toJson(text)
+            const { problem, texts } = InternalDocument.integrate(text, [change], { overlaps: false })
             if (problem !== undefined) {
               malformed = problem
               break
             }
-            const verdict = yield* Effect.result(
-              check({ document: document.id, user, patch, before, after: text.value })
-            )
+            const verdict = yield* Effect.result(check(
+              isText
+                ? {
+                  _tag: "Text",
+                  document: document.id,
+                  user,
+                  patch: texts.get(Path.key(Path.root))?.patch ?? TextPatch.empty,
+                  before: before as string,
+                  after: rootText(text)
+                }
+                : {
+                  _tag: "Document",
+                  document: document.id,
+                  user,
+                  before,
+                  after: InternalDocument.toJson(text),
+                  paths: pathsOf(change)
+                }
+            ))
             if (Result.isFailure(verdict)) {
               // Start over without it. An authority keeps nothing pending, so
               // nothing else is lost.
-              document.text = InternalText.rebuild(
+              document.state = InternalDocument.rebuild(
                 text.strategy,
                 [...text.history.changes.values()].filter((c) => c !== change)
               )
@@ -192,7 +216,7 @@ export const make = Effect.fnUntraced(function*(options: {
             }
           }
         }
-        const { history } = document.text
+        const { history } = document.state
 
         // A relay keeps changes that wait for something they build on; an
         // authority can't check those, so it drops them.
@@ -241,7 +265,7 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
   const document: Document = {
     id,
     lock: yield* Semaphore.make(1),
-    text: undefined,
+    state: InternalDocument.make(undefined),
     owners: new Map(),
     updates,
     failed: yield* Deferred.make<never, Sync.SyncError>()
@@ -249,14 +273,12 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
   if (Option.isSome(stored)) {
     for (const [replica, owner] of Object.entries(stored.value.writers)) document.owners.set(replica, owner)
     const changes = [...(stored.value.history as InternalDelta.DeltaImpl).changes.values()]
-    const strategy = changes.length === 0 ? undefined : InternalText.strategyOf(changes[0]!)
-    if (strategy !== undefined) {
-      const text = document.text = InternalText.make(strategy)
-      for (const change of changes) text.history.pending.set(key(change), change)
-      // Applied changes were checked before they were stored. One that was
-      // stored while it waited, and turns out to be bad, is dropped.
-      integrateAll(text)
-    }
+    const state = document.state
+    state.strategy = changes.flatMap((change) => [...InternalDocument.strategiesOf(change)])[0]
+    for (const change of changes) state.history.pending.set(key(change), change)
+    // Applied changes were checked before they were stored. One that was
+    // stored while it waited, and turns out to be bad, is dropped.
+    integrateAll(state)
   }
   return document
 })
@@ -264,23 +286,38 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
 // Applies every pending change that can be applied, dropping bad ones (and
 // leaving whatever builds on them waiting). Returns what was wrong with each
 // bad one.
-const integrateAll = (text: InternalText.Text): Array<{ readonly key: string; readonly message: string }> => {
+const integrateAll = (
+  state: InternalDocument.Document
+): Array<{ readonly key: string; readonly message: string }> => {
   const problems: Array<{ readonly key: string; readonly message: string }> = []
-  for (let ready = History.takeReady(text.history); ready.length > 0; ready = History.takeReady(text.history)) {
-    const { problem } = text.integrate(ready, { overlaps: false })
+  const { history } = state
+  for (let ready = History.takeReady(history); ready.length > 0; ready = History.takeReady(history)) {
+    const { problem } = InternalDocument.integrate(state, ready, { overlaps: false })
     if (problem === undefined) break
-    const [bad, ...behind] = ready.filter((change) => !text.history.changes.has(key(change)))
+    const [bad, ...behind] = ready.filter((change) => !history.changes.has(key(change)))
     problems.push({ key: key(bad!), message: problem })
-    for (const change of behind) text.history.pending.set(key(change), change)
+    for (const change of behind) history.pending.set(key(change), change)
   }
   return problems
+}
+
+const rootText = (state: InternalDocument.Document): string => InternalDocument.textAt(state, Path.root)?.value ?? ""
+
+// The paths a change wrote to, in order.
+const pathsOf = (change: InternalDocument.AnyChange): ReadonlyArray<Replica.Path> => {
+  const paths = new Map<string, Replica.Path>()
+  for (const op of change.ops) {
+    const path = InternalDocument.pathOf(op)
+    paths.set(Path.key(path), path)
+  }
+  return [...paths.values()]
 }
 
 // Stores changes, and claims their replica ids for `user`.
 const save = Effect.fnUntraced(function*(
   store: HistoryStore.HistoryStore["Service"],
   document: Document,
-  changes: ReadonlyArray<InternalText.AnyChange>,
+  changes: ReadonlyArray<InternalDocument.AnyChange>,
   user: string
 ) {
   yield* store.append(document.id, InternalDelta.fromChanges(changes)).pipe(Effect.mapError(unavailable))

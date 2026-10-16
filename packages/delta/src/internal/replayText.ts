@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema"
 import * as TextPatch from "../TextPatch.ts"
 import { type Change, type Id, idKey, key, lastId } from "./change.ts"
 import * as Fugue from "./fugue.ts"
+import { Path } from "./path.ts"
 import type * as TreeText from "./treeText.ts"
 
 // The replay strategy (Eg-walker, Gentle & Kleppmann, EuroSys 2025). Ops say
@@ -18,18 +19,19 @@ import type * as TreeText from "./treeText.ts"
 
 /**
  * An op of the replay strategy, applied in order to the text its change was
- * made on top of.
+ * made on top of. `path` is the text's place in a document, absent for the
+ * root.
  *
  * @internal
  */
 export type Op =
-  | { readonly _tag: "InsertAt"; readonly index: number; readonly text: string }
-  | { readonly _tag: "RemoveAt"; readonly index: number; readonly length: number }
+  | { readonly _tag: "InsertAt"; readonly path?: Path; readonly index: number; readonly text: string }
+  | { readonly _tag: "RemoveAt"; readonly path?: Path; readonly index: number; readonly length: number }
 
 /** @internal */
 export const Op: Schema.Codec<Op> = Schema.Union([
-  Schema.TaggedStruct("InsertAt", { index: Schema.Int, text: Schema.String }),
-  Schema.TaggedStruct("RemoveAt", { index: Schema.Int, length: Schema.Int })
+  Schema.TaggedStruct("InsertAt", { path: Schema.optionalKey(Path), index: Schema.Int, text: Schema.String }),
+  Schema.TaggedStruct("RemoveAt", { path: Schema.optionalKey(Path), index: Schema.Int, length: Schema.Int })
 ])
 
 /** @internal */

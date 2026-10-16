@@ -63,7 +63,15 @@ const toChanges = (transactions: ReadonlyArray<Transaction>): Array<Change<TreeT
         seq += inserted.length
       }
     }
-    changes.push({ replica: txn.agent, seq: txn.seqStart, length, parents: txn.parents.map(idOf), ops })
+    // A transaction's versions come after its parents', so they serve as write times.
+    changes.push({
+      replica: txn.agent,
+      seq: txn.seqStart,
+      length,
+      parents: txn.parents.map(idOf),
+      time: txn.span[0]!,
+      ops
+    })
   })
   return changes
 }

@@ -91,10 +91,10 @@ describe("HistoryStore", () => {
           yield* ReplicatedText.insert(first, 0, "Chapter one")
         }))
         const snapshot = Option.getOrThrow(Option.getOrThrow(yield* store.load(notes)).snapshot)
-        assert.deepStrictEqual(snapshot, { version: { "session-1": 11 }, text: "Chapter one" })
+        assert.deepStrictEqual(snapshot, { version: { "session-1": 11 }, texts: [{ path: [], text: "Chapter one" }] })
 
         // A snapshot whose text the history wouldn't give shows it wasn't replayed.
-        yield* store.setSnapshot(notes, { ...snapshot, text: "Chapter ONE" })
+        yield* store.setSnapshot(notes, { ...snapshot, texts: [{ path: [], text: "Chapter ONE" }] })
         // A change saved after the snapshot, as when an app quits before its last save.
         const other = yield* makeReplay("other")
         yield* Replica.receive(other, Option.getOrThrow(yield* store.load(notes)).history)
@@ -112,7 +112,7 @@ describe("HistoryStore", () => {
           const first = yield* openReplay("session-1")
           yield* ReplicatedText.insert(first, 0, "Chapter one")
         }))
-        yield* store.setSnapshot(notes, { version: { "session-1": 5 }, text: "Wrong" })
+        yield* store.setSnapshot(notes, { version: { "session-1": 5 }, texts: [{ path: [], text: "Wrong" }] })
         const reopened = yield* Effect.scoped(Effect.flatMap(openReplay("session-2"), ReplicatedText.get))
         assert.strictEqual(reopened, "Chapter one")
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
@@ -165,8 +165,10 @@ describe("HistoryStore", () => {
     }).pipe(
       Effect.provide([
         Authority.layer({
-          check: ({ after }) =>
-            after.includes("secret") ? Effect.fail(new Authority.Rejected({ message: "No secrets" })) : Effect.void
+          check: (proposal) =>
+            proposal._tag === "Text" && proposal.after.includes("secret")
+              ? Effect.fail(new Authority.Rejected({ message: "No secrets" }))
+              : Effect.void
         }).pipe(Layer.provide(HistoryStore.layerMemory)),
         HistoryStore.layerKeyValueStore({ prefix: "client" }).pipe(Layer.provide(KeyValueStore.layerMemory)),
         TestCrypto.layer("store").pipe(Layer.provide(NodeCrypto.layer))

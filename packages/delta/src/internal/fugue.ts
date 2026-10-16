@@ -280,6 +280,18 @@ export const remove = <Info>(node: Node<Info>, info: Info): boolean => {
 }
 
 /**
+ * Hides or shows a node, for trees whose nodes come and go: a list's
+ * positions, where only each item's latest position shows.
+ *
+ * @internal
+ */
+export const setRemoved = <Info>(node: Node<Info>, removed: boolean): void => {
+  if (node.removed === removed) return
+  node.removed = removed
+  updateSize(node, removed ? -1 : 1)
+}
+
+/**
  * The visible character at `index`.
  *
  * @internal

@@ -157,12 +157,11 @@ describe("ReplicatedText", () => {
         assert.strictEqual(text, "# Decisions\nLaunch is Friday. Sessions last 812 hours.")
         assert.strictEqual(overlaps.length, 1)
         const [overlap] = overlaps
-        assert.strictEqual(text.slice(overlap!.range.start, overlap!.range.end), "812")
-        assert.deepStrictEqual(overlap!.replicas.map(String), ["alice", "bob"])
-        assert.deepStrictEqual(
-          yield* ReplicatedText.locateRange(alice, overlap!.anchors),
-          Option.some(overlap!.range)
-        )
+        if (overlap?._tag !== "Text") return assert.fail("expected a text overlap")
+        assert.strictEqual(text.slice(overlap.range.start, overlap.range.end), "812")
+        assert.deepStrictEqual(overlap.path, [])
+        assert.deepStrictEqual(overlap.replicas.map(String), ["alice", "bob"])
+        assert.deepStrictEqual(yield* ReplicatedText.locateRange(alice, overlap.anchors), Option.some(overlap.range))
       }))
 
     it.effect("doesn't report edits that saw each other, or far-apart edits", () =>

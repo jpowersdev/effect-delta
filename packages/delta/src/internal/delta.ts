@@ -5,15 +5,8 @@ import { pipeArguments } from "effect/Pipeable"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import type * as Delta from "../Delta.ts"
-import { Change, key } from "./change.ts"
-import * as ReplayText from "./replayText.ts"
-import * as TreeText from "./treeText.ts"
-
-/** @internal */
-export const AnyChange = Change(Schema.Union([TreeText.Op, ReplayText.Op]))
-
-/** @internal */
-export type AnyChange = typeof AnyChange.Type
+import { key } from "./change.ts"
+import { AnyChange } from "./document.ts"
 
 // Must match the TypeId in Delta.ts.
 const TypeId = "~effect-delta/Delta"

@@ -42,12 +42,25 @@ export class Authority extends Context.Service<Authority, Sync.Server>()("effect
 
 /**
  * A change an authority is asked to accept: who made it, and what it does to
- * the document as the authority has it.
+ * the document as the authority has it. `Text` for a replicated text,
+ * `Document` for a `ReplicatedDocument`.
  *
  * **Details**
  *
- * - `user`: the user pushing it, from `Sync.Authorization.identify` (or
- *   `Sync.CurrentUser`, in this process).
+ * Both have `document` and `user`: the user pushing it, from
+ * `Sync.Authorization.identify` (or `Sync.CurrentUser`, in this process).
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export type Proposal = TextProposal | DocumentProposal
+
+/**
+ * A change to a replicated text.
+ *
+ * **Details**
+ *
  * - `before` and `after`: the text without and with the change.
  * - `patch`: how the change turns `before` into `after`.
  *
@@ -55,12 +68,38 @@ export class Authority extends Context.Service<Authority, Sync.Server>()("effect
  * @category models
  * @since 0.1.0
  */
-export interface Proposal {
+export interface TextProposal {
+  readonly _tag: "Text"
   readonly document: Replica.DocumentId
   readonly user: string
   readonly patch: TextPatch.TextPatch
   readonly before: string
   readonly after: string
+}
+
+/**
+ * A change to a document. An authority has no schema, so the document is
+ * JSON; `ReplicatedDocument.readProposal` reads it with the app's.
+ *
+ * **Details**
+ *
+ * - `before` and `after`: the document without and with the change, as JSON.
+ *   Only the parts that have been written are there, and removed parts
+ *   aren't. Texts are strings, counters are the sum of their increments, and
+ *   values are their latest write, encoded with their schema's JSON codec.
+ * - `paths`: where the change wrote.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface DocumentProposal {
+  readonly _tag: "Document"
+  readonly document: Replica.DocumentId
+  readonly user: string
+  readonly before: Schema.Json
+  readonly after: Schema.Json
+  readonly paths: ReadonlyArray<Replica.Path>
 }
 
 /**

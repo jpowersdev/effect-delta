@@ -16,6 +16,8 @@ export interface History<Op> {
   readonly pending: Map<string, Change<Op>>
   readonly version: Record<string, number>
   frontier: ReadonlyArray<Id>
+  /** The latest write time of an applied change, or -1 before the first. */
+  time: number
 }
 
 /** @internal */
@@ -25,7 +27,8 @@ export const make = <Op>(): History<Op> => ({
   pasts: new Map(),
   pending: new Map(),
   version: {},
-  frontier: []
+  frontier: [],
+  time: -1
 })
 
 /** @internal */
@@ -76,6 +79,7 @@ export const record = <Op>(history: History<Op>, change: Change<Op>, past: Versi
   }
   ofReplica.push(change)
   history.version[change.replica] = change.seq + change.length
+  history.time = Math.max(history.time, change.time)
   history.frontier = [
     ...history.frontier.filter((tip) =>
       !change.parents.some((parent) => parent.replica === tip.replica && parent.seq === tip.seq)
@@ -138,16 +142,6 @@ export const since = <Op>(history: History<Op>, since: VersionVector.VersionVect
   return out
 }
 
-/**
- * Whether `id` is the last sequence number of an applied change.
- *
- * @internal
- */
-export const endsAt = (history: History<unknown>, id: Id): boolean => {
-  const change = find(history, id)
-  return change !== undefined && change.seq + change.length - 1 === id.seq
-}
-
 // The applied change that consumed sequence number `id`.
 const containing = <Op>(history: History<Op>, id: Id): Change<Op> => {
   const change = find(history, id)
@@ -155,7 +149,12 @@ const containing = <Op>(history: History<Op>, id: Id): Change<Op> => {
   return change
 }
 
-const find = <Op>(history: History<Op>, id: Id): Change<Op> | undefined => {
+/**
+ * The applied change that consumed sequence number `id`, if any.
+ *
+ * @internal
+ */
+export const find = <Op>(history: History<Op>, id: Id): Change<Op> | undefined => {
   const changes = history.byReplica.get(id.replica) ?? []
   let low = 0
   let high = changes.length - 1

@@ -39,6 +39,8 @@ const toChanges = (transactions: ReadonlyArray<Transaction>): Array<Change<Repla
       seq: txn.seqStart,
       length: txn.span[1]! - txn.span[0]!,
       parents: txn.parents.map(idOf),
+      // A transaction's versions come after its parents', so they serve as write times.
+      time: txn.span[0]!,
       ops
     }
   })
@@ -117,6 +119,7 @@ describe("replay against tree", () => {
           assert.strictEqual(yield* ReplicatedText.get(alice), "Sessions last hours.")
           // Anchored on the removed characters, so they still find the spot.
           for (const overlap of found) {
+            if (overlap._tag !== "Text") return assert.fail("expected a text overlap")
             assert.deepStrictEqual(yield* ReplicatedText.locate(alice, overlap.anchors.start), Option.some(14))
           }
           return found

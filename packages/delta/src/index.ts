@@ -39,6 +39,12 @@ export * as Replica from "./Replica.ts"
  * @stability unstable
  * @since 0.1.0
  */
+export * as ReplicatedDocument from "./ReplicatedDocument.ts"
+
+/**
+ * @stability unstable
+ * @since 0.1.0
+ */
 export * as ReplicatedText from "./ReplicatedText.ts"
 
 /**

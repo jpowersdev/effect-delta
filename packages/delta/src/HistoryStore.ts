@@ -5,7 +5,7 @@
  *
  * The store itself only appends deltas and remembers a few small records, so
  * it's easy to back with anything. For the replay strategy it also keeps a
- * snapshot of the text, so reopening a document reads the text instead of
+ * snapshot of the texts, so reopening a document reads them instead of
  * replaying its history. `layerMemory` keeps everything in memory;
  * `layerKeyValueStore` uses Effect's `KeyValueStore`, which has file system,
  * Web Storage and SQL implementations.
@@ -24,7 +24,7 @@ import type * as Scope from "effect/Scope"
 import * as Stream from "effect/Stream"
 import * as Delta from "./Delta.ts"
 import * as InternalReplica from "./internal/replica.ts"
-import type * as Replica from "./Replica.ts"
+import * as Replica from "./Replica.ts"
 import * as VersionVector from "./VersionVector.ts"
 
 /**
@@ -38,7 +38,7 @@ import * as VersionVector from "./VersionVector.ts"
  * - `writers`: every replica id written under for this document here, and who
  *   it belongs to. Replicas use it to upload changes made in earlier sessions;
  *   servers use it to know whose edits are whose.
- * - `snapshot`: the text at a version, if one was saved.
+ * - `snapshot`: the texts at a version, if they were saved.
  *
  * @stability unstable
  * @category models
@@ -52,9 +52,9 @@ export interface Stored {
 }
 
 /**
- * The text at a version: what the changes in `version` make. Replicas that
- * can start from it (the replay strategy) don't replay those changes when
- * they load.
+ * The texts at a version: what the changes in `version` make, with each
+ * text's path (`[]` for a replicated text). Replicas that can start from them
+ * (the replay strategy) don't replay those changes when they load.
  *
  * @stability unstable
  * @category models
@@ -62,7 +62,7 @@ export interface Stored {
  */
 export interface Snapshot {
   readonly version: VersionVector.VersionVector
-  readonly text: string
+  readonly texts: ReadonlyArray<{ readonly path: Replica.Path; readonly text: string }>
 }
 
 /**
@@ -197,7 +197,7 @@ export const layerKeyValueStore = (options: {
     const SnapshotRecord = Schema.Struct({
       format: Schema.Literal(1),
       version: VersionVector.VersionVector,
-      text: Schema.String
+      texts: Schema.Array(Schema.Struct({ path: Replica.Path, text: Schema.String }))
     })
 
     const count = (document: string) =>
@@ -224,7 +224,7 @@ export const layerKeyValueStore = (options: {
           history,
           unconfirmed: Option.getOrElse(unconfirmed, () => Delta.empty),
           writers: Option.getOrElse(writers, () => ({})),
-          snapshot: Option.map(snapshot, ({ text, version }) => ({ version, text }))
+          snapshot: Option.map(snapshot, ({ texts, version }) => ({ version, texts }))
         })
       }),
       append: Effect.fnUntraced(function*(document, delta) {
@@ -340,7 +340,7 @@ export const persist = Effect.fnUntraced(function*(
       // between, so a reload has little to replay.
       const covered = size(next.version)
       if (replica.strategy === "replay" && covered > snapshotAt && (final || covered - snapshotAt >= snapshotEvery)) {
-        yield* store.setSnapshot(document, { version: next.version, text: next.text })
+        yield* store.setSnapshot(document, { version: next.version, texts: next.texts })
         snapshotAt = covered
       }
     })

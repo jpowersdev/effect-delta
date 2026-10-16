@@ -31,6 +31,7 @@ const program = Effect.gen(function*() {
   // Launch is Friday. Sessions last 812 hours.    (or 128; the same on both laptops)
 
   for (const overlap of overlaps) {
+    if (overlap._tag !== "Text") continue
     const range = yield* ReplicatedText.locateRange(alice, overlap.anchors)
     const text = yield* ReplicatedText.get(alice)
     yield* Console.log(

@@ -98,40 +98,86 @@ export const DocumentId = Schema.String.pipe(Schema.brand("DocumentId"))
 export type DocumentId = typeof DocumentId.Type
 
 /**
- * Schema for an overlap: a stretch of merged text where changes from replicas
- * that hadn't seen each other's edits met.
- *
- * **Details**
- *
- * Every replica converges anyway. An overlap says where a person might want to
- * look, for example where "8 hours" and "12 hours" merged into "812 hours".
- * `range` is where the stretch is in the merged text right now (empty if both
- * sides removed all of it); `anchors` follow it from here on.
+ * Where a part of a document is: field names, record keys and list item keys
+ * from the root, such as `["comments", "c1", "text"]`. A replicated text, and
+ * the root of a document, are at `[]`.
  *
  * @stability unstable
  * @category schemas
  * @since 0.1.0
  */
-export const Overlap: Schema.Codec<Overlap, OverlapEncoded> = Schema.TaggedStruct("Text", {
-  range: Schema.Struct({ start: Schema.Int, end: Schema.Int }),
-  anchors: InternalAnchor.AnchorRange,
-  replicas: Schema.Array(ReplicaId)
-})
+export const Path: Schema.Codec<Path> = Schema.Array(Schema.String)
 
 /**
- * A stretch of merged text where changes from replicas that hadn't seen each
- * other's edits met.
+ * Where a part of a document is.
  *
  * @stability unstable
  * @category models
  * @since 0.1.0
  */
-export interface Overlap {
-  readonly _tag: "Text"
-  readonly range: ReplicatedText.Range
-  readonly anchors: ReplicatedText.AnchorRange
-  readonly replicas: ReadonlyArray<ReplicaId>
-}
+export type Path = ReadonlyArray<string>
+
+/**
+ * Schema for an overlap: a place where a merge brought together changes from
+ * replicas that hadn't seen each other's.
+ *
+ * @stability unstable
+ * @category schemas
+ * @since 0.1.0
+ */
+export const Overlap: Schema.Codec<Overlap, OverlapEncoded> = Schema.Union([
+  Schema.TaggedStruct("Text", {
+    path: Path,
+    range: Schema.Struct({ start: Schema.Int, end: Schema.Int }),
+    anchors: InternalAnchor.AnchorRange,
+    replicas: Schema.Array(ReplicaId)
+  }),
+  Schema.TaggedStruct("Value", { path: Path, replicas: Schema.Array(ReplicaId), kept: ReplicaId }),
+  Schema.TaggedStruct("Removed", { path: Path, replicas: Schema.Array(ReplicaId) })
+])
+
+/**
+ * A place where a merge brought together changes from replicas that hadn't
+ * seen each other's. Every replica converges anyway; an overlap says where a
+ * person might want to look.
+ *
+ * **Details**
+ *
+ * - `Text`: a stretch of the text at `path` where both edited, for example
+ *   where "8 hours" and "12 hours" merged into "812 hours". `range` is where
+ *   the stretch is in the merged text right now (empty if both sides removed
+ *   all of it); `anchors` follow it from here on.
+ * - `Value`: both wrote different values at `path`, or one removed it while
+ *   the other wrote it. `kept` is the replica whose write shows.
+ * - `Removed`: one removed the entry or list item at `path` while the other
+ *   changed something inside it. It stays removed, and its content is kept.
+ *
+ * Concurrent increments of a counter aren't overlaps, because nothing is
+ * lost.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export type Overlap =
+  | {
+    readonly _tag: "Text"
+    readonly path: Path
+    readonly range: ReplicatedText.Range
+    readonly anchors: ReplicatedText.AnchorRange
+    readonly replicas: ReadonlyArray<ReplicaId>
+  }
+  | {
+    readonly _tag: "Value"
+    readonly path: Path
+    readonly replicas: ReadonlyArray<ReplicaId>
+    readonly kept: ReplicaId
+  }
+  | {
+    readonly _tag: "Removed"
+    readonly path: Path
+    readonly replicas: ReadonlyArray<ReplicaId>
+  }
 
 /**
  * The JSON form of an overlap.
@@ -140,12 +186,25 @@ export interface Overlap {
  * @category models
  * @since 0.1.0
  */
-export interface OverlapEncoded {
-  readonly _tag: "Text"
-  readonly range: ReplicatedText.Range
-  readonly anchors: ReplicatedText.AnchorRange
-  readonly replicas: ReadonlyArray<string>
-}
+export type OverlapEncoded =
+  | {
+    readonly _tag: "Text"
+    readonly path: ReadonlyArray<string>
+    readonly range: ReplicatedText.Range
+    readonly anchors: ReplicatedText.AnchorRange
+    readonly replicas: ReadonlyArray<string>
+  }
+  | {
+    readonly _tag: "Value"
+    readonly path: ReadonlyArray<string>
+    readonly replicas: ReadonlyArray<string>
+    readonly kept: string
+  }
+  | {
+    readonly _tag: "Removed"
+    readonly path: ReadonlyArray<string>
+    readonly replicas: ReadonlyArray<string>
+  }
 
 /**
  * A delta held changes made with a different strategy than the replica's.
@@ -159,8 +218,9 @@ export class StrategyMismatch extends Schema.TaggedError<StrategyMismatch>()("St
 }) {}
 
 /**
- * A delta held a change that can't be applied: it refers to characters that
- * the changes it was made on top of don't have.
+ * A delta held a change that can't be applied: for example one that refers to
+ * characters the changes it was made on top of don't have, or one that
+ * doesn't fit the replica's schema.
  *
  * @stability unstable
  * @category errors

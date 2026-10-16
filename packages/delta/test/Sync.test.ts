@@ -24,8 +24,10 @@ const RelayLive = Relay.layer.pipe(Layer.provide(HistoryStore.layerMemory))
 
 // Rejects any change that leaves "secret" in the text.
 const NoSecrets = Authority.layer({
-  check: ({ after }) =>
-    after.includes("secret") ? Effect.fail(new Authority.Rejected({ message: "No secrets" })) : Effect.void
+  check: (proposal) =>
+    proposal._tag === "Text" && proposal.after.includes("secret")
+      ? Effect.fail(new Authority.Rejected({ message: "No secrets" }))
+      : Effect.void
 }).pipe(Layer.provide(HistoryStore.layerMemory))
 
 // A store whose first save fails.

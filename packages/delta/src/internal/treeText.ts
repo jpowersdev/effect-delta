@@ -5,6 +5,7 @@ import type * as VersionVector from "../VersionVector.ts"
 import type { Anchor } from "./anchor.ts"
 import { compareReplica, type Id, Id as IdSchema, type Span, Span as SpanSchema } from "./change.ts"
 import * as Fugue from "./fugue.ts"
+import { Path } from "./path.ts"
 
 // The tree strategy: text as a FugueMax tree. Ops name characters by id, so a
 // replica can apply another replica's op without knowing what else was
@@ -14,28 +15,31 @@ import * as Fugue from "./fugue.ts"
  * An op of the tree strategy. `Insert` adds a run of characters typed together;
  * the first goes at `parent`/`side` (with `rightOrigin` for right children) and
  * each later one follows the one before. `Remove` removes characters by id.
+ * `path` is the text's place in a document, absent for the root.
  *
  * @internal
  */
 export type Op =
   | {
     readonly _tag: "Insert"
+    readonly path?: Path
     readonly text: string
     readonly parent: Id | null
     readonly side: "L" | "R"
     readonly rightOrigin?: Id | null
   }
-  | { readonly _tag: "Remove"; readonly targets: ReadonlyArray<Span> }
+  | { readonly _tag: "Remove"; readonly path?: Path; readonly targets: ReadonlyArray<Span> }
 
 /** @internal */
 export const Op: Schema.Codec<Op> = Schema.Union([
   Schema.TaggedStruct("Insert", {
+    path: Schema.optionalKey(Path),
     text: Schema.String,
     parent: Schema.NullOr(IdSchema),
     side: Schema.Literals(["L", "R"]),
     rightOrigin: Schema.optionalKey(Schema.NullOr(IdSchema))
   }),
-  Schema.TaggedStruct("Remove", { targets: Schema.Array(SpanSchema) })
+  Schema.TaggedStruct("Remove", { path: Schema.optionalKey(Path), targets: Schema.Array(SpanSchema) })
 ])
 
 /** @internal */
