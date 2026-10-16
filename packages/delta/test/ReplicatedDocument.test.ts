@@ -1016,6 +1016,34 @@ describe("ReplicatedDocument", () => {
         }
       }).pipe(Effect.scoped))
 
+    it.effect("changes that arrive together don't meet, whatever bad change is among them", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* pair
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["title"]), 0, "A")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "review" }))
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ben, ["title"]), 0, "B")
+        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, status: "approved" }))
+        // Ready between Ada's and Ben's.
+        const bad = InternalDelta.fromChanges([{
+          replica: "b-bad",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "Set", path: ["status"], value: "draft" }]
+        }])
+        const carol = yield* make("carol")
+        const { edits } = yield* ReplicatedDocument.subscribe(carol)
+        const both = Delta.combine(
+          yield* Replica.delta(ada, VersionVector.empty),
+          yield* Replica.delta(ben, VersionVector.empty)
+        )
+        yield* Effect.flip(Replica.receive(carol, Delta.combine(both, bad)))
+        // Carol had neither Ada's edits nor Ben's, so she isn't told they met.
+        const edit = Option.getOrThrow(yield* Stream.runHead(edits))
+        assert.deepStrictEqual(edit._tag === "Remote" ? edit.overlaps : edit, [])
+      }).pipe(Effect.scoped))
+
     it.effect("a bad change that waited isn't held against the delta it waited for", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
