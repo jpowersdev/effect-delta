@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema"
 import * as TextPatch from "../TextPatch.ts"
-import { type Change, type Id, idKey, key, lastId } from "./change.ts"
+import { type Change, type Id, idKey, lastId } from "./change.ts"
 import * as Fugue from "./fugue.ts"
 import { Path } from "./path.ts"
 import type * as TreeText from "./treeText.ts"
@@ -42,7 +42,7 @@ export const opLength = (op: Op): number => op._tag === "InsertAt" ? op.text.len
 
 /**
  * Checks that a change's ops fit a text of `length` characters. Returns what's
- * wrong, if anything.
+ * wrong, if anything, said of the change.
  *
  * @internal
  */
@@ -50,7 +50,7 @@ export const check = (change: Change<Op>, length: number): string | undefined =>
   let current = length
   for (const op of change.ops) {
     if (op.index < 0 || op.index > current || (op._tag === "RemoveAt" && op.index + op.length > current)) {
-      return `Change ${key(change)} edits outside the text it was made on`
+      return "edits outside the text it was made on"
     }
     current += op._tag === "InsertAt" ? op.text.length : -op.length
   }

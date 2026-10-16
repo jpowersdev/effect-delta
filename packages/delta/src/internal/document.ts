@@ -668,7 +668,7 @@ const check = (
   }
   for (const part of parts) {
     const found = mergeOf(part.path, strategy!).check(part)
-    if (found !== undefined) return found
+    if (found !== undefined) return `${name} ${found}`
   }
   return undefined
 }
