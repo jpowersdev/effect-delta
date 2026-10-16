@@ -1002,6 +1002,34 @@ describe("Authority", () => {
       }).pipe(Effect.provide(ownerApproves(read)))
     })
 
+    it.effect("a check doesn't see an optional field nobody added inside a list item, as replicas don't", () => {
+      const Item = Schema.Struct({ id: Schema.String, note: Schema.optionalKey(ReplicatedDocument.Text) })
+      const List = Schema.Struct({ items: ReplicatedDocument.List(Item, { key: "id" }) })
+      const empty: typeof List.Type = { items: [] }
+      const read: Array<typeof List.Type> = []
+      const Recording = Authority.layer({
+        check: (proposal) =>
+          proposal._tag === "Text"
+            ? Effect.void
+            : Effect.map(ReplicatedDocument.readProposal(proposal, List, { initial: empty }), ({ after }) => {
+              read.push(after)
+            })
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const laptop = yield* ReplicatedDocument.make(List, {
+          initial: empty,
+          replica: Replica.ReplicaId.make("laptop")
+        })
+        yield* ReplicatedDocument.update(laptop, () => ({ items: [{ id: "i1" }] }))
+        // Typed into the item's note before the note is added.
+        yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["items", "i1", "note"]), 0, "Draft")
+        const delta = yield* Replica.delta(laptop, VersionVector.empty)
+        assert.strictEqual((yield* authority.push({ format: Sync.FORMAT, document: spec, delta }))._tag, "Accepted")
+        assert.deepStrictEqual(read.at(-1), yield* ReplicatedDocument.get(laptop))
+      }).pipe(Effect.provide(Recording))
+    })
+
     it.effect("a confirmed document syncs with nothing else", () =>
       Effect.gen(function*() {
         const confirmed = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
