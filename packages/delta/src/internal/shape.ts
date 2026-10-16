@@ -37,7 +37,10 @@ export type Shape = Fields | Entries | List | TextShape | Counter | Value
 export interface Fields {
   readonly _tag: "Fields"
   readonly fields: ReadonlyArray<Field>
-  /** Builds a class's instance from its fields; undefined for a plain struct. */
+  /**
+   * Builds the value from its fields: a class's instance, or a struct with its
+   * constructor defaults filled in. Undefined for a struct without defaults.
+   */
   readonly make: ((fields: object) => unknown) | undefined
 }
 
@@ -157,7 +160,9 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
   }
   if (SchemaAST.isObjects(ast) && ast.indexSignatures.length === 0) {
     if (ast.checks !== undefined) refuse(path, `a struct can't have checks: ${onMerged}`)
-    return { _tag: "Fields", fields: compileFields(ast, path), make: undefined }
+    const compiled = compileFields(ast, path)
+    const make = compiled.some(({ hasDefault }) => hasDefault) ? SchemaParser.make(Schema.make(ast)) : undefined
+    return { _tag: "Fields", fields: compiled, make }
   }
   if (SchemaAST.isObjects(ast) && ast.propertySignatures.length === 0 && ast.indexSignatures.length === 1) {
     if (ast.checks !== undefined) refuse(path, `a record can't have checks: ${onMerged}`)
