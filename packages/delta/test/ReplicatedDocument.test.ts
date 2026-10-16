@@ -1392,6 +1392,40 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(later), { status: "Hi" })
       }))
 
+    it.effect("an edit lost to a removal it hadn't seen is reported, though its replica's earlier edit had", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
+        const change = (replica: string, seq: number, parents: InternalDocument.AnyChange["parents"], time: number) =>
+        (
+          ...ops: InternalDocument.AnyChange["ops"]
+        ): InternalDocument.AnyChange => ({ replica, seq, length: ops.length, parents, time, ops })
+        const added = change("a", 0, [], 1)(
+          { _tag: "Add", path: ["comments", "c"] },
+          { _tag: "Set", path: ["comments", "c", "author"], value: "a" }
+        )
+        // The removal that wins, an edit made after seeing it, and one by the
+        // same replica made on top of only the comment, which hadn't.
+        const removal = change("r", 0, [{ replica: "a", seq: 1 }], 100)({ _tag: "Unset", path: ["comments", "c"] })
+        const seeing = change("x", 0, [{ replica: "r", seq: 0 }], 101)({
+          _tag: "Set",
+          path: ["comments", "c", "author"],
+          value: "x"
+        })
+        const unseeing = change("x", 1, [{ replica: "a", seq: 1 }], 2)({
+          _tag: "Set",
+          path: ["comments", "c", "author"],
+          value: "y"
+        })
+        yield* Replica.receive(ada, InternalDelta.fromChanges([added, removal, seeing, unseeing]))
+        // Another removal, which hadn't seen either edit, meets them both.
+        const another = change("w", 0, [{ replica: "a", seq: 1 }], 50)({ _tag: "Unset", path: ["comments", "c"] })
+        assert.deepStrictEqual(yield* Replica.receive(ada, InternalDelta.fromChanges([another])), [{
+          _tag: "Removed",
+          path: ["comments", "c"],
+          replicas: [Replica.ReplicaId.make("w"), Replica.ReplicaId.make("x")]
+        }])
+      }))
+
     it.effect("removing a part the schema always has meets nothing, nor decides whose write shows", () =>
       Effect.gen(function*() {
         const { ada, ben } = yield* pair
