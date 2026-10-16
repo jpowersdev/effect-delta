@@ -187,6 +187,21 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
       }))
 
+    it.effect("an update fails for a value whose JSON reads back as another, so a replica shows what it's given", () =>
+      Effect.gen(function*() {
+        const Loose = Schema.Struct({ size: Schema.Union([Schema.Number, Schema.String]) })
+        const ada = yield* ReplicatedDocument.make(Loose, {
+          initial: { size: 0 },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        // The number's JSON is "NaN" too, which reads back as the number.
+        const failed = yield* Effect.flip(ReplicatedDocument.update(ada, () => ({ size: "NaN" })))
+        assert.strictEqual(failed._tag, "SchemaError")
+        assert.deepStrictEqual(yield* Replica.version(ada), VersionVector.empty)
+        yield* ReplicatedDocument.update(ada, () => ({ size: NaN }))
+        assert.isNaN((yield* ReplicatedDocument.get(ada)).size)
+      }))
+
     it.effect("a value received as JSON that says -0 shows as it does on the replicas it's sent on to", () =>
       Effect.gen(function*() {
         const Measured = Schema.Struct({ size: Schema.Number, extra: Schema.Any })
