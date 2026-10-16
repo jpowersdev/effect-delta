@@ -743,6 +743,50 @@ describe("Relay", () => {
         assert.strictEqual(yield* connects.pipe(Effect.provide(Layer.fresh(Relay.layer))), "Synced")
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+    it.effect("serves the same strategy and changes once it reloads, whatever strategies were pushed", () =>
+      Effect.gen(function*() {
+        const pushed = (
+          replica: string,
+          parents: InternalDocument.AnyChange["parents"],
+          time: number,
+          op: InternalDocument.Op
+        ) => InternalDelta.fromChanges([{ replica, seq: 0, length: 1, parents, time, ops: [op] }])
+        // What a subscriber of each strategy is sent, or why it's refused.
+        const served = Effect.gen(function*() {
+          const relay = yield* Relay.Relay
+          return yield* Effect.forEach(["tree", "replay"] as const, (strategy) =>
+            Stream.runHead(
+              relay.subscribe({ format: Sync.FORMAT, document: notes, strategy, version: {}, authority: false })
+            ).pipe(Effect.match({
+              onFailure: (error) => error.reason._tag,
+              onSuccess: (update) => [...(Option.getOrThrow(update).delta as InternalDelta.DeltaImpl).changes.keys()]
+            })))
+        })
+        const inMemory = yield* Effect.gen(function*() {
+          const relay = yield* Relay.Relay
+          const push = (delta: Delta.Delta) => Effect.exit(relay.push({ format: Sync.FORMAT, document: notes, delta }))
+          // A replay op that waits for a change, a tree op, then the change
+          // the first waited for.
+          yield* push(pushed("abe", [{ replica: "aaa", seq: 0 }], 2, {
+            _tag: "InsertAt",
+            path: ["body"],
+            index: 0,
+            text: "x"
+          }))
+          yield* push(pushed("zed", [], 1, {
+            _tag: "Insert",
+            path: ["body"],
+            text: "y",
+            parent: null,
+            side: "R",
+            rightOrigin: null
+          }))
+          yield* push(pushed("aaa", [], 1, { _tag: "Set", path: ["status"], value: "draft" }))
+          return yield* served
+        }).pipe(Effect.scoped, Effect.provide(Layer.fresh(Relay.layer)))
+        assert.deepStrictEqual(yield* served.pipe(Effect.scoped, Effect.provide(Layer.fresh(Relay.layer))), inMemory)
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
     it.effect("refuses what it can tell is malformed without the schema", () =>
       Effect.gen(function*() {
         const relay = yield* Relay.Relay
