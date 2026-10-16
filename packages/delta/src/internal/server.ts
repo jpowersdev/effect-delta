@@ -135,26 +135,24 @@ export const make = Effect.fnUntraced(function*(options: {
           }
         }
 
-        const text = document.state
-        if (incoming.length === 0) return new Sync.Accepted({ confirmed: held(text.history) })
+        const { state } = document
+        if (incoming.length === 0) return new Sync.Accepted({ confirmed: held(state.history) })
         // A document's strategy is its first text op's.
-        const strategy = text.strategy ?? (isAuthority
-          ? "tree"
-          : incoming.flatMap((change) => [...InternalDocument.strategiesOf(change)])[0])
+        const strategy = state.strategy ?? (isAuthority ? "tree" : InternalDocument.strategyOf(incoming))
         for (const change of incoming) {
-          if ([...InternalDocument.strategiesOf(change)].some((other) => other !== strategy)) {
+          if (!InternalDocument.fitsStrategy(change, strategy)) {
             return yield* syncError(
               new Replica.DeltaError({ reason: new Replica.StrategyMismatch({ expected: strategy ?? "tree" }) })
             )
           }
         }
-        text.strategy = strategy
+        state.strategy = strategy
 
         // Changes that are new here wait as pending until what they build on
         // is here, then they're checked and applied in causal order.
         const fresh: Array<InternalDocument.AnyChange> = []
         for (const change of incoming) {
-          const existing = text.history.changes.get(key(change)) ?? text.history.pending.get(key(change))
+          const existing = state.history.changes.get(key(change)) ?? state.history.pending.get(key(change))
           if (existing !== undefined && !Equal.equals(existing, change)) {
             return yield* syncError(
               new Replica.DeltaError({
@@ -162,25 +160,25 @@ export const make = Effect.fnUntraced(function*(options: {
               })
             )
           }
-          if (existing === undefined && !History.has(text.history, change)) fresh.push(change)
+          if (existing === undefined && !History.has(state.history, change)) fresh.push(change)
         }
         const pushed = new Set(fresh.map(key))
-        for (const change of fresh) text.history.pending.set(key(change), change)
+        for (const change of fresh) state.history.pending.set(key(change), change)
 
         let rejected: string | undefined
         let malformed: string | undefined
         if (check === undefined) {
           // A relay drops a bad change and carries on. If the bad change came
           // with an earlier push, that push has already been answered.
-          for (const problem of integrateAll(text)) {
+          for (const problem of integrateAll(state)) {
             if (pushed.has(problem.key)) malformed ??= problem.message
           }
         } else {
-          for (const change of History.takeReady(text.history)) {
+          for (const change of History.takeReady(state.history)) {
             // A change all at the root is a replicated text's.
             const isText = change.ops.every((op) => Path.isRoot(InternalDocument.pathOf(op)))
-            const before = isText ? rootText(text) : InternalDocument.toJson(text)
-            const { problem, texts } = InternalDocument.integrate(text, [change], { overlaps: false })
+            const before = isText ? rootText(state) : InternalDocument.toJson(state)
+            const { problem, texts } = InternalDocument.integrate(state, [change], { overlaps: false })
             if (problem !== undefined) {
               malformed = problem
               break
@@ -193,14 +191,14 @@ export const make = Effect.fnUntraced(function*(options: {
                   user,
                   patch: texts.get(Path.key(Path.root))?.patch ?? TextPatch.empty,
                   before: before as string,
-                  after: rootText(text)
+                  after: rootText(state)
                 }
                 : {
                   _tag: "Document",
                   document: document.id,
                   user,
                   before,
-                  after: InternalDocument.toJson(text),
+                  after: InternalDocument.toJson(state),
                   paths: pathsOf(change)
                 }
             ))
@@ -208,8 +206,8 @@ export const make = Effect.fnUntraced(function*(options: {
               // Start over without it. An authority keeps nothing pending, so
               // nothing else is lost.
               document.state = InternalDocument.rebuild(
-                text.strategy,
-                [...text.history.changes.values()].filter((c) => c !== change)
+                state.strategy,
+                [...state.history.changes.values()].filter((c) => c !== change)
               )
               rejected = verdict.failure.message
               break
@@ -273,8 +271,8 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
   if (Option.isSome(stored)) {
     for (const [replica, owner] of Object.entries(stored.value.writers)) document.owners.set(replica, owner)
     const changes = [...(stored.value.history as InternalDelta.DeltaImpl).changes.values()]
-    const state = document.state
-    state.strategy = changes.flatMap((change) => [...InternalDocument.strategiesOf(change)])[0]
+    const { state } = document
+    state.strategy = InternalDocument.strategyOf(changes)
     for (const change of changes) state.history.pending.set(key(change), change)
     // Applied changes were checked before they were stored. One that was
     // stored while it waited, and turns out to be bad, is dropped.

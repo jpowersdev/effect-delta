@@ -305,7 +305,7 @@ const receive = (
   const { history } = state.document
   // Checked before anything changes, so a bad delta leaves the replica as it was.
   for (const change of delta.changes.values()) {
-    if ([...InternalDocument.strategiesOf(change)].some((strategy) => strategy !== engine.strategy)) {
+    if (!InternalDocument.fitsStrategy(change, engine.strategy)) {
       return Effect.fail(deltaError(new Replica.StrategyMismatch({ expected: engine.strategy })))
     }
     const existing = history.changes.get(key(change)) ?? history.pending.get(key(change))

@@ -110,16 +110,25 @@ export const pathOf = (op: Op): Path.Path => op.path ?? Path.root
 export const opLength = (op: Op): number => Text.isOp(op) ? Text.opLength(op) : 1
 
 /**
- * Which strategies made a change, judging by its text ops. Empty when it has
- * none, so it fits either.
+ * The strategy of the first text op in `changes`, if any.
  *
  * @internal
  */
-export const strategiesOf = (change: AnyChange): ReadonlySet<Replica.Strategy> => {
-  const strategies = new Set<Replica.Strategy>()
-  for (const op of change.ops) if (Text.isOp(op)) strategies.add(Text.strategyOfOp(op))
-  return strategies
+export const strategyOf = (changes: Iterable<AnyChange>): Replica.Strategy | undefined => {
+  for (const change of changes) {
+    for (const op of change.ops) if (Text.isOp(op)) return Text.strategyOfOp(op)
+  }
+  return undefined
 }
+
+/**
+ * Whether every text op in a change was made with `strategy`. A change without
+ * text ops fits any.
+ *
+ * @internal
+ */
+export const fitsStrategy = (change: AnyChange, strategy: Replica.Strategy | undefined): boolean =>
+  change.ops.every((op) => !Text.isOp(op) || Text.strategyOfOp(op) === strategy)
 
 // State ----------------------------------------------------------------------
 
@@ -633,12 +642,8 @@ const check = (
   if (total !== change.length) return `${name} says it has ${change.length} sequence numbers but has ${total}`
   if (!parentsAreChanges) return `${name} has a parent in the middle of a change`
   if (change.time <= parentTime) return `${name} has a write time no later than a change it was made on top of`
-  const strategies = strategiesOf(change)
-  if (
-    strategies.size > 1 || (document.strategy !== undefined && [...strategies].some((s) => s !== document.strategy))
-  ) {
-    return `${name} mixes strategies`
-  }
+  const strategy = document.strategy ?? strategyOf([change])
+  if (!fitsStrategy(change, strategy)) return `${name} mixes strategies`
 
   const problem = checkPaths(document, change) ?? checkPlaces(document, change)
   if (problem !== undefined) return problem
@@ -648,9 +653,8 @@ const check = (
     if (textPaths.has(k)) return `${name} edits one text in more than one run of ops`
     textPaths.add(k)
   }
-  const strategy = document.strategy ?? [...strategies][0]!
   for (const part of parts) {
-    const found = mergeOf(part.path, strategy).check(part)
+    const found = mergeOf(part.path, strategy!).check(part)
     if (found !== undefined) return found
   }
   return undefined
