@@ -50,7 +50,7 @@ const TypeId = "~effect-delta/ReplicatedDocument"
 interface ReplicatedDocumentImpl extends ReplicatedDocument<unknown> {
   readonly core: InternalReplica.Core
   readonly engine: InternalEngine.Engine
-  readonly schema: Schema.Top
+  readonly validate: (value: unknown) => Result.Result<unknown, Schema.SchemaError>
   readonly shape: InternalShape.Shape
   readonly initial: unknown
   readonly memo: InternalShape.Memo
@@ -79,45 +79,40 @@ const shapeOf = (schema: Schema.Top): InternalShape.Fields | InternalShape.Entri
   return shape
 }
 
-const makeWith = (
-  schema: Schema.Top,
-  options: {
-    readonly initial: unknown
-    readonly strategy: Replica.Strategy
-    readonly replica: Replica.ReplicaId
-    readonly confirmed: InternalEngine.ConfirmedState | undefined
+const makeWith = Effect.fnUntraced(function*(schema: Schema.Top, options: {
+  readonly initial: unknown
+  readonly strategy: Replica.Strategy
+  readonly replica: Replica.ReplicaId
+  readonly confirmed: InternalEngine.ConfirmedState | undefined
+}) {
+  const shape = shapeOf(schema)
+  const validate = Schema.decodeUnknownResult(Schema.toType(schema))
+  const initial = validate(options.initial)
+  if (Result.isFailure(initial)) {
+    return yield* Effect.die(new Error(`A document's initial value must fit its schema: ${initial.failure.message}`))
   }
-) =>
-  Effect.suspend(() => {
-    const shape = shapeOf(schema)
-    const initial = Schema.decodeUnknownResult(Schema.toType(schema))(options.initial)
-    if (Result.isFailure(initial)) {
-      return Effect.die(new Error(`A document's initial value must fit its schema: ${initial.failure.message}`))
+  InternalShape.checkInitial(shape, options.initial)
+  const memo: InternalShape.Memo = new Map()
+  const engine = yield* InternalEngine.make({
+    strategy: options.strategy,
+    replica: options.replica,
+    confirmed: options.confirmed,
+    model: {
+      read: (document) => InternalShape.read(shape, document, options.initial, memo),
+      check: (change) => InternalShape.check(shape, change)
     }
-    InternalShape.checkInitial(shape, options.initial)
-    const memo: InternalShape.Memo = new Map()
-    return Effect.map(
-      InternalEngine.make({
-        strategy: options.strategy,
-        replica: options.replica,
-        confirmed: options.confirmed,
-        model: {
-          read: (document) => InternalShape.read(shape, document, options.initial, memo),
-          check: (change) => InternalShape.check(shape, change)
-        }
-      }),
-      (engine): ReplicatedDocumentImpl =>
-        Object.assign(Object.create(Proto), {
-          strategy: options.strategy,
-          engine,
-          core: engine.core,
-          schema,
-          shape,
-          initial: options.initial,
-          memo
-        })
-    )
   })
+  const self: ReplicatedDocumentImpl = Object.assign(Object.create(Proto), {
+    strategy: options.strategy,
+    engine,
+    core: engine.core,
+    validate,
+    shape,
+    initial: options.initial,
+    memo
+  })
+  return self
+})
 
 const makeImpl = Effect.fnUntraced(function*(schema: Schema.Top, options: Options<unknown>) {
   const replica = options.replica ?? (yield* InternalEngine.randomReplicaId)
@@ -161,14 +156,10 @@ const toEdit = (event: InternalEngine.Event): Edit<unknown> => {
 }
 
 const updateImpl = (self: ReplicatedDocument<unknown>, f: (value: unknown) => unknown) => {
-  const { engine, initial, memo, schema, shape } = impl(self)
-  const validate = Schema.decodeUnknownResult(Schema.toType(schema))
+  const { engine, initial, memo, shape, validate } = impl(self)
   return InternalEngine.edit(engine, (document) => {
     const value = f(engine.model.read(document))
-    const valid = validate(value)
-    return Result.isFailure(valid)
-      ? Result.fail(valid.failure)
-      : InternalShape.plan(shape, document, value, initial, memo)
+    return Result.flatMap(validate(value), () => InternalShape.plan(shape, document, value, initial, memo))
   })
 }
 

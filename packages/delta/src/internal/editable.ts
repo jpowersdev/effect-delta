@@ -27,8 +27,7 @@ export const text = (self: ReplicatedText.Editable): string => {
   return InternalDocument.textAt(engine.state.document, path)
 }
 
-/** @internal */
-export const Proto: object = {
+const Proto = {
   ...Inspectable.BaseProto,
   [TypeId]: TypeId,
   pipe() {

@@ -18,6 +18,7 @@ import * as Schema from "effect/Schema"
 import type * as Types from "effect/Types"
 import type * as Delta from "./Delta.ts"
 import * as InternalAnchor from "./internal/anchor.ts"
+import * as InternalPath from "./internal/path.ts"
 import * as internal from "./internal/replica.ts"
 import type * as ReplicatedText from "./ReplicatedText.ts"
 import type * as VersionVector from "./VersionVector.ts"
@@ -106,7 +107,7 @@ export type DocumentId = typeof DocumentId.Type
  * @category schemas
  * @since 0.1.0
  */
-export const Path: Schema.Codec<Path> = Schema.Array(Schema.String)
+export const Path: Schema.Codec<Path> = InternalPath.Path
 
 /**
  * Where a part of a document is.

@@ -184,11 +184,10 @@ const applyPatchImpl = (self: Editable, patch: TextPatch.TextPatch): Effect.Effe
     return invalid === undefined ? Result.succeed(patch) : Result.fail(invalid)
   })
 
-const setImpl = (self: Editable, text: string): Effect.Effect<void> =>
-  editText(self, (current) => Result.succeed(TextPatch.get(current, text)))
-
 const updateImpl = (self: Editable, f: (text: string) => string): Effect.Effect<void> =>
   editText(self, (current) => Result.succeed(TextPatch.get(current, f(current))))
+
+const setImpl = (self: Editable, text: string): Effect.Effect<void> => updateImpl(self, () => text)
 
 // Checks a patch against the text it's for: it must stay inside the text and
 // never cut a surrogate pair (half of an emoji) apart.

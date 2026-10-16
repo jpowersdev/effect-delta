@@ -159,6 +159,7 @@ const makeTree = (): Text => {
 // the tree half-updated. Its ops may refer to characters inserted earlier in
 // the same part.
 const checkTree = (state: TreeText.State, part: Part): string | undefined => {
+  const name = `Change ${idKey(part)}`
   const inserted = new Set<string>()
   const known = (id: Id | null | undefined) =>
     id === null || id === undefined || inserted.has(idKey(id)) || TreeText.has(state, id)
@@ -166,10 +167,10 @@ const checkTree = (state: TreeText.State, part: Part): string | undefined => {
   for (const op of part.ops) {
     if (op._tag === "Insert") {
       if (op.side === "R" ? op.rightOrigin === undefined : op.rightOrigin !== undefined) {
-        return `Change ${part.seq}@${part.replica} has an insert with a mismatched side and right origin`
+        return `${name} has an insert with a mismatched side and right origin`
       }
       if (!known(op.parent) || !known(op.rightOrigin)) {
-        return `Change ${part.seq}@${part.replica} inserts next to a character it hasn't seen`
+        return `${name} inserts next to a character it hasn't seen`
       }
       for (let offset = 0; offset < op.text.length; offset++) {
         inserted.add(idKey({ replica: part.replica, seq: seq + offset }))
@@ -178,7 +179,7 @@ const checkTree = (state: TreeText.State, part: Part): string | undefined => {
       for (const span of op.targets) {
         for (let offset = 0; offset < span.length; offset++) {
           if (!known({ replica: span.replica, seq: span.seq + offset })) {
-            return `Change ${part.seq}@${part.replica} removes a character it hasn't seen`
+            return `${name} removes a character it hasn't seen`
           }
         }
       }
@@ -197,7 +198,7 @@ type ReplayChange = Change<ReplayText.Op>
 // change the text, so replaying only these gives the same text.
 const makeReplay = (): Text => {
   let value = ""
-  let history = History.make<Op>()
+  const history = History.make<Op>()
   // A walker over the whole history, for anchors. Dropped on every change.
   let cached: ReplayText.Walker | undefined
 

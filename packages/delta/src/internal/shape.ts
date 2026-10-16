@@ -99,7 +99,7 @@ export const text: Shape = { _tag: "Text" }
  * @internal
  */
 export const compile = (schema: Schema.Top): Fields | Entries => {
-  const shape = compileAst(SchemaAST.toType(schema.ast), [])
+  const shape = compileAst(SchemaAST.toType(schema.ast), Path.root)
   if (shape._tag !== "Fields" && shape._tag !== "Entries") {
     throw new Error("A document's schema must be a struct, a class or a record. For one text, use ReplicatedText")
   }

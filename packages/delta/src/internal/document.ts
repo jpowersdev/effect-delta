@@ -752,12 +752,11 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       at.counter += op.by
       break
     case "Place": {
-      const listSlot = ensureSlot(document, Path.parent(op.path))
-      listSlot.list ??= Fugue.make<Item>({ key: "" })
       const placement: Fugue.Placement = op.side === "R"
         ? { parent: op.parent ?? undefined, side: "R", rightOrigin: op.rightOrigin ?? null }
         : { parent: op.parent ?? undefined, side: "L" }
-      const node = Fugue.insert(listSlot.list, placement, { replica: write.replica, seq: write.seq }, "\u0000", {
+      const id = { replica: write.replica, seq: write.seq }
+      const node = Fugue.insert(listOf(document, op.path), placement, id, "\u0000", {
         key: op.path[op.path.length - 1]!
       })
       const place: PlaceWrite = { ...write, node }
@@ -817,6 +816,10 @@ const noteBelow = (
     }
   }
 }
+
+// The positions in the list that the item at `path` is in.
+const listOf = (document: Document, path: Path.Path): Fugue.Tree<Item> =>
+  ensureSlot(document, Path.parent(path)).list ??= Fugue.make<Item>({ key: "" })
 
 // A list item shows at its latest position, while it exists.
 const refreshPosition = (item: Slot): void => {
@@ -879,8 +882,7 @@ export const edit = (
     seq++
   }
   const place = (path: Path.Path, after: string | undefined) => {
-    const listSlot = ensureSlot(document, Path.parent(path))
-    const list = listSlot.list ??= Fugue.make<Item>({ key: "" })
+    const list = listOf(document, path)
     // Its current position goes as soon as this one is made.
     for (const { node } of ensureSlot(document, path).places) Fugue.setRemoved(node, true)
     const index = after === undefined ? 0 : Fugue.indexOf(shownPosition(document, [...Path.parent(path), after])) + 1
