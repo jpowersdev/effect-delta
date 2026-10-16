@@ -123,9 +123,9 @@ export const documentRuns = { runs: 100, size: 100 }
 
 type BoardDocument = ReplicatedDocument.ReplicatedDocument<Board>
 
-export const makeBoards = (strategy: Replica.Strategy) =>
+export const makeBoards = (strategy: Replica.Strategy, ids: ReadonlyArray<string> = ["r0", "r1", "r2"]) =>
   Effect.forEach(
-    ["r0", "r1", "r2"],
+    ids,
     (id) => ReplicatedDocument.make(Board, { initial: initialBoard, strategy, replica: Replica.ReplicaId.make(id) })
   )
 

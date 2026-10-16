@@ -226,6 +226,19 @@ describe.each(["tree", "replay"] as const)("document convergence (%s)", (strateg
   )
 
   it.effect.prop(
+    "replicas converge whatever their ids, even ones every object has a property for",
+    { session: DocumentSession },
+    Effect.fnUntraced(function*({ session }) {
+      const docs = yield* makeBoards(strategy, ["constructor", "toString", "valueOf"])
+      for (const command of session) yield* stepBoards(docs, command)
+      yield* syncAll(docs)
+      const [first, ...rest] = yield* Effect.forEach(docs, viewOf)
+      for (const view of rest) assert.deepStrictEqual(view, first)
+    }),
+    { arbitrary: documentRuns }
+  )
+
+  it.effect.prop(
     "receiving is order-independent and safe to repeat",
     { session: DocumentSession, seed: Schema.Int },
     Effect.fnUntraced(function*({ session, seed }) {
