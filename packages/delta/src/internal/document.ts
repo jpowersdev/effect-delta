@@ -708,16 +708,19 @@ const checkPaths = (document: Document, change: AnyChange): string | undefined =
   return undefined
 }
 
-// A position goes next to positions already in its list, or placed earlier in
-// the same change.
+// A position goes next to positions already in its list, or placed in the same
+// list earlier in the change.
 const checkPlaces = (document: Document, change: AnyChange): string | undefined => {
+  // The positions placed so far, with their lists.
   const placed = new Set<string>()
   let seq = change.seq
   for (const op of change.ops) {
     if (op._tag === "Place") {
-      const list = slot(document, Path.parent(op.path))?.list
+      const listPath = Path.parent(op.path)
+      const list = slot(document, listPath)?.list
+      const inList = (id: Id) => `${Path.key(listPath)}${idKey(id)}`
       const known = (id: Id | null | undefined) =>
-        id === null || id === undefined || placed.has(idKey(id)) ||
+        id === null || id === undefined || placed.has(inList(id)) ||
         (list !== undefined && Fugue.find(list, id) !== undefined)
       if (op.side === "R" ? op.rightOrigin === undefined : op.rightOrigin !== undefined) {
         return `Change ${key(change)} has a position with a mismatched side and right origin`
@@ -725,7 +728,7 @@ const checkPlaces = (document: Document, change: AnyChange): string | undefined 
       if (!known(op.parent) || !known(op.rightOrigin)) {
         return `Change ${key(change)} places an item next to a position it hasn't seen`
       }
-      placed.add(idKey({ replica: change.replica, seq }))
+      placed.add(inList({ replica: change.replica, seq }))
     }
     seq += opLength(op)
   }
