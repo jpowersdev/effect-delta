@@ -574,9 +574,10 @@ const editedConcurrently = (document: Document, path: Path.Path, lost: Lost, rem
   const { history } = document
   for (let seq = Math.max(lost.from, VersionVector.get(removal.past, lost.editor)); seq < lost.next;) {
     const change = History.find(history, { replica: lost.editor, seq })!
-    // Once its author had seen the removal, every later edit had too.
-    if (VersionVector.get(history.pasts.get(key(change))!, removal.replica) > removal.seq) return false
-    if (change.ops.some((op) => editsInside(op, path))) return true
+    // Each change says what it was made on top of, which needn't include
+    // what its replica's earlier ones had seen.
+    const sawRemoval = VersionVector.get(history.pasts.get(key(change))!, removal.replica) > removal.seq
+    if (!sawRemoval && change.ops.some((op) => editsInside(op, path))) return true
     seq = change.seq + change.length
   }
   return false
