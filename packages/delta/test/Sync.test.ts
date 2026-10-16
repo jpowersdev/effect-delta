@@ -981,6 +981,27 @@ describe("Authority", () => {
         }
       }).pipe(Effect.provide(ownerApproves())))
 
+    it.effect("a check doesn't see an entry nobody added, as replicas don't", () => {
+      const read: Array<ReplicatedDocument.Proposed<DesignDoc>> = []
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        // Written inside a comment that was never added.
+        const delta = InternalDelta.fromChanges([{
+          replica: "intruder",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "Set", path: ["comments", "c9", "author"], value: "ada" }]
+        }])
+        yield* authority.push({ format: Sync.FORMAT, document: spec, delta }).pipe(asUser("intruder"))
+        const replica = yield* makeDoc("replica")
+        yield* Replica.receive(replica, delta)
+        assert.deepStrictEqual((yield* ReplicatedDocument.get(replica)).comments, {})
+        assert.deepStrictEqual(read.at(-1)?.after.comments, {})
+      }).pipe(Effect.provide(ownerApproves(read)))
+    })
+
     it.effect("a confirmed document syncs with nothing else", () =>
       Effect.gen(function*() {
         const confirmed = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
