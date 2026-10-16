@@ -900,7 +900,7 @@ const byPath = (writes: ReadonlyArray<Written>): Map<string, Array<Written>> => 
  * wrote values it reads as different, said differently whether the part
  * exists, or both moved its item; `Removed` where one removed the part and
  * the other edited inside it or moved it, if it ends removed by a removal
- * that hadn't seen the edit. A value it
+ * made concurrently with the edit. A value it
  * can't read meets nothing, nor does whether a part exists where it's always
  * there. `changes` are every change the replica has, `before` and `after` its
  * versions around the merge, and `reading` how it reads what's written.
@@ -969,10 +969,12 @@ export const expectedOverlaps = (
     const presence = at(path, "presence")
     const sorted = [...replicas].sort()
     if (tag === "Removed") {
-      // Only edits lost to the removal it ends removed by, made without
-      // seeing them.
+      // Only edits lost to the removal it ends removed by, made
+      // concurrently with it.
       if (presence?.exists !== false) return []
-      const lost = edits.filter(({ edit }) => edit.replica !== presence.replica && !saw(presence, edit))
+      const lost = edits.filter(({ edit }) =>
+        edit.replica !== presence.replica && !saw(presence, edit) && !saw(edit, presence)
+      )
       const met = [...new Set(lost.flatMap(({ edit, removal }) => [edit.replica, removal.replica]))].sort()
       return lost.length === 0 ? [] : [{ _tag: "Removed", path, replicas: met }]
     }

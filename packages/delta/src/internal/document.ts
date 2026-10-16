@@ -482,11 +482,12 @@ export interface Reading {
 // list item's position.
 type Over = "value" | "presence" | "place"
 
-// Edits inside a part, by `editor` up to sequence number `next`, that met a
-// removal of it by `remover`.
+// Edits inside a part, by `editor` with sequence numbers from `from` up to
+// `next`, that met a removal of it by `remover`.
 interface Lost {
   readonly remover: string
   readonly editor: string
+  readonly from: number
   readonly next: number
 }
 
@@ -552,18 +553,42 @@ class Found {
         const kept = keptAt(slot(document, path)!, over, this.reading)
         return [{ _tag: "Value", path, replicas: [...replicas].sort(compareReplica), kept }]
       }
-      // Edits lost to the removal the part ends removed by, made without
-      // seeing them: a removal they met may have been undone since.
+      // Edits lost to the removal the part ends removed by, made
+      // concurrently with it: a removal they met may have been undone since,
+      // and an edit made after seeing the one that wins wasn't lost to it.
       const removal = slot(document, path)?.presence
       if (removal === undefined || removal.exists) return []
-      const unseen = lost.filter(({ editor, next }) =>
-        editor !== removal.replica && next > VersionVector.get(removal.past, editor)
+      const concurrent = lost.filter((each) =>
+        each.editor !== removal.replica && editedConcurrently(document, path, each, removal)
       )
-      if (unseen.length === 0) return []
-      const met = new Set(unseen.flatMap(({ editor, remover }) => [editor, remover]))
+      if (concurrent.length === 0) return []
+      const met = new Set(concurrent.flatMap(({ editor, remover }) => [editor, remover]))
       return [{ _tag: "Removed", path, replicas: [...met].sort(compareReplica) }]
     })
   }
+}
+
+// Whether any of the edits `lost` names was made concurrently with `removal`:
+// neither had seen the other.
+const editedConcurrently = (document: Document, path: Path.Path, lost: Lost, removal: Write): boolean => {
+  const { history } = document
+  for (let seq = Math.max(lost.from, VersionVector.get(removal.past, lost.editor)); seq < lost.next;) {
+    const change = History.find(history, { replica: lost.editor, seq })!
+    // Once its author had seen the removal, every later edit had too.
+    if (VersionVector.get(history.pasts.get(key(change))!, removal.replica) > removal.seq) return false
+    if (change.ops.some((op) => editsInside(op, path))) return true
+    seq = change.seq + change.length
+  }
+  return false
+}
+
+// Whether an op edits inside the part at `path`, as `noteInside` and moves
+// count it: under it, or on the text or counter it is, or moving it.
+const editsInside = (op: Op, path: Path.Path): boolean => {
+  const at = pathOf(op)
+  return at.length > path.length
+    ? Path.equals(at.slice(0, path.length), path)
+    : Path.equals(at, path) && (Text.isOp(op) || op._tag === "Increment" || op._tag === "Place")
 }
 
 // Whose write shows at a path where writes met: a removal if it won, else the
@@ -1142,13 +1167,19 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
     // seen.
     if (!write.exists) {
       for (const [editor, next] of Object.entries(found.inside(at))) {
-        if (editor !== write.replica && next > VersionVector.get(write.past, editor)) {
-          found.removed(at.path, { remover: write.replica, editor, next })
+        const from = VersionVector.get(write.past, editor)
+        if (editor !== write.replica && next > from) {
+          found.removed(at.path, { remover: write.replica, editor, from, next })
         }
       }
       for (const place of unseenBy(at, write, at.places)) {
         if (found.had(place)) {
-          found.removed(at.path, { remover: write.replica, editor: place.replica, next: place.seq + 1 })
+          found.removed(at.path, {
+            remover: write.replica,
+            editor: place.replica,
+            from: place.seq,
+            next: place.seq + 1
+          })
         }
       }
     }
@@ -1173,11 +1204,11 @@ const noteInside = (document: Document, op: Op, write: Write, found: Found | und
 
 // Reports a write at or under `at` against every removal there it hadn't
 // seen, whichever is latest now: the merge lists it if `at` ends removed by a
-// removal that hadn't seen it.
+// removal made concurrently with it.
 const reportRemovals = (found: Found, at: Slot, write: Write): void => {
   for (const removal of unseenBy(at, write, at.presences)) {
     if (!removal.exists && found.had(removal)) {
-      found.removed(at.path, { remover: removal.replica, editor: write.replica, next: write.seq + 1 })
+      found.removed(at.path, { remover: removal.replica, editor: write.replica, from: write.seq, next: write.seq + 1 })
     }
   }
 }
