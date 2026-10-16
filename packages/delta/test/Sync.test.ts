@@ -1011,6 +1011,23 @@ describe("Authority", () => {
     ))
 
   describe("documents", () => {
+    it.effect("a text field hears of a rejection only if it rolls the text back", () =>
+      Effect.gen(function*() {
+        const editor = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec }).pipe(
+          asUser("editor")
+        )
+        yield* synced(editor.connection)
+        const body = ReplicatedDocument.text(editor, ["body"])
+        const fromBody = (yield* ReplicatedText.subscribe(body)).edits
+        const fromDoc = (yield* ReplicatedDocument.subscribe(editor)).edits
+        // Rejected, and the body didn't change.
+        yield* ReplicatedDocument.update(editor, (doc) => ({ ...doc, status: "approved" }))
+        yield* fromDoc.pipe(Stream.filter((edit) => edit._tag === "Rejected"), Stream.runHead)
+        yield* ReplicatedText.insert(body, 0, "Hi")
+        const first = Option.getOrThrow(yield* Stream.runHead(fromBody))
+        assert.strictEqual(first._tag, "Local")
+      }).pipe(Effect.scoped, Effect.provide([ownerApproves(), CryptoTest])))
+
     it.effect("checks documents with their schema, and rolls back what it rejects", () => {
       const proposals: Array<ReplicatedDocument.Proposed<DesignDoc>> = []
       const open = (user: string) =>
