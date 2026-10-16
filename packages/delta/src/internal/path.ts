@@ -9,8 +9,12 @@ export type Path = ReadonlyArray<string>
 /** @internal */
 export const Path: Schema.Codec<Path> = Schema.Array(Schema.String)
 
-/** @internal */
-export const root: Path = []
+/**
+ * Frozen: every root op and replicated text shares it.
+ *
+ * @internal
+ */
+export const root: Path = Object.freeze([])
 
 /**
  * A string that identifies a path, for use as a map key.
