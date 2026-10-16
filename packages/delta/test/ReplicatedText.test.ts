@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Option, Schema, Stream } from "effect"
 import { Delta, Replica, ReplicatedText, VersionVector } from "effect-delta"
+import * as InternalDelta from "effect-delta/internal/delta"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
 
@@ -199,6 +200,34 @@ describe("ReplicatedText", () => {
         assert.deepStrictEqual(overlap.path, [])
         assert.deepStrictEqual(overlap.replicas.map(String), ["alice", "bob"])
         assert.deepStrictEqual(yield* ReplicatedText.locateRange(alice, overlap.anchors), Option.some(overlap.range))
+      }))
+
+    it.effect("refuses a replay edit outside the text it was made on, whatever else is here", () =>
+      Effect.gen(function*() {
+        const makeReplay = (replica: string) =>
+          ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
+        const alice = yield* makeReplay("alice")
+        yield* ReplicatedText.insert(alice, 0, "Hi")
+        const fromAlice = yield* Replica.delta(alice, VersionVector.empty)
+        // Made on the empty text, which has nothing at index 1.
+        const forged = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "InsertAt", index: 1, text: "!" }]
+        }])
+        for (const before of [Delta.empty, fromAlice]) {
+          const bob = yield* makeReplay("bob")
+          yield* Replica.receive(bob, before)
+          const error = yield* Effect.flip(Replica.receive(bob, forged))
+          assert.strictEqual(error.reason._tag, "Malformed")
+          assert.strictEqual(
+            yield* ReplicatedText.get(bob),
+            yield* ReplicatedText.get(before === Delta.empty ? bob : alice)
+          )
+        }
       }))
 
     it.effect("doesn't report edits that saw each other, or far-apart edits", () =>
