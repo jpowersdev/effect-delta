@@ -23,6 +23,18 @@ export interface Stored {
   readonly unconfirmed: Delta.Delta
   /** Every replica id this document's replicas have written under here. */
   readonly writers: ReadonlyArray<Replica.ReplicaId>
+  /** The text at a version, for strategies that can start from it. */
+  readonly snapshot: Snapshot | undefined
+}
+
+/**
+ * The text at a version.
+ *
+ * @internal
+ */
+export interface Snapshot {
+  readonly version: VersionVector.VersionVector
+  readonly text: string
 }
 
 /**
@@ -45,10 +57,17 @@ export interface Core {
   readonly outgoing: (since: VersionVector.VersionVector) => Effect.Effect<Delta.Delta>
   /** Notifies after every change, local or merged. */
   readonly changed: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
-  /** What to save: changes since `since`, plus the unconfirmed ones and the writer ids. */
-  readonly toStore: (since: VersionVector.VersionVector) => Effect.Effect<
-    Stored & { readonly version: VersionVector.VersionVector }
-  >
+  /**
+   * What to save: changes since `since`, the unconfirmed ones, the writer ids,
+   * and the text at `version`, which is what the store will then have.
+   */
+  readonly toStore: (since: VersionVector.VersionVector) => Effect.Effect<{
+    readonly history: Delta.Delta
+    readonly unconfirmed: Delta.Delta
+    readonly writers: ReadonlyArray<Replica.ReplicaId>
+    readonly version: VersionVector.VersionVector
+    readonly text: string
+  }>
   /** Loads what a store had saved. */
   readonly restore: (stored: Stored) => Effect.Effect<void, Replica.DeltaError>
   /** For replicas made to answer to an authority. */

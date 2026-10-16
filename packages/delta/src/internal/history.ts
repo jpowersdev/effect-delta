@@ -138,8 +138,24 @@ export const since = <Op>(history: History<Op>, since: VersionVector.VersionVect
   return out
 }
 
+/**
+ * Whether `id` is the last sequence number of an applied change.
+ *
+ * @internal
+ */
+export const endsAt = (history: History<unknown>, id: Id): boolean => {
+  const change = find(history, id)
+  return change !== undefined && change.seq + change.length - 1 === id.seq
+}
+
 // The applied change that consumed sequence number `id`.
 const containing = <Op>(history: History<Op>, id: Id): Change<Op> => {
+  const change = find(history, id)
+  if (change === undefined) throw new Error(`No applied change contains ${id.seq}@${id.replica}`)
+  return change
+}
+
+const find = <Op>(history: History<Op>, id: Id): Change<Op> | undefined => {
   const changes = history.byReplica.get(id.replica) ?? []
   let low = 0
   let high = changes.length - 1
@@ -150,5 +166,5 @@ const containing = <Op>(history: History<Op>, id: Id): Change<Op> => {
     else if (id.seq >= change.seq + change.length) low = middle + 1
     else return change
   }
-  throw new Error(`No applied change contains ${id.seq}@${id.replica}`)
+  return undefined
 }

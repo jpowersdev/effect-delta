@@ -217,6 +217,9 @@ program.pipe(
 )
 ```
 
+`examples/manuscript.ts` is the runnable version: forty chapters typed a sentence at a time, then a week
+apart. It reopens 115,000 characters in about 25 ms and merges the co-author's week in about 65 ms.
+
 ## Modules
 
 | Module           | What it's for                                                                                                 |
@@ -349,7 +352,7 @@ interface Replica<out A> extends Pipeable {
   readonly strategy: "tree" | "replay"
 }
 
-declare const ReplicaId: Schema.brand<Schema.String, "ReplicaId">
+declare const ReplicaId: Schema.brand<Schema.String, "ReplicaId"> // never empty
 declare const DocumentId: Schema.brand<Schema.String, "DocumentId">
 
 declare const id: (self: Replica<unknown>) => Effect<ReplicaId> // the id new changes are written under
@@ -527,6 +530,7 @@ class HistoryStore extends Context.Service<HistoryStore, {
   readonly load: (document: DocumentId) => Effect<Option<Stored>, HistoryStoreError>
   readonly append: (document: DocumentId, delta: Delta) => Effect<void, HistoryStoreError>       // confirmed history; append-only
   readonly setUnconfirmed: (document: DocumentId, delta: Delta) => Effect<void, HistoryStoreError> // confirmed replicas; rewritten
+  readonly setSnapshot: (document: DocumentId, snapshot: Snapshot) => Effect<void, HistoryStoreError>  // replay; replaced
   readonly addWriter: (document: DocumentId, replica: ReplicaId, owner: string) => Effect<void, HistoryStoreError>
 }>()("effect-delta/HistoryStore") {}
 
@@ -534,6 +538,12 @@ interface Stored {
   readonly history: Delta
   readonly unconfirmed: Delta
   readonly writers: { readonly [replica: string]: string } // replica id → its owner (servers) or "" (replicas)
+  readonly snapshot: Option<Snapshot>
+}
+
+interface Snapshot {
+  readonly version: VersionVector // the changes it's the text of
+  readonly text: string
 }
 
 declare const layerMemory: Layer<HistoryStore>
@@ -548,9 +558,11 @@ interface Persisted { readonly await: Effect<never, HistoryStoreError> }
 ```
 
 **The store stays simple.** `persist` knows the strategy, so it decides when to write a snapshot. For
-replay, the snapshot holds the plain text, so loading doesn't replay anything; `setSnapshot` arrives with
-the replay strategy. `writers` lets a replica upload changes it made under earlier ids, and lets servers
-remember who owns each id. When its scope closes, `persist` saves once more, so the last edits aren't lost. A confirmed replica's
+replay, it writes one when its scope closes and after every 4,096 characters of history in between. Loading
+records the history without replaying it, takes the text from the snapshot, and merges only the changes
+saved after it; a snapshot that doesn't match the history is ignored. `writers` lets a replica upload
+changes it made under earlier ids, and lets servers remember who owns each id. When its scope closes,
+`persist` saves once more, so the last edits aren't lost. A confirmed replica's
 unconfirmed changes are stored separately and rewritten after a rejection, so a rejected change never
 comes back on reload.
 
@@ -608,7 +620,8 @@ All accepted 2026-10-15.
 
 ## Changed while building
 
-Found while building the network half (2026-10-15). None changes how a replica is edited or read.
+Found while building the network half and the replay strategy (2026-10-15). None changes how a replica is
+edited or read.
 
 1. **`Sync.connect` became `Relay.connect`.** `Sync` holds only the protocol, which every other module
    imports, so it can't import `Relay` without a cycle. It reads well too: you connect through a relay.
@@ -624,8 +637,35 @@ Found while building the network half (2026-10-15). None changes how a replica i
    for 0 before closing a document. As an `Effect` it couldn't be watched.
 6. **`SyncError` has an `Unavailable` reason,** for a server that can't load or save a document.
    Connections retry it, like `Disconnected`.
-7. **`HistoryStore` has `addWriter` and no `setSnapshot` yet.** Snapshots are for the replay strategy and
-   come with it.
+7. **`HistoryStore` has `addWriter`,** so replicas and servers remember which replica ids were written
+   under, and by whom.
+8. **Replica ids can't be empty.** The replay strategy's temporary tree uses the empty id for characters
+   whose history it skips.
+9. **A server learns each document's strategy** from what it has stored, or else from the first replica to
+   subscribe or push, and refuses the other strategy (`ProtocolViolation` when subscribing,
+   `StrategyMismatch` when pushing). Authorities are tree-only for now, as planned.
+
+## Known limits
+
+Measured on a 150,000-character text with 2,600 changes (`scratchpad` benchmark, not committed):
+
+| | tree | replay |
+| --- | --- | --- |
+| Typing 2,000 edits | 150 ms | 12 ms |
+| First copy to a new replica | 160 ms | 19 ms |
+| Merging a week of concurrent edits (600) | 80 ms | 110 ms |
+| One concurrent keystroke | 20 ms | 80 ms |
+
+- **Replay merges cost time in proportion to the text.** A merge starts from stand-ins for the text at the
+  last change both sides share, one per character. Grouping stand-ins into runs would make that cost
+  nearly constant.
+- **Replay anchors replay the whole history,** once per change to the text (cached until the next one).
+  `anchor`, `locate` and overlaps made only of removed text are slow on long histories. They could start
+  from the latest change the anchored character's history shares, as merges do.
+- **The tree is one node per character,** and typing builds deep chains, so tree edits cost time in
+  proportion to the depth. Runs and a balanced layout are the usual fix.
+- **A reused replica id is caught** only once one copy has written more under it than the other (see
+  `ReplicaIdReused`).
 
 ## Not in the first release
 

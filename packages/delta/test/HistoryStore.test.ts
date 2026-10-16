@@ -6,6 +6,8 @@ import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
+const makeReplay = (replica: string) =>
+  ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
 const notes = Replica.DocumentId.make("notes")
 
 // Opens `notes` as a replica that saves to the store.
@@ -71,6 +73,75 @@ describe("HistoryStore", () => {
         )
       )
     )
+  })
+
+  describe("snapshots, for the replay strategy", () => {
+    const openReplay = (replica: string) =>
+      Effect.gen(function*() {
+        const text = yield* ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
+        yield* HistoryStore.persist(text, notes)
+        return text
+      })
+
+    it.effect("reopening starts from the saved text, then merges what came after", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        yield* Effect.scoped(Effect.gen(function*() {
+          const first = yield* openReplay("session-1")
+          yield* ReplicatedText.insert(first, 0, "Chapter one")
+        }))
+        const snapshot = Option.getOrThrow(Option.getOrThrow(yield* store.load(notes)).snapshot)
+        assert.deepStrictEqual(snapshot, { version: { "session-1": 11 }, text: "Chapter one" })
+
+        // A snapshot whose text the history wouldn't give shows it wasn't replayed.
+        yield* store.setSnapshot(notes, { ...snapshot, text: "Chapter ONE" })
+        // A change saved after the snapshot, as when an app quits before its last save.
+        const other = yield* makeReplay("other")
+        yield* Replica.receive(other, Option.getOrThrow(yield* store.load(notes)).history)
+        yield* ReplicatedText.insert(other, 11, ".")
+        yield* store.append(notes, yield* Replica.delta(other, snapshot.version))
+
+        const reopened = yield* Effect.scoped(Effect.flatMap(openReplay("session-2"), ReplicatedText.get))
+        assert.strictEqual(reopened, "Chapter ONE.")
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
+    it.effect("a snapshot that doesn't match the history is ignored", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        yield* Effect.scoped(Effect.gen(function*() {
+          const first = yield* openReplay("session-1")
+          yield* ReplicatedText.insert(first, 0, "Chapter one")
+        }))
+        yield* store.setSnapshot(notes, { version: { "session-1": 5 }, text: "Wrong" })
+        const reopened = yield* Effect.scoped(Effect.flatMap(openReplay("session-2"), ReplicatedText.get))
+        assert.strictEqual(reopened, "Chapter one")
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
+    it.effect("a reopened text still merges concurrent edits like a tree", () =>
+      Effect.gen(function*() {
+        const results = yield* Effect.forEach(["tree", "replay"] as const, (strategy) =>
+          Effect.gen(function*() {
+            const make = (replica: string) =>
+              ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make(replica) })
+            const coauthor = yield* make("coauthor")
+            yield* Effect.scoped(Effect.gen(function*() {
+              const first = yield* make("session-1")
+              yield* HistoryStore.persist(first, notes)
+              yield* ReplicatedText.insert(first, 0, "The ship left at dawn.")
+              yield* Replica.exchange(first, coauthor)
+              yield* ReplicatedText.insert(first, 13, " quietly")
+            }))
+            yield* ReplicatedText.update(coauthor, (text) => text.replace("dawn", "midnight"))
+            return yield* Effect.scoped(Effect.gen(function*() {
+              const second = yield* make("session-2")
+              yield* HistoryStore.persist(second, notes)
+              yield* Replica.exchange(second, coauthor)
+              return yield* ReplicatedText.get(second)
+            }))
+          }).pipe(Effect.provide(Layer.fresh(HistoryStore.layerMemory))))
+        assert.strictEqual(results[0], "The ship left quietly at midnight.")
+        assert.strictEqual(results[1], results[0])
+      }))
   })
 
   it.effect("a rejected change doesn't come back on reload", () =>

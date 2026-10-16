@@ -30,13 +30,12 @@ import * as Stream from "effect/Stream"
 import * as SubscriptionRef from "effect/SubscriptionRef"
 import * as Authority from "./Authority.ts"
 import * as InternalAnchor from "./internal/anchor.ts"
-import { type Change, key } from "./internal/change.ts"
+import { key } from "./internal/change.ts"
 import * as InternalConnection from "./internal/connection.ts"
 import * as InternalDelta from "./internal/delta.ts"
 import * as History from "./internal/history.ts"
 import * as InternalReplica from "./internal/replica.ts"
-import * as TreeReplica from "./internal/treeReplica.ts"
-import * as TreeText from "./internal/treeText.ts"
+import * as InternalText from "./internal/text.ts"
 import * as Replica from "./Replica.ts"
 import type * as Sync from "./Sync.ts"
 import * as TextPatch from "./TextPatch.ts"
@@ -59,8 +58,8 @@ interface State {
   nextSeq: number
   /** Every replica id this replica has written under, including ones restored from storage. */
   readonly writers: Set<string>
-  text: TreeText.State
-  history: History.History<TreeText.Op>
+  /** The text and its history, under the replica's strategy. */
+  text: InternalText.Text
   /** Only for replicas that answer to an authority. */
   readonly confirmed: ConfirmedState | undefined
 }
@@ -76,7 +75,7 @@ const Proto = {
   ...InternalReplica.Proto,
   [TypeId]: TypeId,
   toJSON(this: ReplicatedTextImpl) {
-    return { _id: "ReplicatedText", strategy: this.strategy, text: this.state.text.text }
+    return { _id: "ReplicatedText", strategy: this.strategy, text: this.state.text.value }
   }
 }
 
@@ -90,13 +89,11 @@ const makeWith = Effect.fnUntraced(function*(options: {
   readonly replica: Replica.ReplicaId
   readonly confirmed: ConfirmedState | undefined
 }) {
-  if (options.strategy === "replay") return yield* Effect.die(new Error("The replay strategy isn't built yet"))
   const state: State = {
     replica: options.replica,
     nextSeq: 0,
     writers: new Set([options.replica]),
-    text: TreeText.make(),
-    history: History.make(),
+    text: InternalText.make(options.strategy),
     confirmed: options.confirmed
   }
   const self: ReplicatedTextImpl = Object.assign(Object.create(Proto), {
@@ -141,14 +138,14 @@ const locked = <A, E, R>(self: ReplicatedText, effect: Effect.Effect<A, E, R>) =
 // Publishes how the text changed, to `changes` and `subscribe`.
 const publish = (self: ReplicatedTextImpl, edit: Edit): Effect.Effect<void> =>
   Effect.andThen(
-    SubscriptionRef.set(self.textRef, self.state.text.text),
+    SubscriptionRef.set(self.textRef, self.state.text.value),
     PubSub.publish(self.edits, edit)
   )
 
 // Reading ------------------------------------------------------------------
 
 const getImpl = (self: ReplicatedText): Effect.Effect<string> =>
-  locked(self, Effect.sync(() => impl(self).state.text.text))
+  locked(self, Effect.sync(() => impl(self).state.text.value))
 
 const changesImpl = (self: ReplicatedText): Stream.Stream<string> => SubscriptionRef.changes(impl(self).textRef)
 
@@ -161,7 +158,7 @@ const subscribeImpl = (
       // Taken under the lock, so no edit lands between reading the text and
       // subscribing.
       const subscription = yield* PubSub.subscribe(impl(self).edits)
-      return { text: impl(self).state.text.text, edits: Stream.fromSubscription(subscription) }
+      return { text: impl(self).state.text.value, edits: Stream.fromSubscription(subscription) }
     })
   )
 
@@ -175,47 +172,12 @@ const applyPatchImpl = (
     self,
     Effect.suspend(() => {
       const s = impl(self).state
-      const invalid = validate(s.text.text, patch)
+      const invalid = validate(s.text.value, patch)
       if (invalid !== undefined) return Effect.fail(invalid)
-      if (patch.length === 0) return Effect.void
-      const info: TreeText.Info = { replica: s.replica, seq: s.nextSeq, length: 0, past: { ...s.history.version } }
-      const ops: Array<TreeText.Op> = []
-      let applied = TextPatch.empty
-      let position = 0
-      for (const operation of patch) {
-        switch (operation._tag) {
-          case "Retain":
-            position += operation.length
-            break
-          case "Insert": {
-            const first = { replica: s.replica, seq: info.seq + info.length }
-            const [op, done] = TreeText.insert(s.text, position, operation.text, first, info)
-            ops.push(op)
-            applied = TextPatch.compose(applied, done)
-            info.length += operation.text.length
-            position += operation.text.length
-            break
-          }
-          case "Remove": {
-            const [op, done] = TreeText.remove(s.text, position, operation.length, info)
-            ops.push(op)
-            applied = TextPatch.compose(applied, done)
-            info.length += operation.length
-            break
-          }
-        }
-      }
-      if (ops.length === 0) return Effect.void
-      const change: Change<TreeText.Op> = {
-        replica: s.replica,
-        seq: info.seq,
-        length: info.length,
-        parents: s.history.frontier,
-        ops
-      }
-      History.record(s.history, change, info.past)
-      s.nextSeq += info.length
-      return publish(impl(self), { _tag: "Local", patch: applied })
+      const edited = s.text.edit(patch, { replica: s.replica, seq: s.nextSeq })
+      if (edited === undefined) return Effect.void
+      s.nextSeq += edited.change.length
+      return publish(impl(self), { _tag: "Local", patch: edited.patch })
     })
   )
 
@@ -223,7 +185,7 @@ const setImpl = (self: ReplicatedText, text: string): Effect.Effect<void> =>
   Effect.orDie(
     locked(
       self,
-      Effect.suspend(() => Effect.succeed(TextPatch.get(impl(self).state.text.text, text)))
+      Effect.suspend(() => Effect.succeed(TextPatch.get(impl(self).state.text.value, text)))
     ).pipe(Effect.flatMap((patch) => applyPatchImpl(self, patch)))
   )
 
@@ -277,14 +239,14 @@ const anchorImpl = (
     self,
     Effect.suspend(() => {
       const text = impl(self).state.text
-      if (index < 0 || index > text.text.length) return Effect.fail(outOfBounds(index, text.text.length))
-      if (splitsPair(text.text, index)) return Effect.fail(splitsSurrogatePair(index))
-      return Effect.succeed(TreeText.anchor(text, index, side))
+      if (index < 0 || index > text.value.length) return Effect.fail(outOfBounds(index, text.value.length))
+      if (splitsPair(text.value, index)) return Effect.fail(splitsSurrogatePair(index))
+      return Effect.succeed(text.anchor(index, side))
     })
   )
 
 const locateImpl = (self: ReplicatedText, anchor: Anchor): Effect.Effect<Option.Option<number>> =>
-  locked(self, Effect.sync(() => TreeText.locate(impl(self).state.text, anchor)))
+  locked(self, Effect.sync(() => impl(self).state.text.locate(anchor)))
 
 const anchorRangeImpl = (
   self: ReplicatedText,
@@ -294,16 +256,13 @@ const anchorRangeImpl = (
     self,
     Effect.suspend(() => {
       const text = impl(self).state.text
-      const length = text.text.length
+      const length = text.value.length
       if (range.start < 0 || range.start > range.end) return Effect.fail(outOfBounds(range.start, length))
       if (range.end > length) return Effect.fail(outOfBounds(range.end, length))
-      if (splitsPair(text.text, range.start)) return Effect.fail(splitsSurrogatePair(range.start))
-      if (splitsPair(text.text, range.end)) return Effect.fail(splitsSurrogatePair(range.end))
+      if (splitsPair(text.value, range.start)) return Effect.fail(splitsSurrogatePair(range.start))
+      if (splitsPair(text.value, range.end)) return Effect.fail(splitsSurrogatePair(range.end))
       // Leaning inward, so text typed at either edge stays outside.
-      return Effect.succeed({
-        start: TreeText.anchor(text, range.start, "before"),
-        end: TreeText.anchor(text, range.end, "after")
-      })
+      return Effect.succeed({ start: text.anchor(range.start, "before"), end: text.anchor(range.end, "after") })
     })
   )
 
@@ -315,8 +274,8 @@ const locateRangeImpl = (
     self,
     Effect.sync(() => {
       const text = impl(self).state.text
-      const start = TreeText.locate(text, range.start)
-      const end = TreeText.locate(text, range.end)
+      const start = text.locate(range.start)
+      const end = text.locate(range.end)
       if (Option.isNone(start) || Option.isNone(end) || end.value <= start.value) return Option.none()
       return Option.some({ start: start.value, end: end.value })
     })
@@ -332,13 +291,13 @@ const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
   )
   return {
     id: Effect.sync(() => state.replica),
-    version: locked(self, Effect.sync(() => ({ ...state.history.version }))),
+    version: locked(self, Effect.sync(() => ({ ...state.text.history.version }))),
     delta: (since) =>
       locked(
         self,
         Effect.sync(() =>
           InternalDelta.fromChanges(
-            History.since(state.history, since).filter((change) => !isUnconfirmed(state, change))
+            History.since(state.text.history, since).filter((change) => !isUnconfirmed(state, change))
           )
         )
       ),
@@ -352,7 +311,7 @@ const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
         self,
         Effect.sync(() =>
           InternalDelta.fromChanges(
-            History.since(state.history, since).filter((change) => state.writers.has(change.replica))
+            History.since(state.text.history, since).filter((change) => state.writers.has(change.replica))
           )
         )
       ),
@@ -361,16 +320,17 @@ const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
       locked(
         self,
         Effect.sync(() => {
-          const unconfirmed = [...state.history.changes.values()].filter((change) => isUnconfirmed(state, change))
-          const version: Record<string, number> = { ...state.history.version }
+          const unconfirmed = [...state.text.history.changes.values()].filter((change) => isUnconfirmed(state, change))
+          const version: Record<string, number> = { ...state.text.history.version }
           for (const change of unconfirmed) version[change.replica] = Math.min(version[change.replica]!, change.seq)
           return {
             history: InternalDelta.fromChanges(
-              History.since(state.history, since).filter((change) => !isUnconfirmed(state, change))
+              History.since(state.text.history, since).filter((change) => !isUnconfirmed(state, change))
             ),
             unconfirmed: InternalDelta.fromChanges(unconfirmed),
             writers: [...state.writers].map((writer) => Replica.ReplicaId.make(writer)),
-            version
+            version,
+            text: state.text.value
           }
         })
       ),
@@ -379,9 +339,23 @@ const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
         self,
         Effect.suspend(() => {
           for (const writer of stored.writers) state.writers.add(writer)
-          return Effect.asVoid(
-            receive(self, InternalDelta.combine(stored.history, stored.unconfirmed))
-          )
+          const all = InternalDelta.combine(stored.history, stored.unconfirmed)
+          const { snapshot } = stored
+          if (snapshot !== undefined) {
+            // Start from the snapshot's text where the strategy can, and merge
+            // only what came after it.
+            const inSnapshot = (change: InternalText.AnyChange) =>
+              change.seq + change.length <= VersionVector.get(snapshot.version, change.replica)
+            const changes = [...all.changes.values()]
+            if (state.text.load(changes.filter(inSnapshot), snapshot.version, snapshot.text)) {
+              const after = InternalDelta.fromChanges(changes.filter((change) => !inSnapshot(change)))
+              return publish(self, { _tag: "Remote", patch: TextPatch.insert(0, snapshot.text), overlaps: [] }).pipe(
+                Effect.andThen(receive(self, after)),
+                Effect.asVoid
+              )
+            }
+          }
+          return Effect.asVoid(receive(self, all))
         })
       ),
     confirmed: state.confirmed === undefined ? undefined : {
@@ -398,17 +372,20 @@ const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
           Effect.gen(function*() {
             const confirmed = state.confirmed!
             confirmed.version = VersionVector.combine(confirmed.version, version)
-            const before = state.text.text
+            const before = state.text.value
             // Everything the authority doesn't have was made on top of the
             // rejected change, and nobody else has seen it, so it all goes.
-            const pending = [...state.history.pending.values()]
-            rebuild(state, [...state.history.changes.values()].filter((change) => !isUnconfirmed(state, change)))
-            for (const change of pending) state.history.pending.set(key(change), change)
+            const { changes, pending } = state.text.history
+            state.text = InternalText.rebuild(
+              state.text.strategy,
+              [...changes.values()].filter((change) => !isUnconfirmed(state, change))
+            )
+            for (const change of pending.values()) state.text.history.pending.set(key(change), change)
             // A new id, so sequence numbers are never reused and never skip.
             state.replica = yield* confirmed.freshId
             state.nextSeq = 0
             state.writers.add(state.replica)
-            yield* publish(self, { _tag: "Rejected", patch: TextPatch.get(before, state.text.text), message })
+            yield* publish(self, { _tag: "Rejected", patch: TextPatch.get(before, state.text.value), message })
           })
         )
     }
@@ -416,57 +393,50 @@ const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
 }
 
 // A confirmed replica's own changes that its authority hasn't acknowledged.
-const isUnconfirmed = (state: State, change: Change<TreeText.Op>): boolean =>
+const isUnconfirmed = (state: State, change: InternalText.AnyChange): boolean =>
   state.confirmed !== undefined && state.writers.has(change.replica) &&
   change.seq + change.length > VersionVector.get(state.confirmed.version, change.replica)
-
-// Starts over from `changes`, in the order they were applied.
-const rebuild = (state: State, changes: ReadonlyArray<Change<TreeText.Op>>): void => {
-  const rebuilt = TreeReplica.rebuild(changes)
-  state.text = rebuilt.text
-  state.history = rebuilt.history
-}
 
 const receive = (
   self: ReplicatedTextImpl,
   delta: InternalDelta.DeltaImpl
 ): Effect.Effect<ReadonlyArray<Replica.Overlap>, Replica.DeltaError> => {
   const { state } = self
-  const { history, text } = state
+  const { history } = state.text
+  // Checked before anything changes, so a bad delta leaves the replica as it was.
   for (const change of delta.changes.values()) {
+    if (InternalText.strategyOf(change) !== state.text.strategy) {
+      return Effect.fail(deltaError(new Replica.StrategyMismatch({ expected: state.text.strategy })))
+    }
     const existing = history.changes.get(key(change)) ?? history.pending.get(key(change))
-    if (change.replica === state.replica && existing === undefined) {
+    if (
+      (change.replica === state.replica && existing === undefined) ||
+      (existing !== undefined && !Equal.equals(existing, change))
+    ) {
       return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
     }
-    if (existing !== undefined && !Equal.equals(existing, change)) {
-      return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
-    }
-    if (existing === undefined && !History.has(history, change)) history.pending.set(key(change), change)
+  }
+  for (const change of delta.changes.values()) {
+    if (!History.has(history, change)) history.pending.set(key(change), change)
   }
 
-  const added = new Set<TreeText.Info>()
-  let patch = TextPatch.empty
   const ready = History.takeReady(history)
-  for (const [index, change] of ready.entries()) {
-    const problem = TreeReplica.check(text, change)
-    if (problem !== undefined) {
-      // Whatever was waiting behind the bad change keeps waiting.
-      for (const later of ready.slice(index + 1)) history.pending.set(key(later), later)
-      return Effect.fail(deltaError(new Replica.Malformed({ message: problem })))
-    }
-    const applied = TreeReplica.integrate(text, history, change)
-    patch = TextPatch.compose(patch, applied.patch)
-    added.add(applied.info)
-  }
-  if (added.size === 0) return Effect.succeed([])
-
-  const overlaps: ReadonlyArray<Replica.Overlap> = TreeText.overlaps(text, added).map((overlap) => ({
+  if (ready.length === 0) return Effect.succeed([])
+  const { overlaps: found, patch, problem } = state.text.integrate(ready, { overlaps: true })
+  const overlaps: ReadonlyArray<Replica.Overlap> = found.map((overlap) => ({
     _tag: "Text",
     range: { start: overlap.start, end: overlap.end },
     anchors: overlap.anchors,
     replicas: overlap.replicas.map((replica) => Replica.ReplicaId.make(replica))
   }))
-  return Effect.as(publish(self, { _tag: "Remote", patch, overlaps }), overlaps)
+  const published = patch.length === 0 && overlaps.length === 0
+    ? Effect.void
+    : publish(self, { _tag: "Remote", patch, overlaps })
+  if (problem === undefined) return Effect.as(published, overlaps)
+  // The bad change is dropped; whatever was ready behind it keeps waiting.
+  const [, ...behind] = ready.filter((change) => !history.changes.has(key(change)))
+  for (const change of behind) history.pending.set(key(change), change)
+  return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem }))))
 }
 
 const deltaError = (reason: Replica.DeltaError["reason"]) => new Replica.DeltaError({ reason })

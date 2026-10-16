@@ -4,7 +4,9 @@
  * and then saves every change for as long as its scope lasts.
  *
  * The store itself only appends deltas and remembers a few small records, so
- * it's easy to back with anything. `layerMemory` keeps everything in memory;
+ * it's easy to back with anything. For the replay strategy it also keeps a
+ * snapshot of the text, so reopening a document reads the text instead of
+ * replaying its history. `layerMemory` keeps everything in memory;
  * `layerKeyValueStore` uses Effect's `KeyValueStore`, which has file system,
  * Web Storage and SQL implementations.
  *
@@ -36,6 +38,7 @@ import * as VersionVector from "./VersionVector.ts"
  * - `writers`: every replica id written under for this document here, and who
  *   it belongs to. Replicas use it to upload changes made in earlier sessions;
  *   servers use it to know whose edits are whose.
+ * - `snapshot`: the text at a version, if one was saved.
  *
  * @stability unstable
  * @category models
@@ -45,6 +48,21 @@ export interface Stored {
   readonly history: Delta.Delta
   readonly unconfirmed: Delta.Delta
   readonly writers: { readonly [replica: string]: string }
+  readonly snapshot: Option.Option<Snapshot>
+}
+
+/**
+ * The text at a version: what the changes in `version` make. Replicas that
+ * can start from it (the replay strategy) don't replay those changes when
+ * they load.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface Snapshot {
+  readonly version: VersionVector.VersionVector
+  readonly text: string
 }
 
 /**
@@ -76,6 +94,7 @@ export class HistoryStore extends Context.Service<HistoryStore, {
   readonly load: (document: Replica.DocumentId) => Effect.Effect<Option.Option<Stored>, HistoryStoreError>
   readonly append: (document: Replica.DocumentId, delta: Delta.Delta) => Effect.Effect<void, HistoryStoreError>
   readonly setUnconfirmed: (document: Replica.DocumentId, delta: Delta.Delta) => Effect.Effect<void, HistoryStoreError>
+  readonly setSnapshot: (document: Replica.DocumentId, snapshot: Snapshot) => Effect.Effect<void, HistoryStoreError>
   readonly addWriter: (
     document: Replica.DocumentId,
     replica: Replica.ReplicaId,
@@ -94,12 +113,17 @@ export class HistoryStore extends Context.Service<HistoryStore, {
 export const layerMemory: Layer.Layer<HistoryStore> = Layer.sync(HistoryStore)(() => {
   const documents = new Map<
     string,
-    { history: Delta.Delta; unconfirmed: Delta.Delta; writers: Record<string, string> }
+    {
+      history: Delta.Delta
+      unconfirmed: Delta.Delta
+      writers: Record<string, string>
+      snapshot: Option.Option<Snapshot>
+    }
   >()
   const entry = (document: string) => {
     let found = documents.get(document)
     if (found === undefined) {
-      found = { history: Delta.empty, unconfirmed: Delta.empty, writers: {} }
+      found = { history: Delta.empty, unconfirmed: Delta.empty, writers: {}, snapshot: Option.none() }
       documents.set(document, found)
     }
     return found
@@ -118,6 +142,10 @@ export const layerMemory: Layer.Layer<HistoryStore> = Layer.sync(HistoryStore)((
     setUnconfirmed: (document, delta) =>
       Effect.sync(() => {
         entry(document).unconfirmed = delta
+      }),
+    setSnapshot: (document, snapshot) =>
+      Effect.sync(() => {
+        entry(document).snapshot = Option.some(snapshot)
       }),
     addWriter: (document, replica, owner) =>
       Effect.sync(() => {
@@ -166,6 +194,11 @@ export const layerKeyValueStore = (options: {
 
     const Count = Schema.Int
     const Writers = Schema.Record(Schema.String, Schema.String)
+    const SnapshotRecord = Schema.Struct({
+      format: Schema.Literal(1),
+      version: VersionVector.VersionVector,
+      text: Schema.String
+    })
 
     const count = (document: string) =>
       readJson(Count, key(document, "count")).pipe(Effect.map(Option.getOrElse(() => 0)))
@@ -185,11 +218,13 @@ export const layerKeyValueStore = (options: {
         const { history, n } = yield* readHistory(document)
         const unconfirmed = yield* readJson(Delta.Delta, key(document, "unconfirmed"))
         const writers = yield* readJson(Writers, key(document, "writers"))
+        const snapshot = yield* readJson(SnapshotRecord, key(document, "snapshot"))
         if (n === 0 && Option.isNone(unconfirmed) && Option.isNone(writers)) return Option.none()
         return Option.some({
           history,
           unconfirmed: Option.getOrElse(unconfirmed, () => Delta.empty),
-          writers: Option.getOrElse(writers, () => ({}))
+          writers: Option.getOrElse(writers, () => ({})),
+          snapshot: Option.map(snapshot, ({ text, version }) => ({ version, text }))
         })
       }),
       append: Effect.fnUntraced(function*(document, delta) {
@@ -208,6 +243,8 @@ export const layerKeyValueStore = (options: {
         }
       }),
       setUnconfirmed: (document, delta) => writeJson(Delta.Delta, key(document, "unconfirmed"), delta),
+      setSnapshot: (document, snapshot) =>
+        writeJson(SnapshotRecord, key(document, "snapshot"), { format: 1, ...snapshot }),
       addWriter: Effect.fnUntraced(function*(document, replica, owner) {
         const writers = yield* readJson(Writers, key(document, "writers"))
         const current = Option.getOrElse(writers, () => ({}) as Record<string, string>)
@@ -277,29 +314,49 @@ export const persist = Effect.fnUntraced(function*(
     yield* core.restore({
       history: stored.value.history,
       unconfirmed: stored.value.unconfirmed,
-      writers: Object.keys(stored.value.writers) as Array<Replica.ReplicaId>
+      writers: Object.keys(stored.value.writers) as Array<Replica.ReplicaId>,
+      snapshot: Option.getOrUndefined(stored.value.snapshot)
     })
   }
 
   let saved = VersionVector.empty
   let savedWriters = new Set(Option.match(stored, { onNone: () => [], onSome: (s) => Object.keys(s.writers) }))
-  const save = Effect.gen(function*() {
-    const next = yield* core.toStore(saved)
-    if (!Delta.isEmpty(next.history)) yield* store.append(document, next.history)
-    if (core.confirmed !== undefined) yield* store.setUnconfirmed(document, next.unconfirmed)
-    for (const writer of next.writers) {
-      if (!savedWriters.has(writer)) yield* store.addWriter(document, writer, "")
-    }
-    savedWriters = new Set([...savedWriters, ...next.writers])
-    saved = next.version
+  // How much history the last snapshot covers, in characters.
+  let snapshotAt = Option.match(Option.flatMap(stored, (s) => s.snapshot), {
+    onNone: () => 0,
+    onSome: (snapshot) => size(snapshot.version)
   })
+  const save = (final: boolean) =>
+    Effect.gen(function*() {
+      const next = yield* core.toStore(saved)
+      if (!Delta.isEmpty(next.history)) yield* store.append(document, next.history)
+      if (core.confirmed !== undefined) yield* store.setUnconfirmed(document, next.unconfirmed)
+      for (const writer of next.writers) {
+        if (!savedWriters.has(writer)) yield* store.addWriter(document, writer, "")
+      }
+      savedWriters = new Set([...savedWriters, ...next.writers])
+      saved = next.version
+      // For the replay strategy: when the scope closes, and every so often in
+      // between, so a reload has little to replay.
+      const covered = size(next.version)
+      if (replica.strategy === "replay" && covered > snapshotAt && (final || covered - snapshotAt >= snapshotEvery)) {
+        yield* store.setSnapshot(document, { version: next.version, text: next.text })
+        snapshotAt = covered
+      }
+    })
 
   // Subscribe before the first save, so no change slips between them.
   const changes = yield* core.changed
-  yield* save
+  yield* save(false)
   // Added before the fork, so it runs after the fork is interrupted: a last
   // save catches changes made just before the scope closed.
-  yield* Effect.addFinalizer(() => Effect.ignore(save))
-  const fiber = yield* Effect.forkScoped(Stream.runForEach(changes, () => save))
+  yield* Effect.addFinalizer(() => Effect.ignore(save(true)))
+  const fiber = yield* Effect.forkScoped(Stream.runForEach(changes, () => save(false)))
   return { await: Fiber.join(fiber).pipe(Effect.flatMap(() => Effect.never)) }
 })
+
+// Characters of history between snapshots.
+const snapshotEvery = 4096
+
+const size = (version: VersionVector.VersionVector): number =>
+  Object.values(version).reduce((sum, seen) => sum + seen, 0)

@@ -8,9 +8,10 @@ This package is written as if it will be upstreamed into Effect as the
 any minor release.
 
 > [!WARNING]
-> Work in progress. Replicated text with the tree strategy works, offline and
-> through relays and authorities over any `RpcClient` protocol. The replay
-> strategy is next. See `examples/` and the design notes in `docs/`.
+> Work in progress. Replicated text works with both merge strategies (tree and
+> replay), offline, through relays over any `RpcClient` protocol, and (tree
+> only) through authorities that can reject edits. Schema-derived documents are
+> next. See `examples/` and the design notes in `docs/`.
 
 ## Installation
 

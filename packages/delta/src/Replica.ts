@@ -67,7 +67,7 @@ export const isReplica: (u: unknown) => u is Replica<unknown> = internal.isRepli
  * @category schemas
  * @since 0.1.0
  */
-export const ReplicaId = Schema.String.pipe(Schema.brand("ReplicaId"))
+export const ReplicaId = Schema.String.check(Schema.isMinLength(1)).pipe(Schema.brand("ReplicaId"))
 
 /**
  * A replica id: identifies the stream of changes one replica writes.

@@ -149,6 +149,16 @@ internally, so it should come after the tree exists.
   Eg-walker's authors "believe" it matches FugueMax. Ours merges through our own tree, so the two match by
   construction, and the tests check everything else.
 
+**How it's built.** Changes are `InsertAt`/`RemoveAt` ops on the text their author saw. A change made on
+top of the replica's whole history applies to the text as is. Otherwise the replica walks back from both
+sides to the latest change that everything being merged was made on top of (Eg-walker's critical
+version), lays out stand-ins for the text at that point, and replays only the changes after it through a
+temporary FugueMax tree. The tree is looked at as each change's author saw it (retreating and advancing
+changes, found with Eg-walker's diff), so each change becomes exactly the tree op its author's replica
+would have made. Stand-ins are never siblings of characters inserted later, so their layout can't affect
+the order. Tests check replay against tree step by step on random sessions, and against Eg-walker's
+conformance data.
+
 **Example.** A co-author returns after a long flight with hours of edits to a long document. Their
 replica syncs and merges quickly, and memory stays close to the size of the text.
 

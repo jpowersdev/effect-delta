@@ -136,6 +136,38 @@ describe("Relay", () => {
       )
     }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+  it.effect("syncs replay replicas, and keeps their document", () =>
+    Effect.gen(function*() {
+      const makeReplay = (replica: string) =>
+        ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const laptop = yield* makeReplay("laptop")
+          const phone = yield* makeReplay("phone")
+          yield* ReplicatedText.insert(laptop, 0, "Sessions last 24 hours.")
+          yield* synced(yield* Relay.connect(laptop, { document: notes }))
+          yield* synced(yield* Relay.connect(phone, { document: notes }))
+          // Both edit at once, while connected.
+          yield* ReplicatedText.update(laptop, (text) => text.replace("24", "8"))
+          yield* ReplicatedText.update(phone, (text) => text.replace("hours", "minutes"))
+          yield* showing(laptop, "Sessions last 8 minutes.")
+          yield* showing(phone, "Sessions last 8 minutes.")
+        }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+      )
+
+      // A new relay loads the document as a replay document.
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const tablet = yield* makeReplay("tablet")
+          yield* synced(yield* Relay.connect(tablet, { document: notes }))
+          assert.strictEqual(yield* ReplicatedText.get(tablet), "Sessions last 8 minutes.")
+          const tree = yield* make("tree")
+          const error = yield* Effect.flip((yield* Relay.connect(tree, { document: notes })).await)
+          assert.strictEqual(error.reason._tag, "ProtocolViolation")
+        }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+      )
+    }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
   it.effect("starts over from the store when saving fails", () =>
     Effect.gen(function*() {
       const laptop = yield* make("laptop")

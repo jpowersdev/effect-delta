@@ -53,7 +53,7 @@ export interface Change<Op> {
 /** @internal */
 export const Change = <Op extends Schema.Top>(op: Op) =>
   Schema.Struct({
-    replica: Schema.String,
+    replica: Schema.String.check(Schema.isMinLength(1)),
     seq: Schema.Int,
     length: Schema.Int,
     parents: Schema.Array(Id),

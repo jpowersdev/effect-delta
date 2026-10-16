@@ -54,13 +54,47 @@ export interface Tree<Info> {
 
 /**
  * Where a new character goes: which node it hangs from, on which side, and
- * (for right children) what came next when it was typed.
+ * (for right children) what came next when it was typed. Ops record it by id.
  *
  * @internal
  */
 export type Placement =
   | { readonly parent: Id | undefined; readonly side: "L" }
   | { readonly parent: Id | undefined; readonly side: "R"; readonly rightOrigin: Id | null }
+
+/**
+ * A placement by node, for nodes that may have no id.
+ *
+ * @internal
+ */
+export type Spot<Info> =
+  | { readonly parent: Node<Info>; readonly side: "L" }
+  | { readonly parent: Node<Info>; readonly side: "R"; readonly rightOrigin: Node<Info> | null }
+
+/**
+ * A way of looking at the tree: which nodes are in it, which characters show,
+ * and how many show in each subtree. `current` is the tree as it is. The
+ * replay strategy also looks at it as a replica saw it when making a change,
+ * without the characters that replica hadn't received.
+ *
+ * @internal
+ */
+export interface View<Info> {
+  readonly has: (node: Node<Info>) => boolean
+  readonly shows: (node: Node<Info>) => boolean
+  readonly size: (node: Node<Info>) => number
+}
+
+/**
+ * The tree as it is: every node, with removed characters hidden.
+ *
+ * @internal
+ */
+export const current: View<any> = {
+  has: () => true,
+  shows: (node) => !node.removed,
+  size: (node) => node.size
+}
 
 /** @internal */
 export const make = <Info>(rootInfo: Info): Tree<Info> => ({
@@ -84,6 +118,52 @@ export const make = <Info>(rootInfo: Info): Tree<Info> => ({
 export const find = <Info>(tree: Tree<Info>, id: Id): Node<Info> | undefined => tree.nodes.get(idKey(id))
 
 /**
+ * Fills an empty tree with `length` stand-in characters: a text whose
+ * characters' ids and history don't matter, only their order. They're laid out
+ * as a balanced subtree, so finding one is quick, and they get no ids (`find`
+ * never returns them).
+ *
+ * A stand-in is never a sibling of a character inserted later: a new character
+ * becomes a right child only of a node with no right children, and a left child
+ * only of a node with no left children. So how they're laid out never affects
+ * how later characters are ordered.
+ *
+ * @internal
+ */
+export const fill = <Info>(tree: Tree<Info>, length: number, info: Info): Array<Node<Info>> => {
+  const filled: Array<Node<Info>> = []
+  const build = (start: number, end: number, parent: Node<Info>, side: Side): Node<Info> | undefined => {
+    if (start >= end) return undefined
+    const middle = (start + end) >> 1
+    const node: Node<Info> = {
+      id: { replica: "", seq: middle },
+      char: "",
+      parent,
+      side,
+      rightOrigin: side === "R" ? null : undefined,
+      leftChildren: [],
+      rightChildren: [],
+      size: end - start,
+      removed: false,
+      insertedBy: info,
+      removedBy: []
+    }
+    const left = build(start, middle, node, "L")
+    if (left !== undefined) node.leftChildren.push(left)
+    filled[middle] = node
+    const right = build(middle + 1, end, node, "R")
+    if (right !== undefined) node.rightChildren.push(right)
+    return node
+  }
+  const top = build(0, length, tree.root, "R")
+  if (top !== undefined) {
+    tree.root.rightChildren.push(top)
+    tree.root.size += length
+  }
+  return filled
+}
+
+/**
  * Where a character typed at visible `index` goes. The new character goes
  * right after the character before the cursor (its left origin): as that
  * character's right child if it has none yet, otherwise as the left child of
@@ -92,20 +172,29 @@ export const find = <Info>(tree: Tree<Info>, id: Id): Node<Info> | undefined => 
  * @internal
  */
 export const place = <Info>(tree: Tree<Info>, index: number): Placement => {
-  const leftOrigin = index === 0 ? tree.root : nodeAt(tree, index - 1)
-  if (leftOrigin.rightChildren.length === 0) {
-    const rightOrigin = nextNonDescendant(leftOrigin)
-    return { parent: leftOrigin.id, side: "R", rightOrigin: rightOrigin === undefined ? null : rightOrigin.id! }
-  }
-  const rightOrigin = leftmostDescendant(leftOrigin.rightChildren[0]!)
-  return { parent: rightOrigin.id, side: "L" }
+  const found = spot(tree, index, current)
+  return found.side === "R"
+    ? { parent: found.parent.id, side: "R", rightOrigin: found.rightOrigin === null ? null : found.rightOrigin.id! }
+    : { parent: found.parent.id, side: "L" }
 }
 
 /**
- * Adds a run of characters typed together, starting at `placement`. Each
- * character after the first is the right child of the one before it, with the
- * same right origin a local insert would have given it. Returns the first new
- * node. Its parent and right origin must already be in the tree.
+ * Where a character typed at visible `index` goes, as `view` sees the tree.
+ *
+ * @internal
+ */
+export const spot = <Info>(tree: Tree<Info>, index: number, view: View<Info>): Spot<Info> => {
+  const leftOrigin = index === 0 ? tree.root : nodeAt(tree, index - 1, view)
+  const firstRight = leftOrigin.rightChildren.find(view.has)
+  if (firstRight === undefined) {
+    return { parent: leftOrigin, side: "R", rightOrigin: nextNonDescendant(leftOrigin, view) ?? null }
+  }
+  return { parent: leftmostDescendant(firstRight, view), side: "L" }
+}
+
+/**
+ * Adds a run of characters typed together, starting at `placement`. Its parent
+ * and right origin must already be in the tree.
  *
  * @internal
  */
@@ -115,15 +204,41 @@ export const insert = <Info>(
   first: Id,
   text: string,
   info: Info
+): Node<Info> =>
+  insertAt(
+    tree,
+    placement.side === "R"
+      ? {
+        parent: lookup(tree, placement.parent),
+        side: "R",
+        rightOrigin: placement.rightOrigin === null ? null : lookup(tree, placement.rightOrigin)
+      }
+      : { parent: lookup(tree, placement.parent), side: "L" },
+    first,
+    text,
+    info
+  )
+
+/**
+ * Adds a run of characters typed together at `spot`. Each character after the
+ * first is the right child of the one before it, with the same right origin a
+ * local insert would have given it. Returns the first new node.
+ *
+ * @internal
+ */
+export const insertAt = <Info>(
+  tree: Tree<Info>,
+  spot: Spot<Info>,
+  first: Id,
+  text: string,
+  info: Info
 ): Node<Info> => {
-  let parent = lookup(tree, placement.parent)
-  let side: Side = placement.side
-  let rightOrigin: Node<Info> | null | undefined = placement.side === "R"
-    ? (placement.rightOrigin === null ? null : lookup(tree, placement.rightOrigin))
-    : undefined
+  let parent = spot.parent
+  let side: Side = spot.side
+  let rightOrigin: Node<Info> | null | undefined = spot.side === "R" ? spot.rightOrigin : undefined
   // Typing on from the first character never has a right child to go around,
   // so every later character's right origin is what followed the first one.
-  const chainRightOrigin = placement.side === "R" ? rightOrigin : parent
+  const chainRightOrigin = spot.side === "R" ? rightOrigin : parent
   let firstNode: Node<Info> | undefined
   for (let offset = 0; offset < text.length; offset++) {
     const node: Node<Info> = {
@@ -169,28 +284,30 @@ export const remove = <Info>(node: Node<Info>, info: Info): boolean => {
  *
  * @internal
  */
-export const nodeAt = <Info>(tree: Tree<Info>, index: number): Node<Info> => {
+export const nodeAt = <Info>(tree: Tree<Info>, index: number, view: View<Info> = current): Node<Info> => {
   let node = tree.root
   let remaining = index
   // Iterative, because ordinary typing builds very deep trees.
   descend: while (true) {
     for (const child of node.leftChildren) {
-      if (remaining < child.size) {
+      const size = view.size(child)
+      if (remaining < size) {
         node = child
         continue descend
       }
-      remaining -= child.size
+      remaining -= size
     }
-    if (!node.removed) {
+    if (view.shows(node)) {
       if (remaining === 0) return node
       remaining--
     }
     for (const child of node.rightChildren) {
-      if (remaining < child.size) {
+      const size = view.size(child)
+      if (remaining < size) {
         node = child
         continue descend
       }
-      remaining -= child.size
+      remaining -= size
     }
     throw new Error(`Index ${index} is outside the text`)
   }
@@ -324,20 +441,26 @@ const updateSize = <Info>(node: Node<Info>, change: number): void => {
   }
 }
 
-const leftmostDescendant = <Info>(node: Node<Info>): Node<Info> => {
+// Nodes outside a view never have descendants inside it, because a replica
+// always has the characters a character it has was typed next to. So skipping
+// them, subtrees and all, is enough.
+
+const leftmostDescendant = <Info>(node: Node<Info>, view: View<Info>): Node<Info> => {
   let current = node
-  while (current.leftChildren.length > 0) current = current.leftChildren[0]!
+  for (let next = current.leftChildren.find(view.has); next !== undefined; next = current.leftChildren.find(view.has)) {
+    current = next
+  }
   return current
 }
 
 // The next node in text order that isn't in `node`'s subtree, removed ones
 // included; undefined at the end of the list.
-const nextNonDescendant = <Info>(node: Node<Info>): Node<Info> | undefined => {
+const nextNonDescendant = <Info>(node: Node<Info>, view: View<Info>): Node<Info> | undefined => {
   let current = node
   while (current.parent !== undefined) {
     const siblings = current.side === "L" ? current.parent.leftChildren : current.parent.rightChildren
-    const index = siblings.indexOf(current)
-    if (index < siblings.length - 1) return leftmostDescendant(siblings[index + 1]!)
+    const next = siblings.slice(siblings.indexOf(current) + 1).find(view.has)
+    if (next !== undefined) return leftmostDescendant(next, view)
     if (current.side === "L") return current.parent
     current = current.parent
   }
