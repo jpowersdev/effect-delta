@@ -15,6 +15,7 @@ import type * as InternalDocument from "effect-delta/internal/document"
 import * as InternalShape from "effect-delta/internal/shape"
 import { KeyValueStore } from "effect/persistence"
 import {
+  appliedBy,
   asOld,
   editProject,
   EditSession,
@@ -309,10 +310,8 @@ const checkOverlaps = (
   const { after, before, changes, shape } = merge
   const sorted = (overlaps: ReadonlyArray<Replica.Overlap | InternalDocument.Overlap>) =>
     overlaps.filter(({ _tag }) => _tag !== "Text").map((overlap) => JSON.stringify(overlap)).sort()
-  const received = changes.filter((change) =>
-    change.seq + change.length > VersionVector.get(before, change.replica) &&
-    change.seq + change.length <= VersionVector.get(after, change.replica)
-  )
+  const earlier = new Set(appliedBy(changes, before))
+  const received = appliedBy(changes, after).filter((change) => !earlier.has(change))
   assert.deepStrictEqual(
     sorted(edit.overlaps),
     sorted(expectedOverlaps(changes, before, after).filter((overlap) => InternalShape.shows(shape, overlap))),

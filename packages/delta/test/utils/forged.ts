@@ -460,11 +460,7 @@ const makeForger = (strategy: Replica.Strategy, options: { readonly ahead: boole
       )
       if (change === undefined) return undefined
       // Made on top of everything it had applied.
-      const applied = new Set(
-        [...has.changes.values()].filter((change) =>
-          change.seq + change.length <= VersionVector.get(version, change.replica)
-        )
-      )
+      const applied = new Set(appliedBy([...has.changes.values()], version))
       const past = new Set(made.flatMap((other, i) => applied.has(other.change) ? [i] : []))
       made.push({ change, past, ids: idsOf(change), dropped: false })
       return change
@@ -865,6 +861,27 @@ const writesOf = (
   return writes
 }
 
+/**
+ * The changes a replica with `version` has applied, of `changes`: each
+ * replica's from its first sequence number on, one after another. Changes that
+ * wait can be anywhere, even among those.
+ */
+export const appliedBy = (
+  changes: ReadonlyArray<InternalDocument.AnyChange>,
+  version: VersionVector.VersionVector
+): Array<InternalDocument.AnyChange> => {
+  const byKey = new Map(changes.map((change) => [`${change.seq}@${change.replica}`, change]))
+  return Object.entries(version).flatMap(([replica, end]) => {
+    const chain: Array<InternalDocument.AnyChange> = []
+    for (let seq = 0; seq < end;) {
+      const change = byKey.get(`${seq}@${replica}`)!
+      chain.push(change)
+      seq += change.length
+    }
+    return chain
+  })
+}
+
 const byPath = (writes: ReadonlyArray<Written>): Map<string, Array<Written>> => {
   const paths = new Map<string, Array<Written>>()
   for (const write of writes) {
@@ -888,13 +905,12 @@ export const expectedOverlaps = (
   before: VersionVector.VersionVector,
   after: VersionVector.VersionVector
 ): Array<Overlap> => {
-  const within = (version: VersionVector.VersionVector) => (change: InternalDocument.AnyChange) =>
-    change.seq + change.length <= VersionVector.get(version, change.replica)
-  const applied = changes.filter(within(after))
+  const applied = appliedBy(changes, after)
+  const earlier = new Set(appliedBy(changes, before))
   const writes = (changes: ReadonlyArray<InternalDocument.AnyChange>) =>
     changes.flatMap((change) => writesOf(change, applied))
-  const had = byPath(writes(applied.filter(within(before))))
-  const received = writes(applied.filter((change) => !within(before)(change)))
+  const had = byPath(writes([...earlier]))
+  const received = writes(applied.filter((change) => !earlier.has(change)))
   const all = byPath([...[...had.values()].flat(), ...received])
 
   const found = new Map<
