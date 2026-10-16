@@ -764,6 +764,13 @@ const check = (
 ): string | undefined => {
   const name = `Change ${key(change)}`
   if (change.ops.length === 0) return `${name} has no ops`
+  // Each op's sequence numbers follow the last op's, so one that takes none,
+  // or fewer, would give ops ids that others have.
+  if (
+    change.ops.some((op) => opLength(op) < 1 || (op._tag === "Remove" && op.targets.some(({ length }) => length < 1)))
+  ) {
+    return `${name} has an op that takes no sequence numbers`
+  }
   const total = change.ops.reduce((sum, op) => sum + opLength(op), 0)
   if (total !== change.length) return `${name} says it has ${change.length} sequence numbers but has ${total}`
   if (!parentsAreChanges) return `${name} has a parent in the middle of a change`
