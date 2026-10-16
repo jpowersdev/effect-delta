@@ -566,7 +566,7 @@ const readAt = (
     }
     case "Fields": {
       const parts: Array<unknown> = []
-      const fields: Record<string, unknown> = {}
+      const fields: Array<[string, unknown]> = []
       for (const field of shape.fields) {
         const part = source.at(field.name)
         if (field.optional && !part.exists()) {
@@ -580,12 +580,14 @@ const readAt = (
         // An optional field that can't be read is left out, like an entry.
         if (value === Missing && !field.optional && !field.hasDefault) return Missing
         parts.push(value)
-        if (value !== Missing && !(field.optional && value === undefined)) fields[field.name] = value
+        if (value !== Missing && !(field.optional && value === undefined)) fields.push([field.name, value])
       }
       return share(memo, source.path, parts, () => {
-        if (shape.make === undefined) return fields
+        // Defined rather than assigned, so a field such as `__proto__` is a field.
+        const value = Object.fromEntries(fields)
+        if (shape.make === undefined) return value
         try {
-          return shape.make(fields)
+          return shape.make(value)
         } catch {
           return Missing
         }
