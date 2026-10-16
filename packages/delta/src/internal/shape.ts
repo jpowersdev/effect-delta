@@ -281,6 +281,26 @@ export const at = (
 }
 
 /**
+ * Whether a value read with `shape` shows the part an overlap is at: a text
+ * for a text overlap, and for the others a value or a part that comes and
+ * goes.
+ *
+ * @internal
+ */
+export const shows = (shape: Shape, overlap: InternalDocument.Overlap): boolean => {
+  const found = at(shape, overlap.path)
+  if (found?._tag !== "Part") return false
+  switch (overlap._tag) {
+    case "Text":
+      return found.shape._tag === "Text"
+    case "Value":
+      return found.shape._tag === "Value" || found.presence !== "always"
+    case "Removed":
+      return found.presence !== "always"
+  }
+}
+
+/**
  * Checks a document's initial value: it must fit its merge rules. Texts start
  * empty, records and lists start empty, and optional fields start absent;
  * everything else starts as `initial` says.

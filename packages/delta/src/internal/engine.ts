@@ -21,12 +21,15 @@ import type * as InternalReplica from "./replica.ts"
 // state, the replica id it writes under, a lock that serializes everything,
 // and what it tells subscribers. A model says how to read the state as a
 // value. It keeps every change it can apply, including ones its schema has
-// no place for: those don't show, and they're passed on.
+// no place for: those don't show, nor do their overlaps, and they're passed
+// on.
 
 /** @internal */
 export interface Model {
   /** The value, worked out from the state. */
   readonly read: (document: InternalDocument.Document) => unknown
+  /** Whether the value shows the part an overlap is at. */
+  readonly shows: (overlap: InternalDocument.Overlap) => boolean
 }
 
 /**
@@ -316,7 +319,7 @@ const receive = (
   const ready = History.takeReady(history)
   if (ready.length === 0) return Effect.succeed([])
   const integrated = InternalDocument.integrate(state.document, ready, { overlaps: true })
-  const overlaps = integrated.overlaps.map(toOverlap)
+  const overlaps = integrated.overlaps.filter(engine.model.shows).map(toOverlap)
   const published = integrated.applied === 0
     ? Effect.void
     : publish(engine, { _tag: "Remote", texts: integrated.texts, overlaps, message: "" })

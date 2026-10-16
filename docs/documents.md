@@ -205,8 +205,8 @@ Apps upgrade one device at a time, so replicas on different versions of a schema
 - **Adding a field:** documents that never wrote it show its initial value. Add it to `initial`. A field
   added to an entry's or item's schema should be optional or have a constructor default.
 - **Parts an older schema doesn't describe** (a new field, a value it can't decode, such as a new literal)
-  are kept, stored and sent on, but don't show in its value. A value whose latest write it can't decode
-  shows the latest write it can. After the upgrade, they show.
+  are kept, stored and sent on, but don't show in its value, and merges don't report overlaps in them. A
+  value whose latest write it can't decode shows the latest write it can. After the upgrade, they show.
 - **Renaming or removing a field, or changing its rule** (a value becoming text) isn't supported, because
   paths are field names. Lenses (Cambria) are later. A replica keeps changes its schema has another rule
   for, and passes them on, but they don't show: a path keeps a text, values and a counter apart, and each
