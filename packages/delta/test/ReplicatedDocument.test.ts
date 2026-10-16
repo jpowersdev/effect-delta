@@ -177,6 +177,33 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
       }))
 
+    it.effect("a value received as JSON that says -0 shows as it does on the replicas it's sent on to", () =>
+      Effect.gen(function*() {
+        const Measured = Schema.Struct({ size: Schema.Number, extra: Schema.Any })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Measured, {
+            initial: { size: 1, extra: null },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const receive = (doc: ReplicatedDocument.ReplicatedDocument<typeof Measured.Type>, json: string) =>
+          Replica.receive(doc, Schema.decodeUnknownSync(Delta.Delta)(JSON.parse(json)))
+        // As a client that isn't JavaScript can send it: JSON.stringify never
+        // says -0.
+        const ada = yield* open("ada")
+        yield* receive(
+          ada,
+          `{"format":1,"changes":[{"replica":"other","seq":0,"length":2,"parents":[],"time":1,"ops":[` +
+            `{"_tag":"Set","path":["size"],"value":-0.0},{"_tag":"Set","path":["extra"],"value":[-0.0]}]}]}`
+        )
+        const ben = yield* open("ben")
+        yield* receive(
+          ben,
+          JSON.stringify(Schema.encodeSync(Delta.Delta)(yield* Replica.delta(ada, VersionVector.empty)))
+        )
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ada), yield* ReplicatedDocument.get(ben))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ada), { size: 0, extra: [0] })
+      }))
+
     // Writes of one value across three replicas, against a model of what each
     // replica has seen, with clocks moving forward and back between writes.
 
