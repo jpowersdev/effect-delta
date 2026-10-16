@@ -607,6 +607,26 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(Object.entries(doc.labels), [["__proto__", 1]])
       }))
 
+    it.effect("an update leaves out entries whose keys the record doesn't take, as decoding does", () =>
+      Effect.gen(function*() {
+        const Users = Schema.Struct({
+          byId: Schema.Record(Schema.TemplateLiteral(["user-", Schema.String]), Schema.Int)
+        })
+        const ada = yield* ReplicatedDocument.make(Users, {
+          initial: { byId: {} },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        // Typed as any string, as a key that comes from outside the app is.
+        const key: string = "admin"
+        yield* ReplicatedDocument.update(ada, () => ({ byId: { [key]: 1, "user-1": 2 } }))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ada), { byId: { "user-1": 2 } })
+        // Nothing is written that no replica shows, and that an authority
+        // would reject the whole change for.
+        const delta = (yield* Replica.delta(ada, VersionVector.empty)) as InternalDelta.DeltaImpl
+        const paths = [...delta.changes.values()].flatMap((change) => change.ops.map((op) => op.path))
+        assert.deepStrictEqual(paths, [["byId", "user-1"]])
+      }))
+
     it.effect("an optional field comes and goes", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
