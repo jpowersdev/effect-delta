@@ -143,11 +143,11 @@ export const Overlap: Schema.Codec<Overlap, OverlapEncoded> = Schema.Union([
  * seen each other's. Every replica converges anyway; an overlap says where a
  * person might want to look.
  *
+ * **Details**
+ *
  * An overlap is between what this replica had and what it received: a replica
  * that receives two changes that met before it had either, as when it loads a
  * document, isn't told about them.
- *
- * **Details**
  *
  * - `Text`: a stretch of the text at `path` where both edited, for example
  *   where "8 hours" and "12 hours" merged into "812 hours". `range` is where
