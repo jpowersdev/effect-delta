@@ -319,8 +319,11 @@ const receive = (
       return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
     }
   }
+  let empty: string | undefined
   for (const change of delta.changes.values()) {
-    if (!History.has(history, change)) history.pending.set(key(change), change)
+    const problem = InternalDocument.checkLength(change)
+    if (problem !== undefined) empty ??= problem
+    else if (!History.has(history, change)) history.pending.set(key(change), change)
   }
 
   // A bad change is dropped, and the rest are applied without it.
@@ -329,9 +332,9 @@ const receive = (
   const published = integrated.applied === 0
     ? Effect.void
     : publish(engine, { _tag: "Remote", texts: integrated.texts, overlaps, message: "" })
-  const [problem] = integrated.problems
+  const problem = integrated.problems[0]?.message ?? empty
   if (problem === undefined) return Effect.as(published, overlaps)
-  return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem.message }))))
+  return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem }))))
 }
 
 const toOverlap = (overlap: InternalDocument.Overlap): Replica.Overlap => {

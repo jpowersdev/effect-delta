@@ -754,6 +754,16 @@ const textEnds = (change: AnyChange): ReadonlyMap<string, Id> => {
 
 const endsCache = new WeakMap<AnyChange, ReadonlyMap<string, Id>>()
 
+/**
+ * What's wrong with a change that takes no sequence numbers, if it doesn't
+ * take any. Version vectors can't say whether one has been received, so it's
+ * refused as it arrives, before it can wait or be saved.
+ *
+ * @internal
+ */
+export const checkLength = (change: AnyChange): string | undefined =>
+  change.length < 1 ? `Change ${key(change)} takes no sequence numbers` : undefined
+
 // Checks a change before applying any of it, so a bad change can't leave the
 // document half-updated.
 const check = (

@@ -182,7 +182,13 @@ export const make = Effect.fnUntraced(function*(options: {
         // Changes that are new here wait as pending until what they build on
         // is here, then they're checked and applied in causal order.
         const fresh: Array<InternalDocument.AnyChange> = []
+        let empty: string | undefined
         for (const change of incoming) {
+          const problem = InternalDocument.checkLength(change)
+          if (problem !== undefined) {
+            empty ??= problem
+            continue
+          }
           const existing = state.history.changes.get(key(change)) ?? state.history.pending.get(key(change))
           if (existing !== undefined && !Equal.equals(existing, change)) {
             return yield* syncError(
@@ -198,7 +204,7 @@ export const make = Effect.fnUntraced(function*(options: {
         for (const change of fresh) state.history.pending.set(key(change), change)
 
         let rejected: string | undefined
-        let malformed: string | undefined
+        let malformed = empty
         if (check === undefined) {
           // A relay drops a bad change and carries on. If the bad change came
           // with an earlier push, that push has already been answered.
