@@ -39,8 +39,8 @@ interface Document {
   readonly id: Replica.DocumentId
   readonly lock: Semaphore.Semaphore
   /**
-   * Its strategy is undefined until it's known: from what's stored, or else
-   * from the first replica to subscribe or push a text op.
+   * Its strategy is undefined until it's known: from a text op it applies,
+   * or the first replica to subscribe.
    */
   state: InternalDocument.Document
   /** Who each replica id belongs to: the first user who wrote with it. */
@@ -163,8 +163,8 @@ export const make = Effect.fnUntraced(function*(options: {
 
         const { state } = document
         if (incoming.length === 0) return new Sync.Accepted({ confirmed: held(state.history) })
-        // A document's strategy is its first text op's. It's learned from
-        // the changes that are kept, below.
+        // A document's strategy is its first text op's, learned as it's
+        // applied: one that waits may never be.
         const strategy = state.strategy ?? (isAuthority ? "tree" : InternalDocument.strategyOf(incoming))
         for (const change of incoming) {
           if (!InternalDocument.fitsStrategy(change, strategy)) {
@@ -271,9 +271,6 @@ export const make = Effect.fnUntraced(function*(options: {
         // Subscribers are sent what's been checked and applied, whoever
         // pushed it: a change that waits might turn out bad.
         const applied = waiting.filter((change) => history.changes.has(key(change)))
-        // Applying a text op sets it, but kept changes that wait count too:
-        // the store has them, so a reload would learn it from them.
-        document.state.strategy ??= InternalDocument.strategyOf(kept)
         if (kept.length > 0) {
           saving = true
           yield* save(store, document, kept, user)
@@ -330,10 +327,10 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
     for (const [replica, owner] of Object.entries(stored.value.writers)) document.owners.set(replica, owner)
     const changes = [...(stored.value.history as InternalDelta.DeltaImpl).changes.values()]
     const { state } = document
-    state.strategy = InternalDocument.strategyOf(changes)
     for (const change of changes) state.history.pending.set(key(change), change)
-    // Applied changes were checked before they were stored. One that was
-    // stored while it waited, and turns out to be bad, is dropped.
+    // Applied changes were checked before they were stored, and set the
+    // strategy as they're applied again. One that was stored while it waited,
+    // and turns out to be bad, is dropped.
     InternalDocument.integrateReady(state, { overlaps: undefined })
   }
   return document

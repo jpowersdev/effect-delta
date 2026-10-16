@@ -279,8 +279,8 @@ something nobody added, and `readProposal` rejects anything else that doesn't fi
 including a list item added without a place in its list, which the authority couldn't tell from an entry.
 
 **Texts and documents shouldn't share a document id.** If they do, each keeps the other's changes without
-showing them. A change with no text ops fits either strategy; servers learn a document's strategy from its
-first text op, or from the replica that subscribes.
+showing them. A change with no text ops fits either strategy; servers learn a document's strategy from the
+first text op they apply, or from the replica that subscribes first.
 
 ## API
 
@@ -603,8 +603,10 @@ All built, each with tests and an example:
 - **An authority needs the newest schema.** `readProposal` rejects what its schema can't read, so an
   authority on an older schema rejects the newer apps' changes to the parts it doesn't know. Upgrade the
   authority first.
-- **A server forgets a strategy it only heard from a subscriber.** A document with no text ops yet takes the
-  strategy of whoever subscribes first, and after the server reloads it, the next subscriber's.
+- **A document with no text ops yet takes the strategy of whoever gets there first:** the first replica to
+  subscribe, or the first text op applied, which a client with the other strategy (mistaken or hostile) can
+  send. Replicas with the other one are then refused. A server also forgets a strategy it only heard from a
+  subscriber, and after it reloads, takes the next subscriber's.
 - **A replay text finds its own parents by walking the history back** to the last change that touched it.
   A text edited rarely, in a document edited often, walks a long way. Remembering each change's latest
   text parts would fix that.

@@ -673,8 +673,8 @@ edited or read.
    under, and by whom.
 8. **Replica ids can't be empty.** The replay strategy's temporary tree uses the empty id for characters
    whose history it skips.
-9. **A server learns each document's strategy** from what it has stored, or else from the first replica to
-   subscribe or push, and refuses the other strategy (`ProtocolViolation` when subscribing,
+9. **A server learns each document's strategy** from the first text op it applies, stored ones included, or
+   else from the first replica to subscribe, and refuses the other strategy (`ProtocolViolation` when subscribing,
    `StrategyMismatch` when pushing). Authorities are tree-only for now, as planned.
 
 ## Known limits
