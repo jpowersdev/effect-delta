@@ -259,12 +259,13 @@ export const make = Effect.fnUntraced(function*(options: {
         }
         const { history } = document.state
 
-        // A relay keeps changes that wait for something they build on; an
-        // authority can't check those, so it drops them.
+        // A relay keeps changes that wait for something they build on, as a
+        // replica does, whatever else the push brought; an authority can't
+        // check those, so it drops them.
         for (const change of fresh) {
-          if (history.pending.has(key(change)) && (isAuthority || malformed !== undefined)) {
+          if (isAuthority && history.pending.has(key(change))) {
             history.pending.delete(key(change))
-            if (isAuthority && rejected === undefined) {
+            if (rejected === undefined) {
               malformed ??= `Change ${key(change)} builds on changes the authority doesn't have`
             }
           }
