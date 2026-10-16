@@ -878,6 +878,34 @@ describe("ReplicatedDocument", () => {
         assert.notStrictEqual(after.comments, before.comments)
       }))
 
+    it.effect("unchanged parts keep their identity in a class, or a struct with constructor defaults", () =>
+      Effect.gen(function*() {
+        const Layout = Schema.Struct({ columns: Schema.Array(Schema.Int) })
+        class Post extends Schema.Class<Post>("Post")({ title: Schema.String, layout: Layout }) {}
+        const Settings = Schema.Struct({
+          theme: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("light"))),
+          layout: Layout
+        })
+        const Site = Schema.Struct({ post: Post, settings: Settings })
+        const site = yield* ReplicatedDocument.make(Site, {
+          initial: {
+            post: new Post({ title: "", layout: { columns: [1] } }),
+            settings: { theme: "", layout: { columns: [2] } }
+          },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        const before = yield* ReplicatedDocument.get(site)
+        yield* ReplicatedDocument.update(site, (value) => ({
+          post: new Post({ ...value.post, title: "Hello" }),
+          settings: { ...value.settings, theme: "dark" }
+        }))
+        const after = yield* ReplicatedDocument.get(site)
+        assert.instanceOf(after.post, Post)
+        assert.deepStrictEqual([after.post.title, after.settings.theme], ["Hello", "dark"])
+        assert.strictEqual(after.post.layout, before.post.layout)
+        assert.strictEqual(after.settings.layout, before.settings.layout)
+      }))
+
     it.effect("an unchanged part keeps its identity though it holds NaN", () =>
       Effect.gen(function*() {
         const Sizes = Schema.Struct({ box: Schema.Struct({ width: Schema.Number }), count: Schema.Number })
