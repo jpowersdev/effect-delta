@@ -532,8 +532,8 @@ export const forgeSession = <E, R>(
     return changes
   })
 
-// The texts honest edits type into, few so they often meet: one always there,
-// one in an entry, and one in a list item and an optional field in it.
+// The texts honest edits type into, few so they often meet: the title, a
+// note's body, an item's title, and the optional note of a sub in that item.
 const typed: ReadonlyArray<Path> = [
   ["title"],
   ["notes", "a", "body"],

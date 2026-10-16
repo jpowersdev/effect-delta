@@ -540,6 +540,10 @@ All built, each with tests and an example:
   shows its new field, and their histories are equal.
 - **Servers without the schema.** A relay stores documents it can't read, and replicas reload them intact.
 - **Authorities.** Checks see typed values before and after each change; a rejection rolls the change back.
+- **Forged changes.** Changes made directly, many malformed or not fitting the schema, among well-formed ones
+  from extra replicas, sent together, late, again and as JSON. Replicas, relays and authorities accept the
+  same ones and show the same value however they arrive, and every merge reports the `Value` and `Removed`
+  overlaps a model of the rule gives.
 - **Break it on purpose,** as before: drop the replica-id tiebreak, let edits keep entries, and so on, and
   confirm a property fails.
 
