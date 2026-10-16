@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest"
 import {
   Cause,
   Context,
+  type Crypto,
   Deferred,
   Effect,
   Equal,
@@ -13,6 +14,7 @@ import {
   Queue,
   Schedule,
   Schema,
+  Scope,
   Stream
 } from "effect"
 import {
@@ -37,6 +39,7 @@ import {
   ForgedSession,
   forgeSession,
   initialProject,
+  overJson,
   Project
 } from "./utils/forged.ts"
 import {
@@ -1143,11 +1146,33 @@ describe("Authority", () => {
         }).pipe(Layer.provide(HistoryStore.layerMemory))
         yield* Effect.gen(function*() {
           const authority = yield* Authority.Authority
+          // Reached as over RPC. A push the editor stops waiting for still
+          // finishes, as on a server; the editor just never hears back.
+          const remote: Sync.Server = {
+            ...overJson(authority),
+            push: (request) => Effect.uninterruptible(overJson(authority).push(request))
+          }
           // An editor making its own edits among the forged changes, some
-          // rejected, and some made on top of ones that will be.
-          const editor = yield* ReplicatedDocument.makeConfirmed(Project, { initial: initialProject, document: spec })
-            .pipe(asUser("editor"))
-          yield* synced(editor.connection)
+          // rejected, and some made on top of ones that will be. It saves what
+          // it has, and now and then it's closed and opened again from that.
+          const open = Effect.gen(function*() {
+            const scope = yield* Scope.make()
+            const editor = yield* Effect.gen(function*() {
+              const editor = yield* ReplicatedDocument.makeConfirmed(Project, {
+                initial: initialProject,
+                document: spec
+              })
+              yield* Effect.orDie(HistoryStore.persist(editor, spec))
+              return editor
+            }).pipe(Effect.provideService(Authority.Authority, remote), asUser("editor"), Scope.provide(scope))
+            return { editor, scope }
+          })
+          let current = yield* open
+          yield* synced(current.editor.connection)
+          const reopen = Effect.gen(function*() {
+            yield* Scope.close(current.scope, Exit.void)
+            current = yield* open
+          }).pipe(Effect.provideContext(yield* Effect.context<Crypto.Crypto | HistoryStore.HistoryStore>()))
           // Until the editor has heard back about everything it sent, and has
           // everything the authority accepted.
           const settled = Effect.gen(function*() {
@@ -1156,24 +1181,29 @@ describe("Authority", () => {
                 format: Sync.FORMAT,
                 document: spec,
                 strategy: "tree",
-                version: yield* Replica.version(editor),
+                version: yield* Replica.version(current.editor),
                 authority: true
               })))
-              if ((yield* unconfirmed(editor.connection)) === 0 && Delta.isEmpty(Option.getOrThrow(yield* has).delta)) {
+              if (
+                (yield* unconfirmed(current.editor.connection)) === 0 &&
+                Delta.isEmpty(Option.getOrThrow(yield* has).delta)
+              ) {
                 return
               }
               yield* Effect.yieldNow
             }
             assert.fail("The editor didn't settle")
           })
+          const edit = (command: (typeof edits)[number]) =>
+            editProject(current.editor, command, { wait: settled, reopen })
           let next = 0
           const key = (change: InternalDocument.AnyChange) => `${change.seq}@${change.replica}`
           yield* forgeSession("tree", session, (changes) =>
             Effect.gen(function*() {
               const command = edits[next++]
-              if (command !== undefined) yield* editProject(editor, command, settled)
+              if (command !== undefined) yield* edit(command)
               const delta = InternalDelta.fromChanges(changes)
-              yield* Effect.exit(authority.push({ format: Sync.FORMAT, document: spec, delta }).pipe(asUser("forger")))
+              yield* Effect.exit(remote.push({ format: Sync.FORMAT, document: spec, delta }).pipe(asUser("forger")))
               const kept = new Set(
                 checked.flatMap(({ accepted, delta }) =>
                   accepted ? [...(delta as InternalDelta.DeltaImpl).changes.keys()] : []
@@ -1181,7 +1211,7 @@ describe("Authority", () => {
               )
               return (change: InternalDocument.AnyChange) => kept.has(key(change))
             }))
-          for (const command of edits.slice(next)) yield* editProject(editor, command, settled)
+          for (const command of edits.slice(next)) yield* edit(command)
           yield* settled
 
           // A replica that receives the changes in the order they were
@@ -1197,8 +1227,19 @@ describe("Authority", () => {
             yield* Replica.receive(replica, delta)
             assert.deepStrictEqual(proposed.after, yield* ReplicatedDocument.get(replica), change)
           }
-          assert.deepStrictEqual(yield* ReplicatedDocument.get(editor), yield* ReplicatedDocument.get(replica))
-        }).pipe(Effect.scoped, Effect.provide([Reading, CryptoTest]))
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(current.editor), yield* ReplicatedDocument.get(replica))
+          // Opened again from what it saved, it ends there too.
+          yield* reopen
+          yield* settled
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(current.editor), yield* ReplicatedDocument.get(replica))
+          yield* Scope.close(current.scope, Exit.void)
+        }).pipe(
+          Effect.provide([
+            Reading,
+            CryptoTest,
+            HistoryStore.layerKeyValueStore({ prefix: "editor" }).pipe(Layer.provide(KeyValueStore.layerMemory))
+          ])
+        )
       }),
       { arbitrary: forgedRuns }
     )

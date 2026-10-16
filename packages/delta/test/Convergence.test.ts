@@ -486,12 +486,14 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
           }
         })
         let next = 0
-        // An edit by the next peer, or for `Wait`, an exchange with the one after it.
+        // An edit by the next peer, or for `Wait` and `Reopen`, an exchange
+        // with the one after it.
         const step = Effect.fnUntraced(function*(command: (typeof edits)[number]) {
           const at = next++
-          if (command._tag === "Wait") return yield* exchange(at, at + 1)
+          if (command._tag === "Wait" || command._tag === "Reopen") return yield* exchange(at, at + 1)
           const peer = everyone[at % 3]!
-          assert.isTrue(Exit.isSuccess(yield* peer.tracked(editProject(peer.doc, command, Effect.void))))
+          const edited = yield* peer.tracked(editProject(peer.doc, command, { wait: Effect.void, reopen: Effect.void }))
+          assert.isTrue(Exit.isSuccess(edited))
           // A newer one also says when it's due, which the older one can't.
           const newer = peers.find((other) => other === peer)
           if (command._tag === "Status" && newer !== undefined) {

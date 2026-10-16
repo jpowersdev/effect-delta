@@ -1,5 +1,5 @@
-import { Effect, Random, Schema, Struct } from "effect"
-import { Delta, type Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
+import { Effect, Random, Schema, Stream, Struct } from "effect"
+import { Delta, type Replica, ReplicatedDocument, ReplicatedText, Sync } from "effect-delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { Fraction, gapAt, itemAt, Which } from "./sessions.ts"
 
@@ -439,9 +439,26 @@ export const forgeSession = <E, R>(
 
 // Sending --------------------------------------------------------------------
 
+// A value as it arrives after being sent as JSON.
+const sent = <A, I>(schema: Schema.Codec<A, I>, value: A): A =>
+  Schema.decodeUnknownSync(schema)(JSON.parse(JSON.stringify(Schema.encodeSync(schema)(value))))
+
 /** A delta as it arrives after being sent as JSON, as relays over RPC and stores on a `KeyValueStore` send it. */
-export const throughJson = (delta: Delta.Delta): Delta.Delta =>
-  Schema.decodeUnknownSync(Delta.Delta)(JSON.parse(JSON.stringify(Schema.encodeSync(Delta.Delta)(delta))))
+export const throughJson = (delta: Delta.Delta): Delta.Delta => sent(Delta.Delta, delta)
+
+/** A relay or an authority reached as over RPC: every request, update, ack and error is sent as JSON. */
+export const overJson = (server: Sync.Server): Sync.Server => ({
+  subscribe: (request) =>
+    server.subscribe(sent(Sync.Subscribe.payloadSchema, request)).pipe(
+      Stream.map((update) => sent(Sync.Update, update)),
+      Stream.mapError((error) => sent(Sync.SyncError, error))
+    ),
+  push: (request) =>
+    server.push(sent(Sync.Push.payloadSchema, request)).pipe(
+      Effect.map((ack) => sent(Sync.Ack, ack)),
+      Effect.mapError((error) => sent(Sync.SyncError, error))
+    )
+})
 
 /** A delta sent one hop: as it is, as between replicas in one process, or as JSON, picked at random. */
 export const hop = (delta: Delta.Delta): Effect.Effect<Delta.Delta> =>
@@ -461,16 +478,19 @@ const EditCommand = Schema.Union([
   Schema.TaggedStruct("Item", { key: Schema.Literals(["i1", "i2"]), at: Fraction, remove: Schema.Boolean }),
   Schema.TaggedStruct("Value", { at: Fraction, value: Schema.Literals(["x", "y"]), remove: Schema.Boolean }),
   // Waits until the replica has heard back about everything it sent.
-  Schema.TaggedStruct("Wait", {})
+  Schema.TaggedStruct("Wait", {}),
+  // Closes the replica and opens it again from what it saved, whether or not
+  // it has heard back.
+  Schema.TaggedStruct("Reopen", {})
 ])
 
 export const EditSession = Schema.Array(EditCommand).check(Schema.isMaxLength(20))
 
-/** Makes an edit, or for `Wait`, runs `wait`. */
+/** Makes an edit, or for `Wait` and `Reopen`, runs `wait` or `reopen`. */
 export const editProject = Effect.fnUntraced(function*(
   doc: ReplicatedDocument.ReplicatedDocument<OldProject>,
   command: typeof EditCommand.Type,
-  wait: Effect.Effect<void>
+  options: { readonly wait: Effect.Effect<void>; readonly reopen: Effect.Effect<void> }
 ) {
   const update = (f: (project: OldProject) => OldProject) => Effect.orDie(ReplicatedDocument.update(doc, f))
   switch (command._tag) {
@@ -509,6 +529,8 @@ export const editProject = Effect.fnUntraced(function*(
         return { ...project, vals: [...vals.slice(0, index), command.value, ...vals.slice(index)] }
       })
     case "Wait":
-      return yield* wait
+      return yield* options.wait
+    case "Reopen":
+      return yield* options.reopen
   }
 })
