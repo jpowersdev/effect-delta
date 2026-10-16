@@ -194,6 +194,10 @@ const validate = (text: string, patch: TextPatch.TextPatch): ReplicatedTextError
   let current = text
   let position = 0
   for (const operation of patch) {
+    // Counting backwards ends before where it starts, outside the text.
+    if (operation._tag !== "Insert" && operation.length < 0) {
+      return outOfBounds(position + operation.length, current.length)
+    }
     switch (operation._tag) {
       case "Retain":
         position += operation.length
