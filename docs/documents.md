@@ -410,7 +410,8 @@ interface Proposed<A> { readonly before: A; readonly after: A; readonly paths: R
 
 The whole call is one change. It fails with `Schema.SchemaError` when a new value doesn't encode, for example
 when it fails a check, or encodes to something JSON can't carry (`Schema.Any` passes anything on). Values are
-written as JSON sends them, so `-0` is written as `0`.
+written as JSON sends them, so `-0` is written as `0`, and a `-0` in JSON text, which other languages send,
+is read as `0`.
 
 **Text fields are handles.** `ReplicatedDocument.text(doc, path)` returns a `ReplicatedText.Editable`. Every
 `ReplicatedText` function except the constructors takes one: `insert`, `remove`, `applyPatch`, `set`,

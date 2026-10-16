@@ -1,5 +1,6 @@
 import * as Equal from "effect/Equal"
 import * as Schema from "effect/Schema"
+import * as SchemaGetter from "effect/SchemaGetter"
 import type * as Replica from "../Replica.ts"
 import * as TextPatch from "../TextPatch.ts"
 import * as VersionVector from "../VersionVector.ts"
@@ -82,11 +83,24 @@ export interface PlaceOp {
 /** @internal */
 export type Op = Text.Op | SetOp | AddOp | UnsetOp | IncrementOp | PlaceOp
 
+/**
+ * A value as JSON sends it: JSON has no -0, which `JSON.stringify` sends as 0.
+ *
+ * @internal
+ */
+export const asSent = (json: Schema.Json): Schema.Json => JSON.parse(JSON.stringify(json))
+
+// JSON text can say -0 all the same. Decoded as it's sent on, a value shows
+// the same on the replica that decodes it and those it sends it to.
+const SentJson = Schema.Json.pipe(
+  Schema.decode({ decode: SchemaGetter.transform(asSent), encode: SchemaGetter.passthrough() })
+)
+
 /** @internal */
 export const Op: Schema.Codec<Op> = Schema.Union([
   TreeText.Op,
   ReplayText.Op,
-  Schema.TaggedStruct("Set", { path: Path.Path, value: Schema.Json }),
+  Schema.TaggedStruct("Set", { path: Path.Path, value: SentJson }),
   Schema.TaggedStruct("Add", { path: Path.Path }),
   Schema.TaggedStruct("Unset", { path: Path.Path }),
   Schema.TaggedStruct("Increment", { path: Path.Path, by: Schema.Int }),

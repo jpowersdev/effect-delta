@@ -241,8 +241,7 @@ const compileValue = (ast: SchemaAST.AST): Value => {
     // As JSON sends it, so the replica that writes it shows what the rest
     // receive: some codecs, such as `Schema.Any`'s, pass on what JSON can't
     // carry, and JSON has no -0.
-    encode: (value) =>
-      Result.map(Result.flatMap(encode(value), asJson), (json) => JSON.parse(JSON.stringify(json)) as Schema.Json),
+    encode: (value) => Result.map(Result.flatMap(encode(value), asJson), InternalDocument.asSent),
     decode: (json) => decode(json),
     equivalence: Schema.toEquivalence(schema)
   }
