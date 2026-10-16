@@ -932,6 +932,29 @@ describe("ReplicatedDocument", () => {
         assert.strictEqual((yield* ReplicatedDocument.get(ben)).votes, 1)
       }))
 
+    it.effect("a change stamped later than any clock reads is refused, so later changes can be stamped after it", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
+        // A safe integer, as a change sent as JSON has, with room for only one
+        // change after it.
+        const far = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: Number.MAX_SAFE_INTEGER - 1,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }])
+        malformed(yield* Effect.flip(Replica.receive(ada, far)), "later than any clock reads")
+        // So Ada's changes are still later than what they're made on top of,
+        // and can be sent as JSON.
+        for (const votes of [1, 2, 3]) yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes }))
+        const sent = Schema.encodeSync(Delta.Delta)(yield* Replica.delta(ada, VersionVector.empty))
+        const ben = yield* make("ben")
+        yield* Replica.receive(ben, Schema.decodeUnknownSync(Delta.Delta)(sent))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
+      }))
+
     it.effect("a bad change is dropped, and the changes ready behind it still apply", () =>
       Effect.gen(function*() {
         const { ada, ben } = yield* pair
