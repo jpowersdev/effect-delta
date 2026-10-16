@@ -910,6 +910,27 @@ describe("ReplicatedDocument", () => {
         }
       }).pipe(Effect.scoped))
 
+    it.effect("a bad change that waited isn't held against the delta it waited for", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes: 1 }))
+        // Made on top of Ada's change, and bad: it has fewer ops than it says.
+        const bad = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 2,
+          parents: [{ replica: "ada", seq: 0 }],
+          time: 1000,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }])
+        const ben = yield* make("ben")
+        // It waits for Ada's change, which is fine, and is dropped once that
+        // arrives, as a relay drops it.
+        yield* Replica.receive(ben, bad)
+        yield* Replica.receive(ben, yield* Replica.delta(ada, VersionVector.empty))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
+      }))
+
     it.effect("every op takes at least one sequence number", () =>
       Effect.gen(function*() {
         for (const strategy of ["tree", "replay"] as const) {
