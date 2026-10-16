@@ -174,18 +174,16 @@ export interface Slot {
   counter: number
   /** Every value written, earliest write first. */
   readonly values: Array<ValueWrite>
-  /** The value writes no other value write here had seen. */
-  valueHeads: ReadonlyArray<ValueWrite>
-  /** The latest write of whether this path exists. */
+  /** Every write of whether this path exists, earliest first. */
+  readonly presences: Array<PresenceWrite>
+  /** The latest of them. */
   presence: PresenceWrite | undefined
-  presenceHeads: ReadonlyArray<PresenceWrite>
   /** Per replica, the sequence number after its last op under this path. */
   readonly below: Record<string, number>
   /** For a list: its items' positions. */
   list: Fugue.Tree<Item> | undefined
   /** For a list item: every position it was given, earliest write first. */
   readonly places: Array<PlaceWrite>
-  placeHeads: ReadonlyArray<PlaceWrite>
 }
 
 /**
@@ -233,13 +231,11 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
       text: undefined,
       counter: 0,
       values: [],
-      valueHeads: [],
+      presences: [],
       presence: undefined,
-      presenceHeads: [],
       below: {},
       list: undefined,
-      places: [],
-      placeHeads: []
+      places: []
     }
     document.slots.set(k, found)
     if (!Path.isRoot(path)) ensureSlot(document, Path.parent(path)).children.add(path[path.length - 1]!)
@@ -251,6 +247,10 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
 // change's ops see the ones before them.
 const seen = (by: Write, write: Write): boolean =>
   by.replica === write.replica ? write.seq < by.seq : (by.past[write.replica] ?? 0) > write.seq
+
+// The writes in `writes` that `write` hadn't seen: the ones it met.
+const unseenBy = <W extends Write>(write: Write, writes: ReadonlyArray<W>): Array<W> =>
+  writes.filter((other) => other !== write && !seen(write, other))
 
 const insertSorted = <W extends Write>(writes: Array<W>, write: W): void => {
   let i = writes.length
@@ -378,34 +378,48 @@ export type Overlap =
   }
   | { readonly _tag: "Removed"; readonly path: Path.Path; readonly replicas: ReadonlyArray<string> }
 
+// What concurrent writes met over: a value, whether something exists, or a
+// list item's position.
+type Over = "value" | "presence" | "place"
+
 // Collects value and removal overlaps by path, so each path has at most one of
 // each however many writes met there.
 class Found {
-  private readonly found = new Map<string, { tag: "Value" | "Removed"; path: Path.Path; replicas: Set<string> }>()
-  add(tag: "Value" | "Removed", path: Path.Path, replicas: Iterable<string>): void {
+  private readonly found = new Map<
+    string,
+    { tag: "Value" | "Removed"; path: Path.Path; replicas: Set<string>; over: Set<Over> }
+  >()
+  add(tag: "Value" | "Removed", path: Path.Path, replicas: Iterable<string>, over: Over): void {
     const k = `${tag}${Path.key(path)}`
     let entry = this.found.get(k)
     if (entry === undefined) {
-      entry = { tag, path, replicas: new Set() }
+      entry = { tag, path, replicas: new Set(), over: new Set() }
       this.found.set(k, entry)
     }
     for (const replica of replicas) entry.replicas.add(replica)
+    entry.over.add(over)
   }
   list(document: Document): Array<Overlap> {
-    return [...this.found.values()].map(({ path, replicas, tag }) => {
-      const sorted = [...replicas].sort(compareReplica)
-      return tag === "Removed"
-        ? { _tag: "Removed", path, replicas: sorted }
-        : { _tag: "Value", path, replicas: sorted, kept: kept(slot(document, path)!) }
-    })
+    // A removal can win partway through a batch and lose to a later write.
+    return [...this.found.values()].filter(({ path, tag }) => tag === "Value" || !exists(document, path)).map(
+      ({ over, path, replicas, tag }) => {
+        const sorted = [...replicas].sort(compareReplica)
+        return tag === "Removed"
+          ? { _tag: "Removed", path, replicas: sorted }
+          : { _tag: "Value", path, replicas: sorted, kept: kept(slot(document, path)!, over) }
+      }
+    )
   }
 }
 
-// Whose write shows at a path where writes met.
-const kept = (found: Slot): string => {
-  if (found.presence !== undefined && !found.presence.exists) return found.presence.replica
-  const latest = [found.values.at(-1), found.places.at(-1), found.presence].filter((write) => write !== undefined)
-  return latest.reduce((a, b) => compareWrites(a, b) >= 0 ? a : b).replica
+// Whose write shows at a path where writes met: a removal if it won, else the
+// latest of the kind of write they met over.
+const kept = (found: Slot, over: ReadonlySet<Over>): string => {
+  const { presence } = found
+  if (presence !== undefined && (!presence.exists || (over.size === 1 && over.has("presence")))) {
+    return presence.replica
+  }
+  return (over.has("value") ? found.values.at(-1) : found.places.at(-1))!.replica
 }
 
 // Merging --------------------------------------------------------------------
@@ -711,12 +725,10 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       at.kind = "value"
       const value: ValueWrite = { ...write, value: op.value }
       insertSorted(at.values, value)
-      const unseen = at.valueHeads.filter((head) => !seen(value, head))
-      const differing = unseen.filter((head) => !Equal.equals(head.value, value.value))
+      const differing = unseenBy(value, at.values).filter((other) => !Equal.equals(other.value, value.value))
       if (found !== undefined && differing.length > 0) {
-        found.add("Value", op.path, [value.replica, ...differing.map((head) => head.replica)])
+        found.add("Value", op.path, [value.replica, ...differing.map((other) => other.replica)], "value")
       }
-      at.valueHeads = [...unseen, value]
       setPresence(document, at, { ...write, exists: true }, found)
       break
     }
@@ -742,11 +754,14 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       })
       const place: PlaceWrite = { ...write, node }
       insertSorted(at.places, place)
-      const unseen = at.placeHeads.filter((head) => !seen(place, head))
-      if (found !== undefined && unseen.length > 0) {
-        found.add("Value", op.path, [place.replica, ...unseen.map((head) => head.replica)])
+      const moved = unseenBy(place, at.places)
+      if (found !== undefined && moved.length > 0) {
+        found.add("Value", op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
       }
-      at.placeHeads = [...unseen, place]
+      // A move that a removal it hadn't seen wins over.
+      if (found !== undefined && at.presence?.exists === false && !seen(place, at.presence)) {
+        found.add("Removed", op.path, [at.presence.replica, place.replica], "presence")
+      }
       refreshPosition(at)
       break
     }
@@ -754,21 +769,24 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
 }
 
 const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: Found | undefined): void => {
-  const unseen = at.presenceHeads.filter((head) => !seen(write, head))
-  if (found !== undefined && unseen.some((head) => head.exists !== write.exists)) {
-    found.add("Value", at.path, [
-      write.replica,
-      ...unseen.filter((head) => head.exists !== write.exists).map((head) => head.replica)
-    ])
+  insertSorted(at.presences, write)
+  at.presence = at.presences.at(-1)
+  const differing = unseenBy(write, at.presences).filter((other) => other.exists !== write.exists)
+  if (found !== undefined && differing.length > 0) {
+    found.add("Value", at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
   }
-  at.presenceHeads = [...unseen, write]
-  if (at.presence === undefined || compareWrites(write, at.presence) > 0) at.presence = write
-  // A removal that wins over edits under the entry it hadn't seen.
+  // A removal that wins over edits under the entry, or moves of the item, it
+  // hadn't seen.
   if (found !== undefined && !write.exists && at.presence === write) {
-    const editors = Object.entries(at.below).filter(([replica, next]) =>
-      replica !== write.replica && next > (write.past[replica] ?? 0)
-    )
-    if (editors.length > 0) found.add("Removed", at.path, [write.replica, ...editors.map(([replica]) => replica)])
+    const editors = [
+      ...Object.entries(at.below).filter(([replica, next]) =>
+        replica !== write.replica && next > (write.past[replica] ?? 0)
+      ),
+      ...unseenBy(write, at.places).map((other) => [other.replica] as const)
+    ]
+    if (editors.length > 0) {
+      found.add("Removed", at.path, [write.replica, ...editors.map(([replica]) => replica)], "presence")
+    }
   }
   if (!Path.isRoot(at.path) && slot(document, Path.parent(at.path))?.list !== undefined) refreshPosition(at)
 }
@@ -787,7 +805,7 @@ const noteBelow = (
     above.below[write.replica] = Math.max(above.below[write.replica] ?? 0, write.seq + length)
     const presence = above.presence
     if (found !== undefined && presence !== undefined && !presence.exists && !seen(write, presence)) {
-      found.add("Removed", prefix, [presence.replica, write.replica])
+      found.add("Removed", prefix, [presence.replica, write.replica], "presence")
     }
   }
 }

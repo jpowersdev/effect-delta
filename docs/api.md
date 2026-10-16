@@ -44,7 +44,7 @@ Building the network half changed a few details. They're listed under
 7. **Upgrading is a find-and-replace.** Nothing encoded contains the library name. Tags are plain words,
    storage keys use a prefix the app chooses, and the wire and storage formats carry their own format
    version, independent of Effect's.
-8. **Small public surface.** Nine modules, one service each where there's a service. Strategy internals
+8. **Small public surface.** Ten modules, one service each where there's a service. Strategy internals
    stay in `internal/`. Every public module is `@stability unstable` until upstreamed.
 
 ## Examples
@@ -225,8 +225,9 @@ apart. It reopens 115,000 characters in about 25 ms and merges the co-author's w
 | Module           | What it's for                                                                                                 |
 | ---------------- | ------------------------------------------------------------------------------------------------------------- |
 | `ReplicatedText` | A collaborative text replica: create, edit, read, subscribe, anchor.                                          |
+| `ReplicatedDocument` | A replica whose value is a `Schema`, merged by rules from the schema ([`documents.md`](./documents.md)). |
 | `TextPatch`      | How a string changed, in the Quill shape. Named and shaped like `JsonPatch`, and a `Differ<string, TextPatch>`. Editor bindings speak this. |
-| `Replica`        | What every replica shares, so sync and storage work for text now and documents later: ids, version, delta, receive, exchange, overlaps. |
+| `Replica`        | What every replica shares, so sync and storage work for texts and documents alike: ids, version, delta, receive, exchange, overlaps. |
 | `Delta`          | What syncs: a set of changes. Combines with `Combiner`/`Reducer`.                                            |
 | `VersionVector`  | What a replica has seen, per replica id.                                                                     |
 | `Sync`           | The protocol as an `RpcGroup`, the `Authorization` service, connections and their status, `CurrentUser`, protocol errors. |
@@ -361,13 +362,18 @@ declare const delta: (self: Replica<unknown>, since: VersionVector) => Effect<De
 declare const receive: (self: Replica<unknown>, delta: Delta) => Effect<ReadonlyArray<Overlap>, DeltaError>  // dual
 declare const exchange: (self: Replica<unknown>, that: Replica<unknown>) => Effect<ReadonlyArray<Overlap>, DeltaError> // dual; self's overlaps
 
-type Overlap = {
-  readonly _tag: "Text"
-  readonly range: ReplicatedText.Range          // where it is in the merged text, now
-  readonly anchors: ReplicatedText.AnchorRange  // follows it from here on
-  readonly replicas: ReadonlyArray<ReplicaId>
-}
-// Documents add { _tag: "Value" } and { _tag: "Removed" }, with a path (proposed in documents.md).
+type Overlap =
+  | {
+    readonly _tag: "Text"
+    readonly path: Path                           // [] for a replicated text
+    readonly range: ReplicatedText.Range          // where it is in the merged text, now
+    readonly anchors: ReplicatedText.AnchorRange  // follows it from here on
+    readonly replicas: ReadonlyArray<ReplicaId>
+  }
+  // Documents only (documents.md): both wrote here, or one removed it; `kept` is whose write shows.
+  | { readonly _tag: "Value"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId>; readonly kept: ReplicaId }
+  // One removed this entry or item while the other changed something inside it.
+  | { readonly _tag: "Removed"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId> }
 
 class DeltaError extends Schema.TaggedError<DeltaError>()("DeltaError", {
   reason: Schema.Union([StrategyMismatch, Malformed, ReplicaIdReused, AuthorityOnly])
@@ -663,13 +669,14 @@ Measured on a 150,000-character text with 2,600 changes (`scratchpad` benchmark,
   `anchor`, `locate` and overlaps made only of removed text are slow on long histories. They could start
   from the latest change the anchored character's history shares, as merges do.
 - **The tree is one node per character,** and typing builds deep chains, so tree edits cost time in
-  proportion to the depth. Runs and a balanced layout are the usual fix.
+  proportion to the depth, and one long insert or removal costs its length times the depth (a whole-text
+  `update` that changes text far apart is one long replacement). Runs and a balanced layout are the usual
+  fix.
 - **A reused replica id is caught** only once one copy has written more under it than the other (see
   `ReplicaIdReused`).
 
 ## Not in the first release
 
-- Documents (Schema-derived, with text fields), proposed in [`documents.md`](./documents.md)
 - A symmetric peer-to-peer mesh
 - Undo
 - Formatting marks

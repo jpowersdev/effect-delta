@@ -5,14 +5,15 @@ body, a status and comments. It takes the same three steps text did (vocabulary,
 API) and builds on what's decided in [`vocabulary.md`](./vocabulary.md), [`strategies.md`](./strategies.md)
 and [`api.md`](./api.md).
 
-**Status: proposed** (2026-10-15). Nothing here is built yet. [Decisions](#decisions) lists what needs a yes,
-each with a recommendation.
+**Status: decided and built** (2026-10-15), with lists. Building changed a few details; they're listed under
+[Changed while building](#changed-while-building), and the sections below show the result.
 
 ## In one paragraph
 
 A document's merge rules come from its schema. A struct merges field by field, and a record merges entry by
 entry. A string marked as text merges character by character, with the document's strategy (tree or
-replay). A number marked as a counter merges by adding, and anything else takes the latest write. The rest
+replay). A number marked as a counter merges by adding, an array marked as a list merges item by item, and
+anything else takes the latest write. The rest
 works as it does for text: one replica per device, changes with parents, deltas, version vectors, relays,
 authorities and history stores. A document is a second kind of replica, not a second sync stack (API
 decision 1). Its text fields are edited, watched and anchored with the same `ReplicatedText` functions as a
@@ -48,7 +49,8 @@ New terms only; the rest are in [`vocabulary.md`](./vocabulary.md).
 | **Write time**    | When a change was made, in milliseconds from `Clock`, moved later when needed so a change is always later than everything its replica had seen.            | Hybrid logical clock (HLC); Automerge's change `time`       | `Clock`                                       |
 | **Initial value** | What a document shows for parts nobody has written yet. Part of the document's definition, like its schema, so it's the same everywhere.                    | docustore `initial`; json-joy schema defaults               | —                                             |
 | **Counter**       | A whole number that merges by adding: two concurrent +1s make +2.                                                                                          | PN-counter; Automerge and Loro counters                     | —                                             |
-| **List** (later)  | An ordered collection whose items can be inserted, removed and moved concurrently.                                                                         | Y.Array, Automerge list, Loro MovableList                   | —                                             |
+| **List**          | An ordered collection whose items can be inserted, removed and moved concurrently.                                                                         | Y.Array, Automerge list, Loro MovableList                   | `Schema.Array`                                |
+| **Item**          | One element of a list, known by its key: a field the app sets, or for a list of values, the id of the write that added it.                                 | Automerge list element, Loro MovableList element            | —                                             |
 
 **Words we avoid**, in addition to the existing list:
 
@@ -69,6 +71,7 @@ New terms only; the rest are in [`vocabulary.md`](./vocabulary.md).
 | an optional field (`optionalKey`, `optional`)                              | entry        | like a record entry with a fixed key                                 |
 | `ReplicatedDocument.Text`                                                  | text         | character by character, with the document's strategy                 |
 | `ReplicatedDocument.Counter`                                               | counter      | the increments add up                                                |
+| `ReplicatedDocument.List(item, { key })`, `ReplicatedDocument.List(value)` | items        | inserts, removals and moves all survive; items merge by their schema |
 | anything else: strings, numbers, literals, unions, arrays, `Option`, `Date` | latest write | the later write shows, and the merge reports an overlap              |
 
 The root must be a struct, a class or a record. A document that's one text is a `ReplicatedText`.
@@ -132,13 +135,33 @@ A counter holds whole numbers. Fractions added in a different order on each repl
 floating point, so replicas would disagree. An `update` that takes a counter from 5 to 7 records +2, and
 concurrent +2 and +3 make 10.
 
+### Lists
+
+`ReplicatedDocument.List(Task, { key: "id" })` is an array whose items are identified by a field the app
+sets, usually a random id, as React keys are. `update` compares the old and new arrays by key:
+- new keys are inserts;
+- missing keys are removals;
+- keys in a different order are moves (the fewest that give the new order);
+- keys in both merge their content by the item's schema.
+
+Underneath, a list is a record (an entry per key) plus each item's position. A position is a node in a
+tree, ordered by the tree strategy's rule, so items inserted concurrently at the same spot don't
+interleave. Moving an item gives it a new position, and its latest position wins (Kleppmann, "Moving
+elements in list CRDTs", 2020), so two people moving the same item never duplicate it; the merge reports a
+`Value` overlap for it. A removal wins over concurrent edits inside the item, as with entries.
+
+`ReplicatedDocument.List(Schema.String)` is a list of values, compared by value. A changed value counts as
+removing one item and inserting another. An item is known by the id of the write that added it.
+
+Lists use the tree rule whatever the document's strategy: a list's tree has one node per placement, not
+per character.
+
 ### Whole values
 
 Anything without its own rule is written and replaced whole.
-- **Arrays:** if two people each add an item, one write wins and the merge reports it. Lists that merge item
-  by item come [later](#lists). Comparing two arrays can't tell an edited item from a replaced one, so
-  item-by-item merging needs ids for items, which a list type provides. Until then, a record keyed by id is
-  how to make a collection whose items merge.
+- **Arrays** that aren't lists: if two people each add an item, one write wins and the merge reports it.
+  Comparing two arrays can't tell an edited item from a replaced one, so item-by-item merging needs ids for
+  items, which a list provides.
 - **Unions** (a block that's a paragraph or an image), `Option`, `Date`, sets and maps are replaced whole.
 - Text and counters can't sit inside a whole value (a union, an array, an `Option`), because they'd be
   replaced whole too. `make` refuses such a schema, as a defect.
@@ -158,8 +181,15 @@ Anything without its own rule is written and replaced whole.
 replica must use the same one. Define it next to the schema, never from local data. To create a document
 with content, the replica creating it writes the content once, as a change like any other.
 
-Text fields start empty: `initial` has `""` for each, and starting text is a change. That way two replicas
-can't each insert the same starting text and end up with it twice, as Yjs apps sometimes do.
+Texts, records and lists start empty in `initial`, and optional fields start absent; `make` refuses an
+`initial` that says otherwise, as a defect. Starting text is a change, so two replicas can't each insert the
+same starting text and end up with it twice, as Yjs apps sometimes do. And whether an entry, item or
+optional field exists is then always its latest write, never `initial`, so a server's JSON (which has no
+`initial`) says the same.
+
+Entries and items have no initial value. One that's missing a required field (written by an older version
+of the schema) is left out, unless the field has a constructor default (`Schema.withConstructorDefault`),
+which fills it in.
 
 The alternatives:
 - **Defaults in the schema** (`Schema.withDecodingDefaultTypeKey` on every field): pure Schema, but verbose
@@ -170,7 +200,8 @@ The alternatives:
 ### When the schema changes
 
 Apps upgrade one device at a time, so replicas on different versions of a schema sync with each other.
-- **Adding a field:** documents that never wrote it show its initial value. Add it to `initial`.
+- **Adding a field:** documents that never wrote it show its initial value. Add it to `initial`. A field
+  added to an entry's or item's schema should be optional or have a constructor default.
 - **Parts an older schema doesn't describe** (a new field, a value it can't decode, such as a new literal)
   are kept, stored and sent on, but don't show in its value. A value whose latest write it can't decode
   shows the latest write it can. After the upgrade, they show.
@@ -192,10 +223,15 @@ they do now, plus `time`.
 | Op                                                      | Sequence numbers | What it does                                                              |
 | ------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------- |
 | `Insert`, `Remove` (tree); `InsertAt`, `RemoveAt` (replay) | one per character | Edits the text at the path, as now.                                     |
-| `Set { path, value }`                                   | 1                | Writes a value, encoded with its schema's JSON codec. On an entry or optional field, it also means the entry exists. |
-| `Add { path }`                                          | 1                | The entry or optional field at the path exists (for entries with content). |
-| `Unset { path }`                                        | 1                | Removes the entry or optional field at the path.                          |
+| `Set { path, value }`                                   | 1                | Writes a value, encoded with its schema's JSON codec. On an entry, item or optional field, it also means it exists. |
+| `Add { path }`                                          | 1                | The entry, item or optional field at the path exists (for content that isn't a value). |
+| `Unset { path }`                                        | 1                | Removes the entry, item or optional field at the path.                    |
 | `Increment { path, by }`                                | 1                | Adds to the counter at the path.                                          |
+| `Place { path, parent, side, rightOrigin? }`            | 1                | Gives the list item at the path a new position, placed as a tree `Insert` places a character. |
+
+A path holds a text, a counter or a value, or has parts under it, never two of those. A change's ops on one
+text come together, and its parents are the last ids of changes. Receivers check all three (`Malformed`
+otherwise).
 
 **Servers don't need the schema.** Ops say what they do, so a relay or an authority applies a document's
 changes without the app's code. Values are JSON, texts are texts, counters are numbers. A server checks what
@@ -292,10 +328,10 @@ interface Options<A> {
   readonly replica?: Replica.ReplicaId | undefined   // default: a fresh random id
 }
 
-declare const make: <A>(schema: Schema.Codec<A, unknown>, options: Options<A>) => Effect<ReplicatedDocument<A>, never, Crypto>
+declare const make: <A>(schema: Schema.Schema<A>, options: Options<A>) => Effect<ReplicatedDocument<A>, never, Crypto>
 
 // Answers to an authority, like ReplicatedText.makeConfirmed. Tree-only.
-declare const makeConfirmed: <A>(schema: Schema.Codec<A, unknown>, options: {
+declare const makeConfirmed: <A>(schema: Schema.Schema<A>, options: {
   readonly initial: A
   readonly document: Replica.DocumentId
   readonly replica?: Replica.ReplicaId | undefined
@@ -303,8 +339,12 @@ declare const makeConfirmed: <A>(schema: Schema.Codec<A, unknown>, options: {
 }) => Effect<Confirmed<A>, never, Authority | Crypto | Scope>
 
 // Marking parts that don't take the latest write
-declare const Text: Schema.String           // merges character by character
-declare const Counter: Schema.Codec<number> // a whole number that merges by adding
+declare const Text: Schema.String // merges character by character
+declare const Counter: Schema.Int // a whole number that merges by adding
+declare const List: {             // an array that merges item by item
+  <S extends Schema.Top>(item: S, options: { readonly key: KeyOf<S["Type"]> }): Schema.$Array<S>
+  <S extends Schema.Top>(item: S): Schema.$Array<S> // a list of values
+}
 
 // Reading
 declare const get: <A>(self: ReplicatedDocument<A>) => Effect<A>
@@ -327,21 +367,23 @@ declare const set: <A>(self: ReplicatedDocument<A>, value: A) => Effect<void, Sc
 
 // A text field, for the ReplicatedText functions. Dual.
 declare const text: <A>(self: ReplicatedDocument<A>, path: TextPath<A>) => ReplicatedText.Editable
-type TextPath<A> = /* paths through fields and record keys that end at a string */
+type TextPath<A> = /* paths through fields, record keys and list item keys that end at a string */
 
 // For an authority's check (below)
 declare const readProposal: <A>(
   proposal: Authority.DocumentProposal,
-  schema: Schema.Codec<A, unknown>,
+  schema: Schema.Schema<A>,
   options: { readonly initial: A }
-) => { readonly before: A; readonly after: A; readonly paths: ReadonlyArray<Replica.Path> }
+) => Proposed<A>
+interface Proposed<A> { readonly before: A; readonly after: A; readonly paths: ReadonlyArray<Replica.Path> }
 ```
 
 **`update` and `set` compare the old and new values part by part**, and write only what changed:
 - values, with `Schema.toEquivalence`;
 - text fields, with the one-replacement rule `ReplicatedText.set` uses;
 - counters, by the difference;
-- records, by which keys appear and disappear, then the content of entries in both.
+- records, by which keys appear and disappear, then the content of entries in both;
+- lists, as [Lists](#lists) says.
 
 The whole call is one change. It fails with `Schema.SchemaError` when a new value doesn't encode, for example
 when it fails a check.
@@ -357,8 +399,8 @@ a text field is a defect.
 **`changes` keeps the identity of unchanged parts.** A new value shares every part that didn't change with the
 previous one, so a UI can skip re-rendering them.
 
-**Reading never fails.** Parts the schema doesn't describe are left out, and parts nobody wrote come from
-`initial`.
+**Reading never fails.** Parts the schema doesn't describe are left out, and so are entries and items it can't
+read. Parts nobody wrote come from `initial`.
 
 ### Overlaps
 
@@ -403,7 +445,7 @@ because nothing is lost.
 - **Snapshots** hold the text of every text field, by path: `{ version, texts: [{ path, text }] }`. Values and
   counters load quickly from history.
 
-## Changes to what's built
+## Changes to what was built for text
 
 Nothing has been released, so the format stays 1. None of these changes how a text is edited.
 
@@ -419,7 +461,7 @@ Nothing has been released, so the format stays 1. None of these changes how a te
 
 ## Decisions
 
-Proposed, each with a recommendation:
+Decided (2026-10-15):
 
 1. **`ReplicatedDocument`**, made from a schema and an initial value, as the second kind of replica. It names
    the special part first, like `ReplicatedText`. *Alternatives:* `ReplicatedValue` (vague),
@@ -433,7 +475,8 @@ Proposed, each with a recommendation:
    reports it. *Alternative:* edits keep an entry.
 5. **An explicit initial value**, the same everywhere. Text fields start empty. *Alternative:* decoding
    defaults on every field.
-6. **Arrays are whole values until lists exist.** Lists are designed below, keyed by an item field.
+6. **Arrays are whole values unless they're lists.** `ReplicatedDocument.List` merges item by item, with
+   items keyed by a field.
 7. **Checks only on values.** `make` refuses checks on merged parts.
 8. **Parts an older schema doesn't describe are kept, not shown, and never rejected.**
 9. **One change format, and servers don't need the schema:** every change has a write time, and every op can
@@ -445,14 +488,15 @@ Proposed, each with a recommendation:
 
 ## Build order
 
+All built, each with tests and an example:
+
 1. Write times and paths in changes, a document state servers can apply without the schema, and
    `ReplicatedDocument` with the tree strategy: fields, entries, text fields, counters, values and overlaps.
    Relays and `HistoryStore` take documents. `examples/design-review.ts`.
-2. Replay text fields.
+2. Replay text fields. `examples/wiki.ts`.
 3. Authorities for documents: the `Proposal` union, `readProposal` and `makeConfirmed`.
-4. Lists.
-
-Each step lands with its tests and docs, as before.
+   `examples/approvals.ts`.
+4. Lists. `examples/task-board.ts`.
 
 ## How we'll know it's correct
 
@@ -473,33 +517,44 @@ Each step lands with its tests and docs, as before.
 ## Known limits
 
 - **`update` compares the whole document,** so its cost grows with the document. Path-scoped writes come later.
-- **Values are written whole.** A large array changes as a whole.
+- **`update` can't always tell which item moved.** When one item moves past a single neighbour, moving
+  either gives the new order, and `update` picks one. Every replica still agrees; only a concurrent move of
+  one of them shows the difference. An explicit move, like the text handles, comes with path-scoped writes.
+- **Values are written whole.** A large array that isn't a list changes as a whole.
 - **A clock far ahead** decides concurrent writes until other clocks catch up (see
   [Latest write](#latest-write)).
-- **Removed entries keep their content** until pruning exists.
+- **Removed entries and items keep their content** until pruning exists.
 - **Replicas on different schema versions** can show different values for the parts only one understands.
-- **Replay with many text fields** has to find the changes that touched each field. Projecting the history per
-  field is the riskiest part to build.
+- **An authority should have the newest schema.** A proposal has only each value's latest write, so an
+  authority on an older schema reads a value it can't decode as its initial value, not as an earlier write.
+- **A server forgets a strategy it only heard from a subscriber.** A document with no text ops yet takes the
+  strategy of whoever subscribes first, and after the server reloads it, the next subscriber's.
+- **A replay text finds its own parents by walking the history back** to the last change that touched it.
+  A text edited rarely, in a document edited often, walks a long way. Remembering each change's latest
+  text parts would fix that.
+- **One long edit is slow to merge.** Trees are one node per character, so inserting or removing a long run
+  costs its length times the tree's depth (see the text limits in [`api.md`](./api.md#known-limits)).
+
+## Changed while building
+
+1. **`initial` has no entries, items or optional fields.** Texts, records and lists start empty and optional
+   fields start absent, so whether something exists is always its latest write. Otherwise a server's JSON,
+   which has no `initial`, couldn't say that an entry in `initial` had been removed.
+2. **Entries and items that can't be read are left out**, such as one missing a required field, unless the
+   field has a constructor default.
+3. **Lists are `ReplicatedDocument.List(item, { key })`**, a constructor like `Schema.Array`, instead of
+   `Schema.Array(item).pipe(list(...))`. Items are placed with a `Place` op, and a list of values knows each
+   item by the id of the write that added it.
+4. **Existence is `Set` for values and `Add` for everything else,** texts and counters included: an
+   optional text field is added, then edited.
+5. **Changes must keep one text's ops together, and name the last ids of changes as parents.** Both hold for
+   every change a replica makes; receivers reject others as `Malformed`.
+6. **A replay text's parents are found by walking the change graph,** not from version vectors. The
+   Eg-walker conformance data has replica ids whose changes aren't in sequence order, which version vectors
+   can't describe.
+7. **`readProposal` returns a `Proposed<A>`.**
 
 ## Later
-
-### Lists
-
-`Schema.Array(Task).pipe(ReplicatedDocument.list({ key: "id" }))` makes a list whose items are identified by
-a field the app sets, usually a random id, as React keys do. `update` compares the old and new arrays by key:
-- new keys are inserts;
-- missing keys are removals;
-- keys in a different place are moves;
-- keys in both merge their content by the item's schema.
-
-Underneath, a list is a record (entries by key) plus an order. Each item's place is a position in a tree,
-ordered by the tree strategy's rule, so concurrent inserts don't interleave. Moving an item gives it a new
-position, and its latest position wins (Kleppmann, "Moving elements in list CRDTs", 2020), so two people
-moving the same item never duplicate it. A removal wins over concurrent edits inside the item, as with
-entries.
-
-A list of plain values, such as `Schema.Array(Schema.String).pipe(ReplicatedDocument.list())`, compares by
-value. A changed item counts as removing one item and inserting another.
 
 ### Other things later
 
@@ -507,7 +562,8 @@ value. A changed item counts as removing one item and inserting another.
 - **Tagged unions** that merge field by field while their tag stays the same.
 - **Values merged with a `Reducer`** the app gives, such as `Number.ReducerMax` for "last seen". Only for
   reducers that are commutative and idempotent, checked by law tests.
-- **Path-scoped writes**, through `Optic`, so a write needn't compare the whole document.
+- **Path-scoped writes**, through `Optic`, so a write needn't compare the whole document, including an
+  explicit list move.
 - **Recursive schemas** (`Schema.suspend`), such as nested folders.
 - **Renaming fields**, with lenses.
 - **Starting text in `initial`.**

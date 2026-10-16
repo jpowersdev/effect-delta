@@ -2,8 +2,8 @@
  * An authority is a server that decides which changes count. Each change a
  * replica pushes is checked against a rule the app gives (`check`), and either
  * accepted (stored, then sent to every subscriber) or rejected. Replicas that
- * answer to an authority are made with `ReplicatedText.makeConfirmed`; they
- * roll a rejected change back.
+ * answer to an authority are made with `ReplicatedText.makeConfirmed` or
+ * `ReplicatedDocument.makeConfirmed`; they roll a rejected change back.
  *
  * `Authority` is a service with three layers:
  *

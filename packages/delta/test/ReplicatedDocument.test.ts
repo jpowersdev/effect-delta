@@ -456,4 +456,260 @@ describe("ReplicatedDocument", () => {
         assert.strictEqual((yield* ReplicatedDocument.get(ben)).votes, 1)
       }))
   })
+
+  describe("lists", () => {
+    const Task = Schema.Struct({
+      id: Schema.String,
+      title: ReplicatedDocument.Text,
+      status: Schema.Literals(["todo", "done"])
+    })
+    type Task = typeof Task.Type
+
+    const Board = Schema.Struct({
+      name: Schema.String,
+      tasks: ReplicatedDocument.List(Task, { key: "id" }),
+      tags: ReplicatedDocument.List(Schema.String)
+    })
+    type Board = typeof Board.Type
+    type BoardDocument = ReplicatedDocument.ReplicatedDocument<Board>
+
+    const empty: Board = { name: "", tasks: [], tags: [] }
+
+    const task = (id: string, title = "", status: Task["status"] = "todo"): Task => ({ id, title, status })
+    const ids = (board: Board) => board.tasks.map(({ id }) => id)
+    const withTasks = (...tasks: Array<Task>) => (board: Board): Board => ({ ...board, tasks })
+    const withTags = (...tags: Array<string>) => (board: Board): Board => ({ ...board, tags })
+
+    // Moves task `id` to `index`, as dragging it would.
+    const move = (id: string, index: number) => (board: Board): Board => {
+      const moved = board.tasks.find((task) => task.id === id)!
+      const rest = board.tasks.filter((task) => task !== moved)
+      return { ...board, tasks: [...rest.slice(0, index), moved, ...rest.slice(index)] }
+    }
+
+    const makeBoard = (replica: string) =>
+      ReplicatedDocument.make(Board, { initial: empty, replica: Replica.ReplicaId.make(replica) })
+
+    // Two boards that start in sync, with `tasks`.
+    const boards = (...tasks: Array<Task>) =>
+      Effect.gen(function*() {
+        const ada = yield* makeBoard("ada")
+        const ben = yield* makeBoard("ben")
+        yield* ReplicatedDocument.update(ada, withTasks(...tasks))
+        yield* Replica.exchange(ada, ben)
+        return { ada, ben }
+      })
+
+    // Both boards show the same value, which is returned.
+    const same = Effect.fnUntraced(function*(a: BoardDocument, b: BoardDocument) {
+      const value = yield* ReplicatedDocument.get(a)
+      assert.deepStrictEqual(yield* ReplicatedDocument.get(b), value)
+      return value
+    })
+
+    // Brings both up to date, returning the overlaps each one found.
+    const merge = Effect.fnUntraced(function*(a: BoardDocument, b: BoardDocument) {
+      const toA = yield* Replica.delta(b, yield* Replica.version(a))
+      const toB = yield* Replica.delta(a, yield* Replica.version(b))
+      return [yield* Replica.receive(a, toA), yield* Replica.receive(b, toB)] as const
+    })
+
+    const ada = Replica.ReplicaId.make("ada")
+    const ben = Replica.ReplicaId.make("ben")
+
+    it.effect("update inserts, removes, moves and edits items by key", () =>
+      Effect.gen(function*() {
+        const board = yield* makeBoard("ada")
+        yield* ReplicatedDocument.update(board, withTasks(task("a"), task("b"), task("c")))
+        assert.deepStrictEqual(ids(yield* ReplicatedDocument.get(board)), ["a", "b", "c"])
+
+        yield* ReplicatedDocument.update(board, withTasks(task("a"), task("d"), task("c")))
+        assert.deepStrictEqual(ids(yield* ReplicatedDocument.get(board)), ["a", "d", "c"])
+
+        yield* ReplicatedDocument.update(board, withTasks(task("c"), task("a", "Ship it", "done"), task("d")))
+        assert.deepStrictEqual(
+          (yield* ReplicatedDocument.get(board)).tasks,
+          [task("c"), task("a", "Ship it", "done"), task("d")]
+        )
+
+        // A replica that receives the changes shows the same.
+        const other = yield* makeBoard("ben")
+        yield* Replica.exchange(board, other)
+        yield* same(board, other)
+      }))
+
+    it.effect("an item's text fields are edited through text, and merge character by character", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* boards(task("a", "Write docs"))
+        const title = (board: BoardDocument) => ReplicatedDocument.text(board, ["tasks", "a", "title"])
+        yield* ReplicatedText.insert(title(ada), 10, " today")
+        yield* ReplicatedText.insert(title(ben), 0, "Please ")
+        assert.deepStrictEqual((yield* ReplicatedDocument.get(ada)).tasks, [task("a", "Write docs today")])
+        assert.deepStrictEqual(yield* Replica.exchange(ada, ben), [])
+        assert.deepStrictEqual((yield* same(ada, ben)).tasks, [task("a", "Please Write docs today")])
+      }))
+
+    it.effect("items inserted concurrently at one spot all show, without interleaving", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* boards(task("first"), task("last"))
+        yield* ReplicatedDocument.update(ada, withTasks(task("first"), task("a1"), task("a2"), task("last")))
+        yield* ReplicatedDocument.update(ben, withTasks(task("first"), task("b1"), task("b2"), task("last")))
+        assert.deepStrictEqual(yield* Replica.exchange(ada, ben), [])
+        assert.deepInclude(
+          [["first", "a1", "a2", "b1", "b2", "last"], ["first", "b1", "b2", "a1", "a2", "last"]],
+          ids(yield* same(ada, ben))
+        )
+      }))
+
+    it.effect("an item moved by both ends up in one place, where it was moved last, and the merge says so", () =>
+      Effect.gen(function*() {
+        const replicas = yield* boards(task("a"), task("b"), task("c"), task("d"))
+        yield* ReplicatedDocument.update(replicas.ben, move("c", 3))
+        // Ada's move is later, though Ben's replica id is larger.
+        yield* TestClock.adjust("1 second")
+        yield* ReplicatedDocument.update(replicas.ada, move("c", 0))
+        const [onAda, onBen] = yield* merge(replicas.ada, replicas.ben)
+        const overlap: Replica.Overlap = { _tag: "Value", path: ["tasks", "c"], replicas: [ada, ben], kept: ada }
+        assert.deepStrictEqual(onAda, [overlap])
+        assert.deepStrictEqual(onBen, [overlap])
+        assert.deepStrictEqual(ids(yield* same(replicas.ada, replicas.ben)), ["c", "a", "b", "d"])
+      }))
+
+    it.effect("a move and a concurrent edit inside the item both apply", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* boards(task("a"), task("b"), task("c", "Fix login"))
+        yield* ReplicatedDocument.update(ada, move("c", 0))
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ben, ["tasks", "c", "title"]), 9, " on Safari")
+        yield* ReplicatedDocument.update(ben, (board) => ({
+          ...board,
+          tasks: board.tasks.map((task) => task.id === "c" ? { ...task, status: "done" } : task)
+        }))
+        assert.deepStrictEqual(yield* Replica.exchange(ada, ben), [])
+        assert.deepStrictEqual(
+          (yield* same(ada, ben)).tasks,
+          [task("c", "Fix login on Safari", "done"), task("a"), task("b")]
+        )
+      }))
+
+    it.effect("a removal wins over a concurrent edit inside the item, and adding it back brings that edit", () =>
+      Effect.gen(function*() {
+        const replicas = yield* boards(task("a", "Draft"), task("b"))
+        yield* ReplicatedDocument.update(replicas.ada, withTasks(task("b")))
+        yield* ReplicatedText.insert(ReplicatedDocument.text(replicas.ben, ["tasks", "a", "title"]), 5, " two")
+        const [onAda, onBen] = yield* merge(replicas.ada, replicas.ben)
+        const overlap: Replica.Overlap = { _tag: "Removed", path: ["tasks", "a"], replicas: [ada, ben] }
+        assert.deepStrictEqual(onAda, [overlap])
+        assert.deepStrictEqual(onBen, [overlap])
+        assert.deepStrictEqual(ids(yield* same(replicas.ada, replicas.ben)), ["b"])
+
+        // Its content is kept, Ben's edit included.
+        const title = ReplicatedDocument.text(replicas.ada, ["tasks", "a", "title"])
+        assert.strictEqual(yield* ReplicatedText.get(title), "Draft two")
+        yield* ReplicatedDocument.update(replicas.ada, withTasks(task("a", "Draft two"), task("b")))
+        yield* Replica.exchange(replicas.ada, replicas.ben)
+        assert.deepStrictEqual(
+          (yield* same(replicas.ada, replicas.ben)).tasks,
+          [task("a", "Draft two"), task("b")]
+        )
+      }))
+
+    it.effect("a removal undone before the merge isn't reported", () =>
+      Effect.gen(function*() {
+        const replicas = yield* boards(task("a", "Draft"))
+        yield* ReplicatedDocument.update(replicas.ada, withTasks())
+        yield* ReplicatedText.insert(ReplicatedDocument.text(replicas.ben, ["tasks", "a", "title"]), 5, " two")
+        yield* ReplicatedDocument.update(replicas.ada, withTasks(task("a", "Draft")))
+        const [onAda, onBen] = yield* merge(replicas.ada, replicas.ben)
+        assert.deepStrictEqual((yield* same(replicas.ada, replicas.ben)).tasks, [task("a", "Draft two")])
+        assert.deepStrictEqual(onAda, [])
+        assert.deepStrictEqual(onBen, [])
+      }))
+
+    it.effect("a removal wins over a concurrent move, and the merge says so", () =>
+      Effect.gen(function*() {
+        const replicas = yield* boards(task("a"), task("b"), task("c"))
+        yield* ReplicatedDocument.update(replicas.ada, withTasks(task("b"), task("c")))
+        yield* ReplicatedDocument.update(replicas.ben, move("a", 2))
+        const removed = [{ _tag: "Removed" as const, path: ["tasks", "a"], replicas: [ada, ben] }]
+        assert.deepStrictEqual(yield* merge(replicas.ada, replicas.ben), [removed, removed])
+        assert.deepStrictEqual(ids(yield* same(replicas.ada, replicas.ben)), ["b", "c"])
+      }))
+
+    it.effect("a list of values is compared by value, so changing an item removes it and inserts another", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* boards()
+        yield* ReplicatedDocument.update(ada, withTags("bug", "ui", "bug"))
+        yield* ReplicatedDocument.update(ada, withTags("bug", "ui"))
+        yield* ReplicatedDocument.update(ada, withTags("urgent", "bug", "ui"))
+        assert.deepStrictEqual((yield* ReplicatedDocument.get(ada)).tags, ["urgent", "bug", "ui"])
+        yield* Replica.exchange(ada, ben)
+
+        // Ada's change is a new item, so Ben removing the old one leaves it.
+        yield* ReplicatedDocument.update(ada, withTags("urgent", "bug", "UI"))
+        yield* ReplicatedDocument.update(ben, withTags("urgent", "bug"))
+        assert.deepStrictEqual(yield* Replica.exchange(ada, ben), [])
+        assert.deepStrictEqual((yield* same(ada, ben)).tags, ["urgent", "bug", "UI"])
+      }))
+
+    it.effect("values inserted concurrently both show", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* boards()
+        yield* ReplicatedDocument.update(ada, withTags("bug"))
+        yield* Replica.exchange(ada, ben)
+        yield* ReplicatedDocument.update(ada, withTags("bug", "ui"))
+        yield* ReplicatedDocument.update(ben, withTags("bug", "urgent"))
+        assert.deepStrictEqual(yield* Replica.exchange(ada, ben), [])
+        assert.deepInclude([["bug", "ui", "urgent"], ["bug", "urgent", "ui"]], (yield* same(ada, ben)).tags)
+      }))
+
+    it.effect("an update with two items of one key fails, writing nothing", () =>
+      Effect.gen(function*() {
+        const board = yield* makeBoard("ada")
+        yield* ReplicatedDocument.update(board, withTasks(task("a")))
+        const version = yield* Replica.version(board)
+        const failed = yield* Effect.flip(ReplicatedDocument.update(board, (value) => ({
+          ...value,
+          name: "Launch",
+          tasks: [task("a"), task("b"), task("b", "Again")]
+        })))
+        assert.strictEqual(failed._tag, "SchemaError")
+        assert.deepStrictEqual(yield* Replica.version(board), version)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(board), { ...empty, tasks: [task("a")] })
+      }))
+
+    it.effect("an older schema keeps items it can't read, and its updates leave them alone", () =>
+      Effect.gen(function*() {
+        const TaskV2 = Schema.Struct({
+          ...Task.fields,
+          status: Schema.Literals(["todo", "doing", "done"]),
+          owner: Schema.optionalKey(Schema.String)
+        })
+        const BoardV2 = Schema.Struct({ ...Board.fields, tasks: ReplicatedDocument.List(TaskV2, { key: "id" }) })
+        const old = yield* makeBoard("old")
+        const updated = yield* ReplicatedDocument.make(BoardV2, {
+          initial: empty,
+          replica: Replica.ReplicaId.make("new")
+        })
+        yield* ReplicatedDocument.update(updated, (board) => ({
+          ...board,
+          tasks: [
+            { ...task("a"), owner: "ada" }, // a field the older schema doesn't have
+            { id: "b", title: "", status: "doing" }, // a status the older schema can't decode
+            task("c"),
+            task("e")
+          ]
+        }))
+        yield* Replica.exchange(old, updated)
+        assert.deepStrictEqual((yield* ReplicatedDocument.get(old)).tasks, [task("a"), task("c"), task("e")])
+
+        // Removes c, moves e to the front, finishes a, and adds d.
+        yield* ReplicatedDocument.update(old, withTasks(task("e"), task("a", "", "done"), task("d")))
+        yield* Replica.exchange(old, updated)
+        assert.deepStrictEqual(ids(yield* ReplicatedDocument.get(old)), ["e", "a", "d"])
+        const { tasks } = yield* ReplicatedDocument.get(updated)
+        assert.deepStrictEqual(tasks.map(({ id }) => id).filter((id) => id !== "b"), ["e", "a", "d"])
+        assert.deepStrictEqual(tasks.find(({ id }) => id === "b"), { id: "b", title: "", status: "doing" })
+        assert.deepStrictEqual(tasks.find(({ id }) => id === "a"), { ...task("a", "", "done"), owner: "ada" })
+      }))
+  })
 })

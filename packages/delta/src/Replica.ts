@@ -147,10 +147,12 @@ export const Overlap: Schema.Codec<Overlap, OverlapEncoded> = Schema.Union([
  *   where "8 hours" and "12 hours" merged into "812 hours". `range` is where
  *   the stretch is in the merged text right now (empty if both sides removed
  *   all of it); `anchors` follow it from here on.
- * - `Value`: both wrote different values at `path`, or one removed it while
- *   the other wrote it. `kept` is the replica whose write shows.
+ * - `Value`: both wrote different values at `path`, both moved the list item
+ *   at `path`, or one removed it while the other wrote it. `kept` is the
+ *   replica whose write shows.
  * - `Removed`: one removed the entry or list item at `path` while the other
- *   changed something inside it. It stays removed, and its content is kept.
+ *   changed something inside it, or moved it. It stays removed, and its
+ *   content is kept.
  *
  * Concurrent increments of a counter aren't overlaps, because nothing is
  * lost.

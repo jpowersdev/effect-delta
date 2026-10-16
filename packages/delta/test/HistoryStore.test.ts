@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Layer, Option, Stream } from "effect"
-import { Authority, Delta, HistoryStore, Replica, ReplicatedText } from "effect-delta"
+import { Effect, Layer, Option, Schema, Stream } from "effect"
+import { Authority, Delta, HistoryStore, Relay, Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 
@@ -16,6 +16,32 @@ const open = (replica: string) =>
     const text = yield* make(replica)
     yield* HistoryStore.persist(text, notes)
     return text
+  })
+
+const Comment = Schema.Struct({ author: Schema.String, text: ReplicatedDocument.Text })
+const Task = Schema.Struct({ id: Schema.String, title: ReplicatedDocument.Text, done: Schema.Boolean })
+
+// Every merge rule, so every kind of op is stored.
+const DesignDoc = Schema.Struct({
+  title: ReplicatedDocument.Text,
+  body: ReplicatedDocument.Text,
+  status: Schema.Literals(["draft", "review", "approved"]),
+  votes: ReplicatedDocument.Counter,
+  comments: Schema.Record(Schema.String, Comment),
+  tasks: ReplicatedDocument.List(Task, { key: "id" })
+})
+type DesignDoc = typeof DesignDoc.Type
+const initial: DesignDoc = { title: "", body: "", status: "draft", votes: 0, comments: {}, tasks: [] }
+
+const makeDoc = (replica: string, strategy: Replica.Strategy = "tree") =>
+  ReplicatedDocument.make(DesignDoc, { initial, strategy, replica: Replica.ReplicaId.make(replica) })
+
+// Opens `notes` as a document that saves to the store.
+const openDoc = (replica: string, strategy?: Replica.Strategy) =>
+  Effect.gen(function*() {
+    const doc = yield* makeDoc(replica, strategy)
+    yield* HistoryStore.persist(doc, notes)
+    return doc
   })
 
 // A key-value store that remembers every key written to it.
@@ -40,6 +66,42 @@ describe("HistoryStore", () => {
       const third = yield* Effect.scoped(Effect.flatMap(open("session-3"), ReplicatedText.get))
       assert.strictEqual(third, "Hello, world")
     }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
+  it.effect("persist keeps a document across restarts, in either store", () =>
+    Effect.forEach([
+      HistoryStore.layerMemory,
+      HistoryStore.layerKeyValueStore({ prefix: "docs" }).pipe(Layer.provide(KeyValueStore.layerMemory))
+    ], (store) =>
+      Effect.gen(function*() {
+        const saved: DesignDoc = {
+          ...initial,
+          body: "Tokens refresh hourly.",
+          status: "review",
+          votes: 2,
+          comments: { c1: { author: "ada", text: "Hourly?" }, c2: { author: "ben", text: "Fine" } },
+          tasks: [{ id: "t1", title: "Write it", done: false }]
+        }
+        yield* Effect.scoped(Effect.gen(function*() {
+          const first = yield* openDoc("session-1")
+          yield* ReplicatedDocument.set(first, { ...saved, body: "" })
+          yield* ReplicatedText.insert(ReplicatedDocument.text(first, ["body"]), 0, saved.body)
+        }))
+
+        const edited: DesignDoc = {
+          ...saved,
+          votes: 1,
+          comments: { c2: { author: "ben", text: "Fine by me" } },
+          tasks: [{ id: "t0", title: "Ask", done: true }, ...saved.tasks]
+        }
+        yield* Effect.scoped(Effect.gen(function*() {
+          const second = yield* openDoc("session-2")
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(second), saved)
+          yield* ReplicatedDocument.set(second, { ...edited, comments: { c2: saved.comments.c2! } })
+          yield* ReplicatedText.insert(ReplicatedDocument.text(second, ["comments", "c2", "text"]), 4, " by me")
+        }))
+        const third = yield* Effect.scoped(Effect.flatMap(openDoc("session-3"), ReplicatedDocument.get))
+        assert.deepStrictEqual(third, edited)
+      }).pipe(Effect.provide(store)), { discard: true }))
 
   it.effect("layerKeyValueStore keeps every key under the prefix, and folds", () => {
     const keys = new Set<string>()
@@ -103,6 +165,51 @@ describe("HistoryStore", () => {
 
         const reopened = yield* Effect.scoped(Effect.flatMap(openReplay("session-2"), ReplicatedText.get))
         assert.strictEqual(reopened, "Chapter ONE.")
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
+    it.effect("a document's snapshot has every text by path, and reopening starts from it", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        yield* Effect.scoped(Effect.gen(function*() {
+          const first = yield* openDoc("session-1", "replay")
+          yield* ReplicatedText.insert(ReplicatedDocument.text(first, ["title"]), 0, "Sessions")
+          yield* ReplicatedDocument.update(first, (doc) => ({
+            ...doc,
+            status: "review",
+            comments: { c1: { author: "ada", text: "Hourly?" } }
+          }))
+          yield* ReplicatedText.insert(ReplicatedDocument.text(first, ["body"]), 0, "Tokens refresh hourly.")
+        }))
+        const snapshot = Option.getOrThrow(Option.getOrThrow(yield* store.load(notes)).snapshot)
+        assert.deepStrictEqual(snapshot.texts, [
+          { path: ["title"], text: "Sessions" },
+          { path: ["comments", "c1", "text"], text: "Hourly?" },
+          { path: ["body"], text: "Tokens refresh hourly." }
+        ])
+
+        // A text the history wouldn't give shows it wasn't replayed.
+        yield* store.setSnapshot(notes, {
+          ...snapshot,
+          texts: snapshot.texts.map((saved) =>
+            saved.path[0] === "body" ? { ...saved, text: "Tokens refresh HOURLY." } : saved
+          )
+        })
+        // Changes saved after the snapshot.
+        const other = yield* makeDoc("other", "replay")
+        yield* Replica.receive(other, Option.getOrThrow(yield* store.load(notes)).history)
+        yield* ReplicatedText.insert(ReplicatedDocument.text(other, ["body"]), 22, " Or daily?")
+        yield* ReplicatedDocument.update(other, (doc) => ({ ...doc, votes: 1 }))
+        yield* store.append(notes, yield* Replica.delta(other, snapshot.version))
+
+        const reopened = yield* Effect.scoped(Effect.flatMap(openDoc("session-2", "replay"), ReplicatedDocument.get))
+        assert.deepStrictEqual(reopened, {
+          ...initial,
+          title: "Sessions",
+          body: "Tokens refresh HOURLY. Or daily?",
+          status: "review",
+          votes: 1,
+          comments: { c1: { author: "ada", text: "Hourly?" } }
+        })
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
     it.effect("a snapshot that doesn't match the history is ignored", () =>
@@ -173,5 +280,52 @@ describe("HistoryStore", () => {
         HistoryStore.layerKeyValueStore({ prefix: "client" }).pipe(Layer.provide(KeyValueStore.layerMemory)),
         TestCrypto.layer("store").pipe(Layer.provide(NodeCrypto.layer))
       ])
+    ))
+
+  it.effect("a relay stores a document it can't read, and a replica reloads it intact", () =>
+    Effect.gen(function*() {
+      const laptop = yield* makeDoc("laptop")
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const connection = yield* Relay.connect(laptop, { document: notes })
+          yield* ReplicatedDocument.set(laptop, {
+            ...initial,
+            status: "review",
+            votes: 3,
+            comments: { c1: { author: "ada", text: "Hourly?" }, c2: { author: "ben", text: "Fine" } },
+            tasks: [{ id: "t1", title: "Write it", done: false }, { id: "t2", title: "Ship it", done: false }]
+          })
+          yield* ReplicatedDocument.update(laptop, (doc) => ({
+            ...doc,
+            comments: { c2: doc.comments.c2! },
+            tasks: [doc.tasks[1]!, { ...doc.tasks[0]!, done: true }]
+          }))
+          yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["tasks", "t2", "title"]), 7, " today")
+          yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["body"]), 0, "Tokens refresh hourly.")
+          yield* connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)
+        }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+      )
+
+      // A new relay, as after a restart, loads it from the store.
+      yield* Effect.scoped(
+        Effect.gen(function*() {
+          const phone = yield* makeDoc("phone")
+          const connection = yield* Relay.connect(phone, { document: notes })
+          yield* connection.status.pipe(Stream.filter((status) => status._tag === "Synced"), Stream.runHead)
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(phone), {
+            ...initial,
+            body: "Tokens refresh hourly.",
+            status: "review",
+            votes: 3,
+            comments: { c2: { author: "ben", text: "Fine" } },
+            tasks: [{ id: "t2", title: "Ship it today", done: false }, { id: "t1", title: "Write it", done: true }]
+          })
+          assert.deepStrictEqual(yield* Replica.version(phone), yield* Replica.version(laptop))
+        }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+      )
+    }).pipe(
+      Effect.provide(
+        HistoryStore.layerKeyValueStore({ prefix: "relay" }).pipe(Layer.provide(KeyValueStore.layerMemory))
+      )
     ))
 })

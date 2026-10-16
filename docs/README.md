@@ -34,6 +34,6 @@ a server.
 2. Pick the strategies we support → [`strategies.md`](./strategies.md) (decided: tree, authority, replay)
 3. Design the public API → [`api.md`](./api.md) (decided)
 4. Build, with examples (tree, authority and replay built)
-5. Documents: the same three steps for Schema-derived documents → [`documents.md`](./documents.md) (proposed)
+5. Documents: the same three steps for Schema-derived documents, then build → [`documents.md`](./documents.md) (decided and built, with lists)
 
 Raw research notes live in [`research/`](./research).

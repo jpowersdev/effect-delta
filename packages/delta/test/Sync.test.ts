@@ -1,7 +1,16 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Deferred, Effect, Layer, Option, Schedule, Stream } from "effect"
-import { Authority, HistoryStore, Relay, Replica, ReplicatedText, Sync, VersionVector } from "effect-delta"
+import { Context, Deferred, Effect, Layer, Option, Schedule, Schema, Stream } from "effect"
+import {
+  Authority,
+  HistoryStore,
+  Relay,
+  Replica,
+  ReplicatedDocument,
+  ReplicatedText,
+  Sync,
+  VersionVector
+} from "effect-delta"
 import { TestCrypto } from "effect/testing"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
@@ -11,6 +20,22 @@ const spec = Replica.DocumentId.make("spec")
 // Waits until the replica shows `text`.
 const showing = (self: ReplicatedText.ReplicatedText, text: string) =>
   ReplicatedText.changes(self).pipe(Stream.filter((current) => current === text), Stream.runHead, Effect.asVoid)
+
+const DesignDoc = Schema.Struct({
+  title: ReplicatedDocument.Text,
+  body: ReplicatedDocument.Text,
+  status: Schema.Literals(["draft", "review", "approved"]),
+  votes: ReplicatedDocument.Counter
+})
+type DesignDoc = typeof DesignDoc.Type
+const initial: DesignDoc = { title: "", body: "", status: "draft", votes: 0 }
+
+const makeDoc = (replica: string, strategy: Replica.Strategy = "tree") =>
+  ReplicatedDocument.make(DesignDoc, { initial, strategy, replica: Replica.ReplicaId.make(replica) })
+
+// Waits until the document shows a value `done` accepts.
+const until = <A>(self: ReplicatedDocument.ReplicatedDocument<A>, done: (value: A) => boolean) =>
+  ReplicatedDocument.changes(self).pipe(Stream.filter(done), Stream.runHead, Effect.asVoid)
 
 const synced = (connection: Sync.Connection) =>
   connection.status.pipe(Stream.filter((status) => status._tag === "Synced"), Stream.runHead, Effect.asVoid)
@@ -244,6 +269,111 @@ describe("Relay", () => {
       }).pipe(Stream.runHead, Effect.flip)
       assert.strictEqual(error.reason._tag, "ProtocolViolation")
     }).pipe(Effect.provide(RelayLive)))
+
+  describe("documents", () => {
+    it.effect("syncs documents both ways, text fields included", () =>
+      Effect.gen(function*() {
+        const laptop = yield* makeDoc("laptop")
+        const phone = yield* makeDoc("phone")
+        yield* Relay.connect(laptop, { document: notes })
+        yield* Relay.connect(phone, { document: notes })
+
+        yield* ReplicatedDocument.update(laptop, (doc) => ({ ...doc, status: "review", votes: 1 }))
+        yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["body"]), 0, "Hello")
+        yield* until(phone, (doc) => doc.body === "Hello")
+        yield* ReplicatedText.insert(ReplicatedDocument.text(phone, ["body"]), 5, ", world")
+        yield* ReplicatedDocument.update(phone, (doc) => ({ ...doc, votes: doc.votes + 1 }))
+        yield* until(laptop, (doc) => doc.votes === 2)
+
+        const value = yield* ReplicatedDocument.get(laptop)
+        assert.deepStrictEqual(value, { ...initial, body: "Hello, world", status: "review", votes: 2 })
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(phone), value)
+      }).pipe(Effect.scoped, Effect.provide(RelayLive)))
+
+    it.effect("syncs replicas on two versions of a schema, which it doesn't need", () =>
+      Effect.gen(function*() {
+        // The newer version adds a field and a status.
+        const DesignDocV2 = Schema.Struct({
+          ...DesignDoc.fields,
+          status: Schema.Literals(["draft", "review", "approved", "archived"]),
+          owner: Schema.String
+        })
+        const makeV2 = (replica: string) =>
+          ReplicatedDocument.make(DesignDocV2, {
+            initial: { ...initial, owner: "nobody" },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const old = yield* makeDoc("old")
+        const updated = yield* makeV2("new")
+        yield* Relay.connect(old, { document: notes })
+        yield* Relay.connect(updated, { document: notes })
+
+        yield* ReplicatedDocument.update(old, (doc) => ({ ...doc, status: "review", body: "Draft" }))
+        yield* until(updated, (doc) => doc.status === "review")
+        yield* ReplicatedDocument.update(updated, (doc) => ({
+          ...doc,
+          status: "archived",
+          owner: "ada",
+          body: "Draft, done"
+        }))
+        // The text arrives with the parts the old version can't read.
+        yield* until(old, (doc) => doc.body === "Draft, done")
+
+        const newer = { ...initial, body: "Draft, done", status: "archived", owner: "ada" } as const
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), newer)
+        // The latest status it can read.
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(old), {
+          ...initial,
+          body: "Draft, done",
+          status: "review"
+        })
+        assert.deepStrictEqual(yield* Replica.version(old), yield* Replica.version(updated))
+        // The old one kept what it can't read.
+        const upgraded = yield* makeV2("upgraded")
+        yield* Replica.exchange(old, upgraded)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(upgraded), newer)
+      }).pipe(Effect.scoped, Effect.provide(RelayLive)))
+
+    it.effect("learns a document's strategy from its first text op", () =>
+      Effect.gen(function*() {
+        const subscribeTree = Effect.gen(function*() {
+          const tree = yield* makeDoc("tree")
+          return yield* Effect.flip((yield* Relay.connect(tree, { document: notes })).await)
+        })
+        yield* Effect.scoped(
+          Effect.gen(function*() {
+            const relay = yield* Relay.Relay
+            // Pushed straight to the relay: a subscriber would say which strategy it is.
+            const laptop = yield* makeDoc("laptop", "replay")
+            const push = Effect.flatMap(
+              Replica.delta(laptop, VersionVector.empty),
+              (delta) => relay.push({ format: Sync.FORMAT, document: notes, delta })
+            )
+            // A change without text ops fits either strategy.
+            yield* ReplicatedDocument.update(laptop, (doc) => ({ ...doc, status: "review" }))
+            yield* push
+            yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["body"]), 0, "Hello")
+            yield* push
+
+            assert.strictEqual((yield* subscribeTree).reason._tag, "ProtocolViolation")
+            const phone = yield* makeDoc("phone", "replay")
+            yield* synced(yield* Relay.connect(phone, { document: notes }))
+            assert.deepStrictEqual(yield* ReplicatedDocument.get(phone), {
+              ...initial,
+              body: "Hello",
+              status: "review"
+            })
+          }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+        )
+
+        // A new relay learns it from the store, whose first change has no text ops.
+        yield* Effect.scoped(
+          Effect.gen(function*() {
+            assert.strictEqual((yield* subscribeTree).reason._tag, "ProtocolViolation")
+          }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+        )
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+  })
 })
 
 describe("Authority", () => {
@@ -345,4 +475,64 @@ describe("Authority", () => {
       // An authority served as if it were a relay.
       Effect.provide(Layer.effect(Relay.Relay)(Effect.service(Authority.Authority)).pipe(Layer.provide(NoSecrets)))
     ))
+
+  describe("documents", () => {
+    it.effect("checks documents with their schema, and rolls back what it rejects", () => {
+      const proposals: Array<ReplicatedDocument.Proposed<DesignDoc>> = []
+      const OwnerApproves = Authority.layer({
+        check: (proposal) => {
+          if (proposal._tag === "Text") return Effect.void
+          const read = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
+          proposals.push(read)
+          return read.after.status === "approved" && read.before.status !== "approved" && proposal.user !== "owner"
+            ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
+            : Effect.void
+        }
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      const open = (user: string) =>
+        ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec }).pipe(asUser(user))
+
+      return Effect.gen(function*() {
+        const owner = yield* open("owner")
+        const editor = yield* open("editor")
+        yield* synced(editor.connection)
+        const before = yield* Replica.id(editor)
+        const { edits } = yield* ReplicatedDocument.subscribe(editor)
+
+        yield* ReplicatedDocument.update(
+          editor,
+          (doc) => ({ ...doc, body: "Sessions last 24 hours.", status: "review" })
+        )
+        const inReview = { ...initial, body: "Sessions last 24 hours.", status: "review" } as const
+        yield* until(owner, (doc) => doc.status === "review")
+        assert.deepStrictEqual(proposals, [{ before: initial, after: inReview, paths: [["body"], ["status"]] }])
+
+        yield* ReplicatedDocument.update(editor, (doc) => ({ ...doc, status: "approved" }))
+        const rejected = yield* edits.pipe(Stream.filter((edit) => edit._tag === "Rejected"), Stream.runHead)
+        assert.deepStrictEqual(Option.getOrThrow(rejected), {
+          _tag: "Rejected",
+          value: inReview,
+          message: "Only the owner can approve"
+        })
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(editor), inReview)
+        assert.notStrictEqual(yield* Replica.id(editor), before)
+
+        // The editor carries on under the new id, and the owner never saw the approval.
+        yield* ReplicatedText.update(ReplicatedDocument.text(editor, ["body"]), (text) => text.replace("24", "8"))
+        yield* until(owner, (doc) => doc.body === "Sessions last 8 hours.")
+        assert.strictEqual((yield* ReplicatedDocument.get(owner)).status, "review")
+
+        // The owner's approval is accepted, and reaches everyone.
+        yield* ReplicatedDocument.update(owner, (doc) => ({ ...doc, status: "approved" }))
+        yield* until(editor, (doc) => doc.status === "approved")
+      }).pipe(Effect.scoped, Effect.provide([OwnerApproves, CryptoTest]))
+    })
+
+    it.effect("a confirmed document syncs with nothing else", () =>
+      Effect.gen(function*() {
+        const confirmed = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
+        const error = yield* Effect.flip(Replica.exchange(yield* makeDoc("peer"), confirmed))
+        assert.strictEqual(error.reason._tag, "AuthorityOnly")
+      }).pipe(Effect.scoped, Effect.provide([NoSecrets, CryptoTest])))
+  })
 })

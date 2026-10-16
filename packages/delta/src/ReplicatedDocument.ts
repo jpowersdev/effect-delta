@@ -626,10 +626,16 @@ export interface Proposed<A> {
 }
 
 /**
- * Reads a document proposal with the app's schema and initial value, as
- * replicas read the document, for an authority's check. The app picks the
- * schema from the document id, as it already decides who may open which
- * document.
+ * Reads a document proposal with the app's schema and initial value, for an
+ * authority's check. The app picks the schema from the document id, as it
+ * already decides who may open which document.
+ *
+ * **Gotchas**
+ *
+ * A proposal has only each value's latest write, so a value this schema
+ * can't decode reads as its initial value, where a replica would show an
+ * earlier write. Read proposals with the newest version of the schema, and
+ * upgrade the authority before the apps that write to it.
  *
  * **Example** (Only the owner approves)
  *

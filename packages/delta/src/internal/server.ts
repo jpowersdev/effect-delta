@@ -93,7 +93,7 @@ export const make = Effect.fnUntraced(function*(options: {
         return yield* syncError(
           new Sync.ProtocolViolation({
             message: isAuthority
-              ? "This server is an authority: connect with ReplicatedText.makeConfirmed"
+              ? "This server is an authority: connect with makeConfirmed"
               : "This server is a relay, not an authority"
           })
         )
