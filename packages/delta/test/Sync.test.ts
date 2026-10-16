@@ -15,6 +15,7 @@ import {
   Schedule,
   Schema,
   Scope,
+  Semaphore,
   Stream
 } from "effect"
 import {
@@ -29,7 +30,9 @@ import {
   VersionVector
 } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
-import type * as InternalDocument from "effect-delta/internal/document"
+import * as InternalDocument from "effect-delta/internal/document"
+import type * as InternalEngine from "effect-delta/internal/engine"
+import * as InternalShape from "effect-delta/internal/shape"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 import {
@@ -852,6 +855,160 @@ const ownerApproves = (read: Array<ReplicatedDocument.Proposed<DesignDoc>> = [])
       })
   }).pipe(Layer.provide(HistoryStore.layerMemory))
 
+// A change an authority checked, during the push it came with.
+interface Checked {
+  readonly proposal: Authority.Proposal
+  // What `readProposal` read, if the change fits the schema.
+  proposed: ReplicatedDocument.Proposed<Project> | undefined
+  accepted: boolean
+}
+
+// A push, as an authority took it.
+interface Push {
+  readonly changes: ReadonlyArray<InternalDocument.AnyChange>
+  readonly exit: Exit.Exit<Sync.Ack, Sync.SyncError>
+  readonly checked: ReadonlyArray<Checked>
+}
+
+const key = (change: InternalDocument.AnyChange) => `${change.seq}@${change.replica}`
+
+const changeOf = (proposal: Authority.DocumentProposal): InternalDocument.AnyChange =>
+  [...(proposal.delta as InternalDelta.DeltaImpl).changes.values()][0]!
+
+// The changes an authority accepted from a push, in the order it checked them.
+const accepted = (push: Push): Array<InternalDocument.AnyChange> =>
+  push.checked.flatMap(({ accepted, proposal }) => accepted && proposal._tag === "Document" ? [changeOf(proposal)] : [])
+
+// A replica's document as an authority's proposal has it: its JSON, and which
+// parts exist.
+const proposalOf = (doc: ReplicatedDocument.ReplicatedDocument<unknown>) => {
+  const state = (doc as unknown as { readonly engine: InternalEngine.Engine }).engine.state.document
+  const exists: Array<Replica.Path> = []
+  return { json: InternalDocument.toJson(state, exists), exists, text: InternalDocument.textAt(state, []) }
+}
+
+// The paths a change writes to, each once, in order.
+const pathsOf = (change: InternalDocument.AnyChange): Array<Replica.Path> => {
+  const paths = new Map<string, Replica.Path>()
+  for (const op of change.ops) paths.set(JSON.stringify(op.path ?? []), op.path ?? [])
+  return [...paths.values()]
+}
+
+// Whether a change removes a part that nothing in `changes`, or before it in
+// the change, wrote as existing or not.
+const removesUnadded = (change: InternalDocument.AnyChange, changes: ReadonlyArray<InternalDocument.AnyChange>) =>
+  change.ops.some((op, i) => {
+    const writes = (other: InternalDocument.Op) =>
+      (other._tag === "Set" || other._tag === "Add" || other._tag === "Unset") &&
+      JSON.stringify(other.path) === JSON.stringify(op.path)
+    return op._tag === "Unset" && !changes.some(({ ops }) => ops.some(writes)) &&
+      !change.ops.slice(0, i).some((other) => other._tag !== "Unset" && writes(other))
+  })
+
+// The change a message from an authority is about.
+const named = (changes: ReadonlyArray<InternalDocument.AnyChange>, message: string): InternalDocument.AnyChange => {
+  const found = changes.find((change) => message.startsWith(`Change ${key(change)} `))
+  assert.isDefined(found, message)
+  return found!
+}
+
+const projectShape = InternalShape.compile(Project)
+
+// Checks what an authority did with a push against what replicas do with the
+// same changes. `replica` has the changes it accepted before the push, and
+// takes in each it accepts from it, one at a time in the order it checked
+// them; every proposal must show the document as `replica` has it around that
+// change. `relayed` takes in every push whole, as a relay does: whether a
+// change is malformed doesn't depend on what else a replica has, so it judges
+// each change as the authority must. `make` makes a replica.
+const checkPush = Effect.fnUntraced(function*(push: Push, { make, relayed, replica }: {
+  readonly replica: ReplicatedDocument.ReplicatedDocument<Project>
+  readonly relayed: ReplicatedDocument.ReplicatedDocument<Project>
+  readonly make: (replica: string) => Effect.Effect<ReplicatedDocument.ReplicatedDocument<Project>>
+}) {
+  const { changes, checked, exit } = push
+  const version = yield* Replica.version(replica)
+  // What's new to the authority. It ignores the rest, as replicas do.
+  const fresh = changes.filter((change) => change.seq + change.length > (version[change.replica] ?? 0))
+  const relayedExit = yield* Effect.exit(Replica.receive(relayed, InternalDelta.fromChanges(changes)))
+  const kept = ((yield* Replica.delta(relayed, VersionVector.empty)) as InternalDelta.DeltaImpl).changes
+  for (const { accepted, proposal, proposed } of checked) {
+    const before = proposalOf(replica)
+    if (proposal._tag === "Text") {
+      // A change all at the root, where a document has no text.
+      assert.strictEqual(proposal.before, before.text)
+      continue
+    }
+    const change = changeOf(proposal)
+    const shown = JSON.stringify(change)
+    // Checked, so it's well-formed: a replica takes it.
+    assert.isTrue(kept.has(key(change)), shown)
+    assert.deepStrictEqual(proposal.paths, pathsOf(change), shown)
+    assert.deepStrictEqual([proposal.before, proposal.exists.before], [before.json, before.exists], shown)
+    const value = yield* ReplicatedDocument.get(replica)
+    // Turned down, it's shown as a replica would show it all the same.
+    const doc = accepted ? replica : yield* make("turned-down")
+    if (!accepted) yield* Replica.receive(doc, yield* Replica.delta(replica, VersionVector.empty))
+    yield* Replica.receive(doc, InternalDelta.fromChanges([change]))
+    assert.strictEqual(
+      VersionVector.get(yield* Replica.version(doc), change.replica),
+      change.seq + change.length,
+      shown
+    )
+    const after = proposalOf(doc)
+    assert.deepStrictEqual([proposal.after, proposal.exists.after], [after.json, after.exists], shown)
+    if (proposed !== undefined) {
+      assert.deepStrictEqual([proposed.before, proposed.after], [value, yield* ReplicatedDocument.get(doc)], shown)
+    }
+  }
+
+  const took = accepted(push)
+  if (Exit.isSuccess(exit)) {
+    if (exit.value._tag === "Accepted") {
+      // It took everything new to it, as a replica does.
+      assert.deepStrictEqual(fresh.map(key).sort(), took.map(key).sort())
+      assert.isTrue(Exit.isSuccess(relayedExit), String(relayedExit))
+      return
+    }
+    const last = checked.at(-1)
+    if (last !== undefined && !last.accepted) return
+    // Turned down before its check, so a proposal never has two kinds of
+    // thing at one path: a change a replica takes, but that doesn't fit the
+    // schema, or removes what nobody wrote, which replicas never do.
+    const change = named(fresh, exit.value.message)
+    assert.isTrue(kept.has(key(change)), exit.value.message)
+    assert.isTrue(
+      InternalShape.misfit(projectShape, change) !== undefined ||
+        removesUnadded(change, [
+          ...((yield* Replica.delta(replica, VersionVector.empty)) as InternalDelta.DeltaImpl).changes.values()
+        ]),
+      exit.value.message
+    )
+    return
+  }
+  const error = Option.getOrThrow(Cause.findErrorOption(exit.cause))
+  if (error.reason._tag !== "DeltaError" || error.reason.reason._tag !== "Malformed") {
+    // Refused whole.
+    assert.deepStrictEqual(took, [], String(error))
+    return
+  }
+  const { message } = error.reason.reason
+  const change = named(changes, message)
+  if (message.endsWith("builds on changes the authority doesn't have")) {
+    // Which a replica keeps waiting.
+    const has = yield* Replica.version(replica)
+    assert.isFalse(
+      (has[change.replica] ?? 0) === change.seq &&
+        change.parents.every(({ replica, seq }) => seq < (has[replica] ?? 0)),
+      message
+    )
+  } else {
+    // A replica refuses it too.
+    assert.isFalse(kept.has(key(change)), message)
+    assert.isTrue(Exit.isFailure(relayedExit), message)
+  }
+})
+
 describe("Authority", () => {
   it.effect("shares what it accepts and rolls back what it rejects", () =>
     Effect.gen(function*() {
@@ -1233,37 +1390,50 @@ describe("Authority", () => {
     )
 
     it.effect.prop(
-      "accepts only changes replicas accept, checks each as replicas show it, and confirmed replicas end where it does",
+      "takes or turns down each change as replicas do, checks each as replicas show it, and confirmed replicas end where it does",
       { session: ForgedSession, edits: EditSession },
       Effect.fnUntraced(function*({ edits, session }) {
-        // Every change checked, with what the check read, in the order they
-        // were checked. It rejects approvals, and more than two votes.
-        const checked: Array<{
-          readonly proposed: ReplicatedDocument.Proposed<Project>
-          readonly delta: Delta.Delta
-          readonly accepted: boolean
-        }> = []
+        // Every change checked during the push it came with, in the order it
+        // was checked, with what the check read. It rejects approvals, and
+        // more than two votes.
+        let checked: Array<Checked> = []
         const Reading = Authority.layer({
-          check: (proposal) =>
-            proposal._tag === "Text"
+          check: (proposal) => {
+            const entry: Checked = { proposal, proposed: undefined, accepted: false }
+            checked.push(entry)
+            return proposal._tag === "Text"
               ? Effect.fail(new Authority.Rejected({ message: "Projects aren't texts" }))
               : Effect.flatMap(
                 ReplicatedDocument.readProposal(proposal, Project, { initial: initialProject }),
                 (proposed) => {
-                  const accepted = !(proposed.after.status === "done" && proposed.before.status !== "done") &&
+                  entry.proposed = proposed
+                  entry.accepted = !(proposed.after.status === "done" && proposed.before.status !== "done") &&
                     proposed.after.votes <= 2
-                  checked.push({ proposed, delta: proposal.delta, accepted })
-                  return accepted ? Effect.void : Effect.fail(new Authority.Rejected({ message: "No" }))
+                  return entry.accepted ? Effect.void : Effect.fail(new Authority.Rejected({ message: "No" }))
                 }
               )
+          }
         }).pipe(Layer.provide(HistoryStore.layerMemory))
         yield* Effect.gen(function*() {
           const authority = yield* Authority.Authority
-          // Reached as over RPC. A push the editor stops waiting for still
-          // finishes, as on a server; the editor just never hears back.
+          // Every push, in the order the authority took them: one at a time,
+          // and each finishes, as on a server, even when its pusher stops
+          // waiting for it and never hears back. Reached as over RPC.
+          const pushes: Array<Push> = []
+          const one = yield* Semaphore.make(1)
           const remote: Sync.Server = {
             ...overJson(authority),
-            push: (request) => Effect.uninterruptible(overJson(authority).push(request))
+            push: (request) =>
+              Effect.gen(function*() {
+                checked = []
+                const exit = yield* Effect.exit(overJson(authority).push(request))
+                pushes.push({
+                  changes: [...(request.delta as InternalDelta.DeltaImpl).changes.values()],
+                  exit,
+                  checked
+                })
+                return yield* exit
+              }).pipe(Effect.uninterruptible, one.withPermit)
           }
           // An editor making its own edits among the forged changes, some
           // rejected, and some made on top of ones that will be. It saves what
@@ -1311,36 +1481,26 @@ describe("Authority", () => {
           const edit = (command: (typeof edits)[number]) =>
             editProject(current.editor, command, { wait: settled, reopen })
           let next = 0
-          const key = (change: InternalDocument.AnyChange) => `${change.seq}@${change.replica}`
           yield* forgeSession("tree", session, (changes) =>
             Effect.gen(function*() {
               const command = edits[next++]
               if (command !== undefined) yield* edit(command)
               const delta = InternalDelta.fromChanges(changes)
               yield* Effect.exit(remote.push({ format: Sync.FORMAT, document: spec, delta }).pipe(asUser("forger")))
-              const kept = new Set(
-                checked.flatMap(({ accepted, delta }) =>
-                  accepted ? [...(delta as InternalDelta.DeltaImpl).changes.keys()] : []
-                )
-              )
+              const kept = new Set(pushes.flatMap((push) => accepted(push).map(key)))
               return (change: InternalDocument.AnyChange) => kept.has(key(change))
             }))
           for (const command of edits.slice(next)) yield* edit(command)
           yield* settled
 
-          // A replica that receives the changes in the order they were
-          // checked, and the authority's accepted.
-          const replica = yield* ReplicatedDocument.make(Project, {
-            initial: initialProject,
-            replica: Replica.ReplicaId.make("replica")
-          })
-          for (const { accepted, delta, proposed } of checked) {
-            const change = JSON.stringify(delta)
-            assert.deepStrictEqual(proposed.before, yield* ReplicatedDocument.get(replica), change)
-            if (!accepted) continue
-            yield* Replica.receive(replica, delta)
-            assert.deepStrictEqual(proposed.after, yield* ReplicatedDocument.get(replica), change)
-          }
+          // A replica that receives the changes the authority accepted, in
+          // the order it checked them, and one that receives every push, as
+          // a relay would take them.
+          const make = (replica: string) =>
+            ReplicatedDocument.make(Project, { initial: initialProject, replica: Replica.ReplicaId.make(replica) })
+          const replica = yield* make("replica")
+          const relayed = yield* make("relayed")
+          for (const push of pushes) yield* checkPush(push, { replica, relayed, make })
           assert.deepStrictEqual(yield* ReplicatedDocument.get(current.editor), yield* ReplicatedDocument.get(replica))
           // Opened again from what it saved, it ends there too.
           yield* reopen

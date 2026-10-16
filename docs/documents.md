@@ -540,6 +540,8 @@ All built, each with tests and an example:
   shows its new field, and their histories are equal.
 - **Servers without the schema.** A relay stores documents it can't read, and replicas reload them intact.
 - **Authorities.** Checks see typed values before and after each change; a rejection rolls the change back.
+  Among forged changes, an authority takes or turns down each change as a replica given the same changes in
+  the same order does, and each proposal shows the document as that replica has it before and after.
 - **Forged changes.** Changes made directly, many malformed or not fitting the schema, among well-formed ones
   from extra replicas, sent together, late, again and as JSON. Replicas, relays and authorities accept the
   same ones and show the same value however they arrive, and every merge reports the `Value` and `Removed`
