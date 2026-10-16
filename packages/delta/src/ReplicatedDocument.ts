@@ -702,7 +702,9 @@ type TextPathWithin<A, Steps extends ReadonlyArray<0>> = A extends string ? read
 export const text: {
   <A>(path: TextPath<A>): (self: ReplicatedDocument<A>) => ReplicatedText.Editable
   <A>(self: ReplicatedDocument<A>, path: TextPath<A>): ReplicatedText.Editable
-} = dual(2, <A>(self: ReplicatedDocument<A>, path: Replica.Path): ReplicatedText.Editable => {
+} = dual(2, <A>(self: ReplicatedDocument<A>, given: Replica.Path): ReplicatedText.Editable => {
+  // Its own copy: the path goes into every change it makes.
+  const path = Object.freeze([...given])
   const found = InternalShape.at(impl(self).shape, path)
   if (typeof found === "string" || found.shape._tag !== "Text") {
     throw new Error(`${JSON.stringify(path)} isn't a text field of the document`)
