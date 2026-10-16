@@ -955,6 +955,38 @@ describe("ReplicatedDocument", () => {
         })
       }))
 
+    it.effect("an edit elsewhere in an entry leaves a field showing its constructor default unwritten", () =>
+      Effect.gen(function*() {
+        const priority = <const P extends ReadonlyArray<string>>(literals: P) =>
+          Schema.Literals(literals).pipe(Schema.withConstructorDefault(Effect.succeed(literals[0]!)))
+        const Task = Schema.Struct({ done: Schema.Boolean, priority: priority(["low", "high"]) })
+        const TaskV2 = Schema.Struct({ ...Task.fields, priority: priority(["low", "high", "urgent"]) })
+        const old = yield* ReplicatedDocument.make(Schema.Struct({ tasks: Schema.Record(Schema.String, Task) }), {
+          initial: { tasks: {} },
+          replica: Replica.ReplicaId.make("old")
+        })
+        const updated = yield* ReplicatedDocument.make(Schema.Struct({ tasks: Schema.Record(Schema.String, TaskV2) }), {
+          initial: { tasks: {} },
+          replica: Replica.ReplicaId.make("new")
+        })
+        yield* ReplicatedDocument.update(updated, () => ({ tasks: { t: { done: false, priority: "urgent" } } }))
+        yield* Replica.exchange(old, updated)
+        // It can't read "urgent", so it shows the default.
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(old), { tasks: { t: { done: false, priority: "low" } } })
+
+        const before = yield* Replica.version(old)
+        yield* ReplicatedDocument.update(old, (doc) => ({ tasks: { t: { ...doc.tasks.t!, done: true } } }))
+        // Only what it changed is written, so it doesn't write over what it
+        // can't read, nor over a concurrent write to the field.
+        const delta = (yield* Replica.delta(old, before)) as InternalDelta.DeltaImpl
+        const paths = [...delta.changes.values()].flatMap((change) => change.ops.map((op) => op.path))
+        assert.deepStrictEqual(paths, [["tasks", "t", "done"]])
+        yield* Replica.exchange(old, updated)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), {
+          tasks: { t: { done: true, priority: "urgent" } }
+        })
+      }))
+
     it.effect("an optional field an older schema can't read is left out, and kept", () =>
       Effect.gen(function*() {
         const Ticket = Schema.Struct({
