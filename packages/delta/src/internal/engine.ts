@@ -291,6 +291,9 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
           engine,
           Effect.gen(function*() {
             const confirmed = state.confirmed!
+            // A new id, so sequence numbers are never reused and never skip.
+            // Taken first, so if it can't be, nothing has changed.
+            const replica = yield* confirmed.freshId
             // What the authority has, even if it once acknowledged more and
             // lost it: what it lacks is rolled back, not pushed again.
             confirmed.version = version
@@ -314,8 +317,7 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
             }
             state.document = InternalDocument.rebuild(engine.strategy, kept)
             for (const change of pending.values()) history().pending.set(key(change), change)
-            // A new id, so sequence numbers are never reused and never skip.
-            state.replica = yield* confirmed.freshId
+            state.replica = replica
             state.nextSeq = 0
             state.writers.add(state.replica)
             yield* publish(engine, {
