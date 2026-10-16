@@ -545,7 +545,9 @@ All built, each with tests and an example:
 - **An authority whose check doesn't read proposals with the schema** keeps what the first write to a path
   says it holds: a client could claim a path with the wrong kind of write and leave later writes there
   rejected. `readProposal` rejects such writes, so a check that uses it has no such gap.
-- **Servers refuse a replica whose clock runs more than a day ahead,** until it's fixed.
+- **A replica whose clock ran more than a day ahead can't sync with servers** until their clocks reach the
+  times it stamped. Fixing its clock doesn't help: each later change is stamped after the ones it made. The
+  same goes for peers that took its changes in a direct exchange.
 - **An authority needs the newest schema.** `readProposal` rejects what its schema can't read, so an
   authority on an older schema rejects the newer apps' changes to the parts it doesn't know. Upgrade the
   authority first.
