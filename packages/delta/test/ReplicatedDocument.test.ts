@@ -93,6 +93,14 @@ describe("ReplicatedDocument", () => {
           { tasks: [] },
           `required "id" field`
         )
+        // A key is a step in a path, which is strings.
+        yield* refuses(
+          Schema.Struct({
+            tasks: ReplicatedDocument.List(Schema.Struct({ id: Schema.Number }), { key: "id" as never })
+          }),
+          { tasks: [] },
+          `required "id" field that's a string`
+        )
         // To Schema, a record with literal keys among others is a struct with
         // a rest: its literal keys are fields.
         yield* refuses(
