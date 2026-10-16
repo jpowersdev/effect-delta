@@ -561,6 +561,9 @@ All built, each with tests and an example:
 - **`update` can't always tell which item moved.** When one item moves past a single neighbour, moving
   either gives the new order, and `update` picks one. Every replica still agrees; only a concurrent move of
   one of them shows the difference. An explicit move, like the text handles, comes with path-scoped writes.
+- **Counters are exact only within the safe integers.** A counter's increments add up exactly, but it reads
+  as a JavaScript number, so a total (with its initial value) beyond 2^53 reads as the nearest safe
+  integer.
 - **Values are written whole.** A large array that isn't a list changes as a whole.
 - **A clock far ahead** decides concurrent writes until other clocks catch up (see
   [Latest write](#latest-write)).
