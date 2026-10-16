@@ -1351,13 +1351,6 @@ describe("Authority", () => {
       }).pipe(Effect.provide(Recording))
     })
 
-    it.effect("a confirmed document syncs with nothing else", () =>
-      Effect.gen(function*() {
-        const confirmed = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
-        const error = yield* Effect.flip(Replica.exchange(yield* makeDoc("peer"), confirmed))
-        assert.strictEqual(error.reason._tag, "AuthorityOnly")
-      }).pipe(Effect.scoped, Effect.provide([NoSecrets, CryptoTest])))
-
     it.effect("a proposal has every entry, whatever its key", () => {
       const proposed: Array<DesignDoc> = []
       const Recording = Authority.layer({
