@@ -223,8 +223,12 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
           }
         })
       ),
-    restore: (stored) =>
-      locked(
+    restore: (stored) => {
+      // A change saved while it waited, which turned out to be bad, is
+      // dropped again, as a relay drops it when it loads.
+      const restore = (delta: InternalDelta.DeltaImpl) =>
+        receive(engine, delta).pipe(Effect.catchReason("DeltaError", "Malformed", () => Effect.void), Effect.asVoid)
+      return locked(
         engine,
         Effect.suspend(() => {
           for (const writer of stored.writers) state.writers.add(writer)
@@ -247,15 +251,16 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
               const texts = textsBetween(state.document, loaded)
               state.document = loaded
               const after = InternalDelta.fromChanges(changes.filter((change) => !inSnapshot(change)))
-              return publish(engine, { _tag: "Remote", texts, overlaps: [], message: "" }).pipe(
-                Effect.andThen(receive(engine, after)),
-                Effect.asVoid
+              return Effect.andThen(
+                publish(engine, { _tag: "Remote", texts, overlaps: [], message: "" }),
+                restore(after)
               )
             }
           }
-          return Effect.asVoid(receive(engine, all))
+          return restore(all)
         })
-      ),
+      )
+    },
     confirmed: state.confirmed === undefined ? undefined : {
       acknowledge: (version) =>
         locked(
