@@ -236,8 +236,9 @@ export const Text: Schema.String = Schema.String.annotate({ [InternalShape.RuleK
  * **Details**
  *
  * Counters are whole numbers because fractions added in a different order on
- * each replica can round differently, and the replicas would disagree. Like a
- * text, a counter can't have checks.
+ * each replica can round differently, and the replicas would disagree. A
+ * total past `Number.MAX_SAFE_INTEGER` reads as that. Like a text, a counter
+ * can't have checks.
  *
  * @stability unstable
  * @category schemas

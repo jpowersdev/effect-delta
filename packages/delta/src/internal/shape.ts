@@ -1,4 +1,5 @@
 import type * as Equivalence from "effect/Equivalence"
+import * as Number from "effect/Number"
 import * as Predicate from "effect/Predicate"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
@@ -406,7 +407,9 @@ const readAt = (
     case "Text":
       return source.text()
     case "Counter":
-      return ((initial?.value as number | undefined) ?? 0) + source.counter()
+      // A total past the safe integers reads as the nearest one, so it's
+      // still an Int.
+      return Number.clamp(((initial?.value as number | undefined) ?? 0) + source.counter(), safeIntegers)
     case "Value": {
       const k = Path.key(source.path)
       // The latest write this schema can read.
@@ -472,6 +475,8 @@ const readAt = (
     }
   }
 }
+
+const safeIntegers = { minimum: globalThis.Number.MIN_SAFE_INTEGER, maximum: globalThis.Number.MAX_SAFE_INTEGER }
 
 const share = (memo: Memo, path: Path.Path, parts: ReadonlyArray<unknown>, build: () => unknown): unknown => {
   const k = Path.key(path)
