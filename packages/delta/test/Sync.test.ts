@@ -677,6 +677,42 @@ describe("Authority", () => {
       assert.strictEqual(error.reason._tag, "DeltaError")
     }).pipe(Effect.provide(NoSecrets)))
 
+  it.effect("keeps its subscribers through a push interrupted while it's checked", () => {
+    // Holds the check while `checking` is set, and tells it the check started.
+    const hold: { checking: Deferred.Deferred<void> | undefined } = { checking: undefined }
+    const Holding = Authority.layer({
+      check: () =>
+        hold.checking === undefined
+          ? Effect.void
+          : Effect.andThen(Deferred.succeed(hold.checking, undefined), Effect.never)
+    }).pipe(Layer.provide(HistoryStore.layerMemory))
+    return Effect.gen(function*() {
+      const authority = yield* Authority.Authority
+      const updates = yield* Stream.toQueue(
+        authority.subscribe({ format: Sync.FORMAT, document: spec, strategy: "tree", version: {}, authority: true }),
+        { capacity: "unbounded" }
+      )
+      yield* Queue.take(updates)
+      const laptop = yield* make("laptop")
+      yield* ReplicatedText.insert(laptop, 0, "Hello")
+      const delta = yield* Replica.delta(laptop, VersionVector.empty)
+      const push = authority.push({ format: Sync.FORMAT, document: spec, delta })
+
+      const checking = yield* Deferred.make<void>()
+      hold.checking = checking
+      const pushing = yield* Effect.forkChild(push)
+      yield* Deferred.await(checking)
+      hold.checking = undefined
+      yield* Fiber.interrupt(pushing)
+
+      // Nothing was saved, so the subscriber is still there, and the change
+      // is checked again when it's pushed again.
+      assert.strictEqual((yield* push)._tag, "Accepted")
+      const update = yield* Queue.take(updates)
+      assert.isTrue(Equal.equals(update.delta, delta))
+    }).pipe(Effect.scoped, Effect.provide(Holding))
+  })
+
   it.effect("a confirmed replica syncs with nothing else", () =>
     Effect.gen(function*() {
       const confirmed = yield* ReplicatedText.makeConfirmed({ document: spec })
