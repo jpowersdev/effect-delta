@@ -430,7 +430,7 @@ export const readJson = (
   initial: unknown,
   // Which optional fields and entries exist, by their paths in `json`, where
   // JSON alone can't say.
-  exists: ((path: Path.Path) => boolean) | undefined
+  exists: (path: Path.Path) => boolean
 ): unknown => readRoot(shape, jsonAt(json, Path.root, exists), initial, new Map())
 
 // What reading needs from one part of a document: a replica's state, or the
@@ -469,17 +469,13 @@ const documentAt = (document: InternalDocument.Document, path: Path.Path): Sourc
 
 // A server's JSON has only each value's latest write, and leaves out what was
 // removed, but not what was never added.
-const jsonAt = (
-  json: Schema.Json | undefined,
-  path: Path.Path,
-  exists: ((path: Path.Path) => boolean) | undefined
-): Source => ({
+const jsonAt = (json: Schema.Json | undefined, path: Path.Path, exists: (path: Path.Path) => boolean): Source => ({
   path,
   itemKey: undefined,
   text: () => Predicate.isString(json) ? json : "",
   counter: () => Predicate.isNumber(json) ? json : 0,
   values: () => json === undefined ? [] : [json],
-  exists: () => json !== undefined && (exists?.(path) ?? true),
+  exists: () => json !== undefined && exists(path),
   at: (name) =>
     jsonAt(isJsonObject(json) && Object.hasOwn(json, name) ? json[name] : undefined, [...path, name], exists),
   keys: () => isJsonObject(json) ? Object.keys(json) : [],
