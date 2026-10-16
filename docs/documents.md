@@ -534,6 +534,8 @@ All built, each with tests and an example:
 ## Known limits
 
 - **`update` compares the whole document,** so its cost grows with the document. Path-scoped writes come later.
+- **An authority reads the whole document for every change it checks:** its JSON and which parts exist,
+  before and after, so a check's cost grows with the document too.
 - **`update` can't always tell which item moved.** When one item moves past a single neighbour, moving
   either gives the new order, and `update` picks one. Every replica still agrees; only a concurrent move of
   one of them shows the difference. An explicit move, like the text handles, comes with path-scoped writes.
