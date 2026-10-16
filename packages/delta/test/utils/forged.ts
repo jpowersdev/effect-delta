@@ -7,8 +7,8 @@ import { Fraction, Which } from "./sessions.ts"
 // rather than by a replica. Many are fine; the rest write where the schema has
 // nothing, name characters and positions their author hadn't seen or that
 // don't exist, edit outside the text, take no sequence numbers or fewer than
-// none, name a parent in the middle of a change, or are stamped no later than
-// what they were made on top of.
+// none, start or name a parent before any change or in the middle of one, or
+// are stamped no later than what they were made on top of.
 //
 // A forger makes them one at a time, each on top of earlier ones. The caller
 // says whether each was kept: one that wasn't is forgotten, and its writer
@@ -158,9 +158,10 @@ const ChangeCommand = Schema.Struct({
   // Whether it's made on top of its writer's last change, as a replica's is.
   own: Schema.Boolean,
   others: Schema.Array(Fraction).check(Schema.isMaxLength(2)),
-  // Whether the first of the others is named by its first id rather than its
-  // last: in its middle, if it has more than one.
-  middle: Schema.Boolean,
+  // Mostly nothing: 1 names the first of the others by its first id rather
+  // than its last (in its middle, if it has more than one), 2 adds a parent
+  // before any change, and 3 starts the change before any.
+  quirk: between(0, 9),
   // Its write time after the latest of its parents': 0 or less is too early.
   later: between(-1, 9),
   // Parts written as a replica writes them, before the ops.
@@ -205,7 +206,7 @@ export const makeForger = (strategy: Replica.Strategy) => {
       past.add(parent)
       for (const before of made[parent]!.past) past.add(before)
     }
-    const seq = next.get(replica) ?? 0
+    const seq = command.quirk === 3 ? -1 : next.get(replica) ?? 0
     const ids = new Map<string, Array<Id>>()
     const note = (path: Path, id: Id) => {
       const k = pathKey(path)
@@ -301,15 +302,18 @@ export const makeForger = (strategy: Replica.Strategy) => {
       }
     }
 
-    const middle = command.middle ? others[0] : undefined
+    const middle = command.quirk === 1 ? others[0] : undefined
     const change: InternalDocument.AnyChange = {
       replica,
       seq,
       length: at - seq,
-      parents: [...parents].map((i) => {
-        const { change: parent } = made[i]!
-        return { replica: parent.replica, seq: i === middle ? parent.seq : parent.seq + parent.length - 1 }
-      }),
+      parents: [
+        ...[...parents].map((i) => {
+          const { change: parent } = made[i]!
+          return { replica: parent.replica, seq: i === middle ? parent.seq : parent.seq + parent.length - 1 }
+        }),
+        ...(command.quirk === 2 ? [{ replica, seq: -1 }] : [])
+      ],
       time: Math.max(-1, ...[...parents].map((i) => made[i]!.change.time)) + command.later,
       ops
     }
