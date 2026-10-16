@@ -109,6 +109,37 @@ describe("HistoryStore", () => {
     }).pipe(Effect.provide(Counting))
   })
 
+  it.effect("persist saves a change that waits once", () => {
+    const appended: Array<string> = []
+    const Recording = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*() {
+      const store = yield* HistoryStore.HistoryStore
+      return {
+        ...store,
+        append: (document, delta) => {
+          appended.push(...(delta as InternalDelta.DeltaImpl).changes.keys())
+          return store.append(document, delta)
+        }
+      }
+    })).pipe(Layer.provide(HistoryStore.layerMemory))
+    return Effect.gen(function*() {
+      const peer = yield* make("peer")
+      yield* ReplicatedText.insert(peer, 0, "a")
+      const before = yield* Replica.version(peer)
+      yield* ReplicatedText.insert(peer, 1, "b")
+      // Waits for the peer's first change, which never comes.
+      const waiting = yield* Replica.delta(peer, before)
+      yield* Effect.scoped(Effect.gen(function*() {
+        const text = yield* open("session-1")
+        yield* Replica.receive(text, waiting)
+        for (const word of ["one", "two", "three"]) {
+          yield* ReplicatedText.insert(text, 0, word)
+          for (let i = 0; i < 5; i++) yield* Effect.yieldNow
+        }
+      }))
+      assert.strictEqual(appended.length, new Set(appended).size, `appended ${appended}`)
+    }).pipe(Effect.provide(Recording))
+  })
+
   it.effect("persist saves only what the store doesn't have, for a confirmed replica too", () => {
     const appended: Array<number> = []
     const Counting = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*() {
