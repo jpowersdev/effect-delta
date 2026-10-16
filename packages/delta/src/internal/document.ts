@@ -12,7 +12,8 @@ import {
   type Id,
   Id as IdSchema,
   idKey,
-  key
+  key,
+  lastId
 } from "./change.ts"
 import * as Fugue from "./fugue.ts"
 import * as History from "./history.ts"
@@ -560,11 +561,15 @@ interface Context {
 // What each change was made on top of, for changes whose parents are applied
 // or come earlier in the batch.
 const contextsOf = (history: History.History<Op>, changes: ReadonlyArray<AnyChange>): Array<Context> => {
-  const batch = new Map<string, Array<{ readonly change: AnyChange; readonly past: VersionVector.VersionVector }>>()
+  type Entry = { readonly change: AnyChange; readonly past: VersionVector.VersionVector }
+  const batch = new Map<string, Array<Entry>>()
+  // By last id, which is what parents name.
+  const ends = new Map<string, Entry>()
   const owner = (id: Id) => {
     const applied = History.find(history, id)
     if (applied !== undefined) return { change: applied, past: history.pasts.get(key(applied))! }
-    return batch.get(id.replica)?.find(({ change }) => change.seq <= id.seq && id.seq < change.seq + change.length)
+    return ends.get(idKey(id)) ??
+      batch.get(id.replica)?.find(({ change }) => change.seq <= id.seq && id.seq < change.seq + change.length)
   }
   return changes.map((change) => {
     const past: Record<string, number> = {}
@@ -577,9 +582,11 @@ const contextsOf = (history: History.History<Op>, changes: ReadonlyArray<AnyChan
       parentTime = Math.max(parentTime, found.change.time)
       parentsAreChanges &&= found.change.seq + found.change.length - 1 === parent.seq
     }
+    const entry = { change, past }
     const ofReplica = batch.get(change.replica) ?? []
-    ofReplica.push({ change, past })
+    ofReplica.push(entry)
     batch.set(change.replica, ofReplica)
+    ends.set(idKey(lastId(change)), entry)
     const parts = textParts(change, past, (path) => textParents(change, path, (id) => owner(id)?.change))
     return { past, parentTime, parentsAreChanges, parts }
   })
