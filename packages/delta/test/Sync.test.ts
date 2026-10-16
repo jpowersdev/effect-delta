@@ -713,6 +713,36 @@ describe("Relay", () => {
         )
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+    it.effect("doesn't learn a document's strategy from a text op that waits, which nobody has", () =>
+      Effect.gen(function*() {
+        // Made on top of a change the relay doesn't have, so it waits.
+        const waiting = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [{ replica: "ghost", seq: 0 }],
+          time: 1,
+          ops: [{ _tag: "InsertAt", path: ["body"], index: 0, text: "x" }]
+        }])
+        // How a tree replica's connection ends up.
+        const connects = Effect.scoped(Effect.gen(function*() {
+          const connection = yield* Relay.connect(yield* makeDoc("tree"), { document: notes })
+          return yield* Effect.raceFirst(
+            Effect.as(synced(connection), "Synced"),
+            Effect.map(Effect.flip(connection.await), (error) => error.reason._tag)
+          )
+        }))
+        yield* Effect.scoped(
+          Effect.gen(function*() {
+            const relay = yield* Relay.Relay
+            yield* relay.push({ format: Sync.FORMAT, document: notes, delta: waiting })
+            assert.strictEqual(yield* connects, "Synced")
+          }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+        )
+        // Nor does a new relay learn it from the store.
+        assert.strictEqual(yield* connects.pipe(Effect.provide(Layer.fresh(Relay.layer))), "Synced")
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
     it.effect("refuses what it can tell is malformed without the schema", () =>
       Effect.gen(function*() {
         const relay = yield* Relay.Relay
