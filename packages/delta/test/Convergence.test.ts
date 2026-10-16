@@ -396,9 +396,11 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
 
   it.effect.prop(
     "replicas, relays and reloads accept the same changes, and show the same value whatever the order",
-    // Stored in memory, or as JSON.
-    { session: ForgedSession, seed: Schema.Int, json: Schema.Boolean },
-    Effect.fnUntraced(function*({ seed, session }) {
+    // Stored in memory, or as JSON. With `resend`, the changes that wait are
+    // sent again with every batch, as a peer sends what it hasn't heard back
+    // about.
+    { session: ForgedSession, seed: Schema.Int, json: Schema.Boolean, resend: Schema.Boolean },
+    Effect.fnUntraced(function*({ resend, seed, session }) {
       const expected = yield* Effect.gen(function*() {
         const relay = yield* Relay.Relay
         const updates = yield* Stream.toQueue(subscribe(relay, shuffled, VersionVector.empty), {
@@ -407,12 +409,16 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         // As the session sends them, a replica and a relay accept the same
         // ones.
         const doc = yield* watched(yield* make("in-order"), Project)
+        let waiting: ReadonlyArray<InternalDocument.AnyChange> = []
         const changes = yield* forgeSession(strategy, session, (batch) =>
           Effect.gen(function*() {
-            const received = yield* doc.receive(InternalDelta.fromChanges(batch))
-            const pushed = yield* Effect.exit(push(relay, inOrder, batch))
-            assert.strictEqual(Exit.isSuccess(pushed), Exit.isSuccess(received), JSON.stringify(batch))
+            const sending = resend ? [...waiting, ...batch] : batch
+            const received = yield* doc.receive(InternalDelta.fromChanges(sending))
+            const pushed = yield* Effect.exit(push(relay, inOrder, sending))
+            assert.strictEqual(Exit.isSuccess(pushed), Exit.isSuccess(received), JSON.stringify(sending))
             const kept = (yield* Replica.delta(doc.doc, VersionVector.empty)) as InternalDelta.DeltaImpl
+            const applied = new Set(appliedBy([...kept.changes.values()], yield* Replica.version(doc.doc)))
+            waiting = [...kept.changes.values()].filter((change) => !applied.has(change))
             return (change: InternalDocument.AnyChange) => kept.changes.has(key(change))
           }))
         const expected = yield* view(doc.doc)
