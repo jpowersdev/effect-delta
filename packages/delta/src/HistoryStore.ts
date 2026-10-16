@@ -186,10 +186,13 @@ export const layerKeyValueStore = (options: {
         ),
         Effect.mapError(fail(`Couldn't read ${at}`))
       )
+    // Each record is written whole: a file system's write, interrupted, leaves
+    // the record empty, and the document couldn't be loaded again.
     const writeJson = <A, I>(schema: Schema.Codec<A, I>, at: string, value: A) =>
       Schema.encodeEffect(Schema.fromJsonString(schema))(value).pipe(
         Effect.flatMap((json) => store.set(at, json)),
-        Effect.mapError(fail(`Couldn't write ${at}`))
+        Effect.mapError(fail(`Couldn't write ${at}`)),
+        Effect.uninterruptible
       )
 
     const Count = Schema.Int
