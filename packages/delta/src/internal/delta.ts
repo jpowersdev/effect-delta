@@ -5,6 +5,7 @@ import { pipeArguments } from "effect/Pipeable"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import type * as Delta from "../Delta.ts"
+import * as VersionVector from "../VersionVector.ts"
 import { key } from "./change.ts"
 import { AnyChange } from "./document.ts"
 
@@ -80,6 +81,21 @@ export const combine = (self: Delta.Delta, that: Delta.Delta): DeltaImpl => {
 }
 
 const canonical = (change: AnyChange): string => JSON.stringify(encodeChange(change))
+
+/**
+ * What a delta holds without gaps: for each replica, its changes from the
+ * first on, up to the first one missing.
+ *
+ * @internal
+ */
+export const held = (self: Delta.Delta): VersionVector.VersionVector => {
+  const changes = [...(self as DeltaImpl).changes.values()].sort((a, b) => a.seq - b.seq)
+  const version: Record<string, number> = {}
+  for (const change of changes) {
+    if (VersionVector.get(version, change.replica) === change.seq) version[change.replica] = change.seq + change.length
+  }
+  return version
+}
 
 /** @internal */
 export const FORMAT = 1

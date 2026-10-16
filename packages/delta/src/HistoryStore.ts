@@ -23,7 +23,7 @@ import * as Schema from "effect/Schema"
 import type * as Scope from "effect/Scope"
 import * as Stream from "effect/Stream"
 import * as Delta from "./Delta.ts"
-import type * as InternalDelta from "./internal/delta.ts"
+import * as InternalDelta from "./internal/delta.ts"
 import * as InternalReplica from "./internal/replica.ts"
 import * as Replica from "./Replica.ts"
 import * as VersionVector from "./VersionVector.ts"
@@ -324,7 +324,7 @@ export const persist = Effect.fnUntraced(function*(
   }
 
   // What the store has, so a save adds only what it doesn't.
-  let saved = Option.match(stored, { onNone: () => VersionVector.empty, onSome: (s) => held(s.history) })
+  let saved = Option.match(stored, { onNone: () => VersionVector.empty, onSome: (s) => InternalDelta.held(s.history) })
   let savedWriters = new Set(Option.match(stored, { onNone: () => [], onSome: (s) => Object.keys(s.writers) }))
   // How much history the last snapshot covers, in characters.
   let snapshotAt = Option.match(Option.flatMap(stored, (s) => s.snapshot), {
@@ -359,17 +359,6 @@ export const persist = Effect.fnUntraced(function*(
   const fiber = yield* Effect.forkScoped(Stream.runForEach(changes, () => save(false)))
   return { await: Fiber.join(fiber).pipe(Effect.flatMap(() => Effect.never)) }
 })
-
-// What a store's history has without gaps: for each replica, its changes from
-// the first on, up to the first one missing.
-const held = (history: Delta.Delta): VersionVector.VersionVector => {
-  const changes = [...(history as InternalDelta.DeltaImpl).changes.values()].sort((a, b) => a.seq - b.seq)
-  const version: Record<string, number> = {}
-  for (const change of changes) {
-    if (VersionVector.get(version, change.replica) === change.seq) version[change.replica] = change.seq + change.length
-  }
-  return version
-}
 
 // Characters of history between snapshots.
 const snapshotEvery = 4096

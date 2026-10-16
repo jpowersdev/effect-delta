@@ -237,6 +237,11 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
         engine,
         Effect.suspend(() => {
           for (const writer of stored.writers) state.writers.add(writer)
+          // A store's history holds only what the authority had confirmed;
+          // the rest is unconfirmed.
+          if (state.confirmed !== undefined) {
+            state.confirmed.version = VersionVector.combine(state.confirmed.version, InternalDelta.held(stored.history))
+          }
           const all = InternalDelta.combine(stored.history, stored.unconfirmed)
           const { snapshot } = stored
           const empty = history().changes.size === 0 && history().pending.size === 0
