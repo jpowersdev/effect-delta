@@ -22,20 +22,25 @@ import { dual } from "effect/Function"
 import * as Option from "effect/Option"
 import { hasProperty } from "effect/Predicate"
 import * as PubSub from "effect/PubSub"
+import type * as Schedule from "effect/Schedule"
 import * as Schema from "effect/Schema"
 import type * as Scope from "effect/Scope"
 import * as Semaphore from "effect/Semaphore"
 import * as Stream from "effect/Stream"
 import * as SubscriptionRef from "effect/SubscriptionRef"
+import * as Authority from "./Authority.ts"
 import * as InternalAnchor from "./internal/anchor.ts"
 import { type Change, key } from "./internal/change.ts"
+import * as InternalConnection from "./internal/connection.ts"
 import * as InternalDelta from "./internal/delta.ts"
 import * as History from "./internal/history.ts"
 import * as InternalReplica from "./internal/replica.ts"
+import * as TreeReplica from "./internal/treeReplica.ts"
 import * as TreeText from "./internal/treeText.ts"
 import * as Replica from "./Replica.ts"
+import type * as Sync from "./Sync.ts"
 import * as TextPatch from "./TextPatch.ts"
-import type * as VersionVector from "./VersionVector.ts"
+import * as VersionVector from "./VersionVector.ts"
 
 const TypeId = "~effect-delta/ReplicatedText"
 
@@ -52,8 +57,19 @@ interface ReplicatedTextImpl extends ReplicatedText {
 interface State {
   replica: Replica.ReplicaId
   nextSeq: number
-  readonly text: TreeText.State
-  readonly history: History.History<TreeText.Op>
+  /** Every replica id this replica has written under, including ones restored from storage. */
+  readonly writers: Set<string>
+  text: TreeText.State
+  history: History.History<TreeText.Op>
+  /** Only for replicas that answer to an authority. */
+  readonly confirmed: ConfirmedState | undefined
+}
+
+interface ConfirmedState {
+  /** What the authority has acknowledged. */
+  version: VersionVector.VersionVector
+  /** Where the next replica id comes from after a rejection. */
+  readonly freshId: Effect.Effect<Replica.ReplicaId>
 }
 
 const Proto = {
@@ -64,22 +80,57 @@ const Proto = {
   }
 }
 
-const makeImpl = Effect.fnUntraced(function*(options?: Options) {
-  const replica = options?.replica ?? (yield* randomReplicaId)
-  const state: State = { replica, nextSeq: 0, text: TreeText.make(), history: History.make() }
+const randomReplicaId = Effect.gen(function*() {
+  const crypto = yield* Crypto.Crypto
+  return Replica.ReplicaId.make(yield* Effect.orDie(crypto.randomUUIDv4()))
+})
+
+const makeWith = Effect.fnUntraced(function*(options: {
+  readonly strategy: Replica.Strategy
+  readonly replica: Replica.ReplicaId
+  readonly confirmed: ConfirmedState | undefined
+}) {
+  if (options.strategy === "replay") return yield* Effect.die(new Error("The replay strategy isn't built yet"))
+  const state: State = {
+    replica: options.replica,
+    nextSeq: 0,
+    writers: new Set([options.replica]),
+    text: TreeText.make(),
+    history: History.make(),
+    confirmed: options.confirmed
+  }
   const self: ReplicatedTextImpl = Object.assign(Object.create(Proto), {
-    strategy: options?.strategy ?? "tree",
+    strategy: options.strategy,
     semaphore: yield* Semaphore.make(1),
     state,
     textRef: yield* SubscriptionRef.make(""),
     edits: yield* PubSub.unbounded<Edit>()
   })
-  return Object.assign(self, { core: makeCore(self) }) as ReplicatedText
+  return Object.assign(self, { core: makeCore(self) })
 })
 
-const randomReplicaId = Effect.gen(function*() {
+const makeImpl = Effect.fnUntraced(function*(options?: Options) {
+  const replica = options?.replica ?? (yield* randomReplicaId)
+  return yield* makeWith({ strategy: options?.strategy ?? "tree", replica, confirmed: undefined }) as Effect.Effect<
+    ReplicatedText
+  >
+})
+
+const makeConfirmedImpl = Effect.fnUntraced(function*(options: ConfirmedOptions) {
+  // Kept for later: a rejection moves the replica to a new id.
   const crypto = yield* Crypto.Crypto
-  return Replica.ReplicaId.make(yield* Effect.orDie(crypto.randomUUIDv4()))
+  const freshId = Effect.provideService(randomReplicaId, Crypto.Crypto, crypto)
+  const self = yield* makeWith({
+    strategy: "tree",
+    replica: options.replica ?? (yield* freshId),
+    confirmed: { version: {}, freshId }
+  })
+  const connection = yield* InternalConnection.connect(self, yield* Authority.Authority, {
+    document: options.document,
+    authority: true,
+    retry: options.retry
+  })
+  return Object.assign(self, { connection }) as Confirmed
 })
 
 const impl = (self: ReplicatedText): ReplicatedTextImpl => self as ReplicatedTextImpl
@@ -273,56 +324,139 @@ const locateRangeImpl = (
 
 // Syncing ------------------------------------------------------------------
 
-const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => ({
-  id: Effect.sync(() => self.state.replica),
-  version: locked(self, Effect.sync(() => ({ ...self.state.history.version }) as VersionVector.VersionVector)),
-  delta: (since) =>
-    locked(self, Effect.sync(() => InternalDelta.fromChanges(History.since(self.state.history, since)))),
-  receive: (delta) => locked(self, Effect.suspend(() => receive(self, delta as InternalDelta.DeltaImpl)))
-})
+const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
+  const { state } = self
+  const subscribeAll = Effect.map(
+    PubSub.subscribe(self.edits),
+    (subscription) => Stream.map(Stream.fromSubscription(subscription), () => undefined)
+  )
+  return {
+    id: Effect.sync(() => state.replica),
+    version: locked(self, Effect.sync(() => ({ ...state.history.version }))),
+    delta: (since) =>
+      locked(
+        self,
+        Effect.sync(() =>
+          InternalDelta.fromChanges(
+            History.since(state.history, since).filter((change) => !isUnconfirmed(state, change))
+          )
+        )
+      ),
+    receive: (delta) =>
+      state.confirmed !== undefined
+        ? Effect.fail(deltaError(new Replica.AuthorityOnly()))
+        : locked(self, Effect.suspend(() => receive(self, delta as InternalDelta.DeltaImpl))),
+    accept: (delta) => locked(self, Effect.suspend(() => receive(self, delta as InternalDelta.DeltaImpl))),
+    outgoing: (since) =>
+      locked(
+        self,
+        Effect.sync(() =>
+          InternalDelta.fromChanges(
+            History.since(state.history, since).filter((change) => state.writers.has(change.replica))
+          )
+        )
+      ),
+    changed: subscribeAll,
+    toStore: (since) =>
+      locked(
+        self,
+        Effect.sync(() => {
+          const unconfirmed = [...state.history.changes.values()].filter((change) => isUnconfirmed(state, change))
+          const version: Record<string, number> = { ...state.history.version }
+          for (const change of unconfirmed) version[change.replica] = Math.min(version[change.replica]!, change.seq)
+          return {
+            history: InternalDelta.fromChanges(
+              History.since(state.history, since).filter((change) => !isUnconfirmed(state, change))
+            ),
+            unconfirmed: InternalDelta.fromChanges(unconfirmed),
+            writers: [...state.writers].map((writer) => Replica.ReplicaId.make(writer)),
+            version
+          }
+        })
+      ),
+    restore: (stored) =>
+      locked(
+        self,
+        Effect.suspend(() => {
+          for (const writer of stored.writers) state.writers.add(writer)
+          return Effect.asVoid(
+            receive(self, InternalDelta.combine(stored.history, stored.unconfirmed))
+          )
+        })
+      ),
+    confirmed: state.confirmed === undefined ? undefined : {
+      acknowledge: (version) =>
+        locked(
+          self,
+          Effect.sync(() => {
+            state.confirmed!.version = VersionVector.combine(state.confirmed!.version, version)
+          })
+        ),
+      reject: (version, message) =>
+        locked(
+          self,
+          Effect.gen(function*() {
+            const confirmed = state.confirmed!
+            confirmed.version = VersionVector.combine(confirmed.version, version)
+            const before = state.text.text
+            // Everything the authority doesn't have was made on top of the
+            // rejected change, and nobody else has seen it, so it all goes.
+            const pending = [...state.history.pending.values()]
+            rebuild(state, [...state.history.changes.values()].filter((change) => !isUnconfirmed(state, change)))
+            for (const change of pending) state.history.pending.set(key(change), change)
+            // A new id, so sequence numbers are never reused and never skip.
+            state.replica = yield* confirmed.freshId
+            state.nextSeq = 0
+            state.writers.add(state.replica)
+            yield* publish(self, { _tag: "Rejected", patch: TextPatch.get(before, state.text.text), message })
+          })
+        )
+    }
+  }
+}
+
+// A confirmed replica's own changes that its authority hasn't acknowledged.
+const isUnconfirmed = (state: State, change: Change<TreeText.Op>): boolean =>
+  state.confirmed !== undefined && state.writers.has(change.replica) &&
+  change.seq + change.length > VersionVector.get(state.confirmed.version, change.replica)
+
+// Starts over from `changes`, in the order they were applied.
+const rebuild = (state: State, changes: ReadonlyArray<Change<TreeText.Op>>): void => {
+  const rebuilt = TreeReplica.rebuild(changes)
+  state.text = rebuilt.text
+  state.history = rebuilt.history
+}
 
 const receive = (
   self: ReplicatedTextImpl,
   delta: InternalDelta.DeltaImpl
 ): Effect.Effect<ReadonlyArray<Replica.Overlap>, Replica.DeltaError> => {
-  const { history, text } = self.state
+  const { state } = self
+  const { history, text } = state
   for (const change of delta.changes.values()) {
-    if (change.replica === self.state.replica) {
-      const mine = history.changes.get(key(change))
-      if (mine === undefined || !Equal.equals(mine, change)) {
-        return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
-      }
-      continue
+    const existing = history.changes.get(key(change)) ?? history.pending.get(key(change))
+    if (change.replica === state.replica && existing === undefined) {
+      return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
     }
-    if (History.has(history, change)) {
-      const existing = history.changes.get(key(change)) ?? history.pending.get(key(change))
-      if (existing !== undefined && !Equal.equals(existing, change)) {
-        return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
-      }
-      continue
+    if (existing !== undefined && !Equal.equals(existing, change)) {
+      return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
     }
-    history.pending.set(key(change), change)
+    if (existing === undefined && !History.has(history, change)) history.pending.set(key(change), change)
   }
 
   const added = new Set<TreeText.Info>()
   let patch = TextPatch.empty
   const ready = History.takeReady(history)
   for (const [index, change] of ready.entries()) {
-    const past = History.pastOf(history, change.parents)
-    const info: TreeText.Info = { replica: change.replica, seq: change.seq, length: change.length, past }
-    const problem = checkChange(text, change)
+    const problem = TreeReplica.check(text, change)
     if (problem !== undefined) {
       // Whatever was waiting behind the bad change keeps waiting.
       for (const later of ready.slice(index + 1)) history.pending.set(key(later), later)
       return Effect.fail(deltaError(new Replica.Malformed({ message: problem })))
     }
-    let seq = change.seq
-    for (const op of change.ops) {
-      patch = TextPatch.compose(patch, TreeText.apply(text, op, { replica: change.replica, seq }, info))
-      seq += TreeText.opLength(op)
-    }
-    History.record(history, change, past)
-    added.add(info)
+    const applied = TreeReplica.integrate(text, history, change)
+    patch = TextPatch.compose(patch, applied.patch)
+    added.add(applied.info)
   }
   if (added.size === 0) return Effect.succeed([])
 
@@ -333,40 +467,6 @@ const receive = (
     replicas: overlap.replicas.map((replica) => Replica.ReplicaId.make(replica))
   }))
   return Effect.as(publish(self, { _tag: "Remote", patch, overlaps }), overlaps)
-}
-
-// Checks a change before applying any of it, so a bad change can't leave the
-// tree half-updated. Its ops may refer to characters inserted earlier in the
-// same change.
-const checkChange = (text: TreeText.State, change: Change<TreeText.Op>): string | undefined => {
-  const total = change.ops.reduce((sum, op) => sum + TreeText.opLength(op), 0)
-  if (total !== change.length) return `Change ${key(change)} says it has ${change.length} characters but has ${total}`
-  const inserted = new Set<string>()
-  const known = (id: { readonly replica: string; readonly seq: number } | null | undefined) =>
-    id === null || id === undefined || inserted.has(`${id.seq}@${id.replica}`) ||
-    TreeText.has(text, id)
-  let seq = change.seq
-  for (const op of change.ops) {
-    if (op._tag === "Insert") {
-      if (op.side === "R" ? op.rightOrigin === undefined : op.rightOrigin !== undefined) {
-        return `Change ${key(change)} has an insert with a mismatched side and right origin`
-      }
-      if (!known(op.parent) || !known(op.rightOrigin)) {
-        return `Change ${key(change)} inserts next to a character it hasn't seen`
-      }
-      for (let offset = 0; offset < op.text.length; offset++) inserted.add(`${seq + offset}@${change.replica}`)
-    } else {
-      for (const span of op.targets) {
-        for (let offset = 0; offset < span.length; offset++) {
-          if (!known({ replica: span.replica, seq: span.seq + offset })) {
-            return `Change ${key(change)} removes a character it hasn't seen`
-          }
-        }
-      }
-    }
-    seq += TreeText.opLength(op)
-  }
-  return undefined
 }
 
 const deltaError = (reason: Replica.DeltaError["reason"]) => new Replica.DeltaError({ reason })
@@ -436,6 +536,91 @@ export const make: {
   (options: Options & { readonly replica: Replica.ReplicaId }): Effect.Effect<ReplicatedText>
   (options?: Options): Effect.Effect<ReplicatedText, never, Crypto.Crypto>
 } = makeImpl as any
+
+/**
+ * A replicated text that answers to an authority: a server that accepts or
+ * rejects each of its changes. `connection` is its link to the authority.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface Confirmed extends ReplicatedText {
+  readonly connection: Sync.Connection
+}
+
+/**
+ * Options for `makeConfirmed`.
+ *
+ * **Details**
+ *
+ * - `document`: which document on the authority this is a replica of.
+ * - `replica`: the replica id to start with. Leave it out to get a fresh
+ *   random one.
+ * - `retry`: how to retry a lost connection. The default backs off from 200
+ *   milliseconds to every 10 seconds, indefinitely.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.1.0
+ */
+export interface ConfirmedOptions {
+  readonly document: Replica.DocumentId
+  readonly replica?: Replica.ReplicaId | undefined
+  readonly retry?: Schedule.Schedule<unknown, Sync.SyncError> | undefined
+}
+
+/**
+ * Creates a replicated text whose changes an authority confirms or rejects. It
+ * syncs through the `Authority` it requires, for the life of the scope, and
+ * with nothing else.
+ *
+ * **Details**
+ *
+ * Edits apply immediately, as with any replica. They're unconfirmed until the
+ * authority acknowledges them, and the replica never gives them to anything
+ * else: `Replica.exchange` and `Replica.receive` fail with `AuthorityOnly`. When
+ * the authority rejects a change, the replica drops it and every unconfirmed
+ * change made after it, emits a `Rejected` edit that rolls the text back, and
+ * continues under a new replica id.
+ *
+ * Give it `Authority.layerRemote` to reach an authority on a server, or
+ * `Authority.layer` to run the authority in the same process (as tests do).
+ *
+ * **Example** (Rejecting a reviewer's edit)
+ *
+ * ```ts import.meta.vitest
+ * import { NodeServices } from "@effect/platform-node"
+ * import { Effect, Layer, Stream } from "effect"
+ * import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "effect-delta"
+ *
+ * const EditorsOnly = Authority.layer({
+ *   check: ({ user }) =>
+ *     user === "editor" ? Effect.void : Effect.fail(new Authority.Rejected({ message: "Read only" }))
+ * }).pipe(Layer.provide(HistoryStore.layerMemory))
+ *
+ * const program = Effect.gen(function*() {
+ *   const spec = yield* ReplicatedText.makeConfirmed({ document: Replica.DocumentId.make("spec") })
+ *   const { edits } = yield* ReplicatedText.subscribe(spec)
+ *   yield* ReplicatedText.insert(spec, 0, "LGTM")
+ *   yield* edits.pipe(Stream.filter((edit) => edit._tag === "Rejected"), Stream.runHead)
+ *   return yield* ReplicatedText.get(spec)
+ * })
+ *
+ * await Effect.runPromise(program.pipe(
+ *   Effect.scoped,
+ *   Effect.provideService(Sync.CurrentUser, "reviewer"),
+ *   Effect.provide([EditorsOnly, NodeServices.layer])
+ * )) // => ""
+ * ```
+ *
+ * @stability unstable
+ * @category constructors
+ * @since 0.1.0
+ */
+export const makeConfirmed: (
+  options: ConfirmedOptions
+) => Effect.Effect<Confirmed, never, Authority.Authority | Crypto.Crypto | Scope.Scope> = makeConfirmedImpl
 
 /**
  * Returns the current text.

@@ -9,7 +9,25 @@
  * @stability unstable
  * @since 0.1.0
  */
+export * as Authority from "./Authority.ts"
+
+/**
+ * @stability unstable
+ * @since 0.1.0
+ */
 export * as Delta from "./Delta.ts"
+
+/**
+ * @stability unstable
+ * @since 0.1.0
+ */
+export * as HistoryStore from "./HistoryStore.ts"
+
+/**
+ * @stability unstable
+ * @since 0.1.0
+ */
+export * as Relay from "./Relay.ts"
 
 /**
  * @stability unstable
@@ -22,6 +40,12 @@ export * as Replica from "./Replica.ts"
  * @since 0.1.0
  */
 export * as ReplicatedText from "./ReplicatedText.ts"
+
+/**
+ * @stability unstable
+ * @since 0.1.0
+ */
+export * as Sync from "./Sync.ts"
 
 /**
  * @stability unstable

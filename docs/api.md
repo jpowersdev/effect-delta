@@ -9,6 +9,9 @@ comes back here first.
 - the text module is `ReplicatedText`
 - an authority is a service in the requirements channel, with its own constructor (`makeConfirmed`)
 
+Building the network half changed a few details. They're listed under
+[Changed while building](#changed-while-building), and the sketches below show the result.
+
 ## Principles
 
 1. **Ref-style handles, module functions.** A replica is an opaque value you pass to functions, like
@@ -27,8 +30,8 @@ comes back here first.
    - Persisting requires `HistoryStore`.
 5. **Effect's existing pieces do the plumbing.**
    - **Sync protocol:** an `RpcGroup`, so it runs over any `RpcClient`/`RpcServer` protocol (WebSocket,
-     HTTP, socket, worker), with `RpcSerialization` for framing and `RpcMiddleware` for auth, as `eventlog`
-     does.
+     HTTP, socket, worker), with `RpcSerialization` for framing. Who may connect is a service
+     (`Sync.Authorization`), as `eventlog` does it with `EventLogServerAuthorization`.
    - **Storage:** `KeyValueStore`.
    - **State:** `SubscriptionRef`.
    - **Observation:** `Stream`.
@@ -97,35 +100,43 @@ Covers the `Authority` service, a server, the RPC protocol, and a rejected edit.
 ```ts
 /**
  * A spec server that accepts edits only from editors. A reviewer's edit is
- * rejected and rolled back on their screen.
+ * rejected and rolled back on their screen, and never reaches anyone else.
  */
-import { Effect, Layer, Stream } from "effect"
+import { NodeHttpServer, NodeSocket } from "@effect/platform-node"
+import { Effect, Layer, Option, Stream } from "effect"
+import { Headers, HttpRouter } from "effect/http"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"
-import { Socket } from "effect/socket"
 import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "effect-delta"
+import { createServer } from "node:http"
 
-// The authority: the rule lives here. `Members` is the app's own service.
-const AuthorityLive = Authority.layer({
+// Who's connecting, from the session token their app sent when the socket opened.
+// `sessions` is the app's own.
+const SignedIn = Layer.succeed(Sync.Authorization)({
+  identify: (headers) =>
+    Headers.get(headers, "authorization").pipe(
+      Option.flatMap((value) => Option.fromNullishOr(sessions.get(value.replace(/^Bearer /, "")))),
+      Option.match({ onNone: () => Effect.fail(new Sync.Forbidden({ message: "Sign in first" })), onSome: Effect.succeed })
+    ),
+  authorize: () => Effect.void // anyone signed in may open specs
+})
+
+// The authority: the rule lives here. `roles` is the app's own.
+const EditorsOnly = Authority.layer({
   check: ({ user }) =>
-    Effect.gen(function*() {
-      const role = yield* Members.roleOf(user)
-      if (role !== "editor") {
-        return yield* new Authority.Rejected({ message: "Reviewers can comment but not edit" })
-      }
-    })
+    roles.get(user) === "editor"
+      ? Effect.void
+      : Effect.fail(new Authority.Rejected({ message: "Reviewers can comment but not edit" }))
 }).pipe(Layer.provide(HistoryStore.layerMemory))
 
-// Server: expose the authority over RPC. `Auth` is the app's own RpcMiddleware,
-// providing `CurrentUser`.
-const Rpcs = Sync.Rpcs.middleware(Auth)
-
-export const ServerLive = RpcServer.layer(Rpcs).pipe(
-  Layer.provide(Authority.layerHandlers(Rpcs, {
-    identify: CurrentUser.pipe(Effect.map((user) => user.id)),
-    authorize: () => Effect.void // anyone signed in may open specs
-  })),
-  Layer.provide(AuthorityLive),
-  Layer.provide(RpcServer.layerProtocolWebsocket({ path: "/sync" })),
+// Server: serve the authority over RPC.
+const ServerLive = HttpRouter.serve(
+  RpcServer.layer(Sync.Rpcs).pipe(
+    Layer.provide(Authority.layerHandlers),
+    Layer.provide([EditorsOnly, SignedIn]),
+    Layer.provide(RpcServer.layerProtocolWebsocket({ path: "/sync" }))
+  )
+).pipe(
+  Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 })),
   Layer.provide(RpcSerialization.layerNdjson)
 )
 
@@ -147,8 +158,7 @@ const reviewer = Effect.gen(function*() {
 // In production the authority is on a server.
 const AuthorityRemote = Authority.layerRemote.pipe(
   Layer.provide(RpcClient.layerProtocolSocket()),
-  Layer.provide(Socket.layerWebSocket("wss://specs.example.com/sync")),
-  Layer.provide(Socket.layerWebSocketConstructorGlobal),
+  Layer.provide(NodeSocket.layerWebSocket("wss://specs.example.com/sync", { headers: { authorization: `Bearer ${token}` } })),
   Layer.provide(RpcSerialization.layerNdjson)
 )
 
@@ -161,14 +171,12 @@ This is how the tests run:
 ```ts
 reviewer.pipe(
   Effect.scoped,
-  Effect.provideService(Sync.CurrentUser, "reviewer-1"),
-  Effect.provide(AuthorityLive),
-  Effect.provide(MembersTest)
+  Effect.provideService(Sync.CurrentUser, "ben"),
+  Effect.provide(EditorsOnly)
 )
 ```
 
-The build phase makes the production half complete and runnable, with `Auth`, `CurrentUser` and an HTTP
-server.
+`examples/spec-review.ts` is the runnable version: the server and two people's apps in one process.
 
 ### Replay: a long manuscript, reopened
 
@@ -218,8 +226,8 @@ program.pipe(
 | `Replica`        | What every replica shares, so sync and storage work for text now and documents later: ids, version, delta, receive, exchange, overlaps. |
 | `Delta`          | What syncs: a set of changes. Combines with `Combiner`/`Reducer`.                                            |
 | `VersionVector`  | What a replica has seen, per replica id.                                                                     |
-| `Sync`           | The protocol as an `RpcGroup`, `connect` for relays, connection status, `CurrentUser`, protocol errors.       |
-| `Relay`          | The relay service: passes changes along and stores them. In-process, remote and RPC-handler layers.           |
+| `Sync`           | The protocol as an `RpcGroup`, the `Authorization` service, connections and their status, `CurrentUser`, protocol errors. |
+| `Relay`          | The relay service: passes changes along and stores them. In-process, remote and RPC-handler layers, and `connect`. |
 | `Authority`      | The authority service: accepts or rejects each change. In-process, remote and RPC-handler layers.             |
 | `HistoryStore`   | Where replicas and servers keep history: a service, with memory and `KeyValueStore` layers, and `persist`.    |
 
@@ -239,7 +247,7 @@ interface Options {
   readonly replica?: Replica.ReplicaId | undefined   // default: a fresh random id
 }
 
-// A replica that syncs with anything: peers (Replica.exchange) and relays (Sync.connect).
+// A replica that syncs with anything: peers (Replica.exchange) and relays (Relay.connect).
 declare const make: (options?: Options) => Effect<ReplicatedText, never, Crypto>
 
 // A replica whose changes an authority confirms or rejects. It syncs through that Authority for the life
@@ -290,7 +298,7 @@ class ReplicatedTextError extends Schema.TaggedError<ReplicatedTextError>()("Rep
 
 **Two constructors, because they sync differently.**
 - A `make` replica can sync with several things at once: direct exchanges and any number of relays. So
-  connecting is explicit (`Sync.connect`).
+  connecting is explicit (`Relay.connect`).
 - A `makeConfirmed` replica has exactly one path, its authority, so that path is its requirement. It
   connects on creation, and `Replica.exchange` and `Replica.receive` from anything else fail with
   `AuthorityOnly`. That means a change that might be rejected never reaches another replica.
@@ -398,42 +406,51 @@ deltas disagree about the same change id (a reused or forged id), `combine` keep
 ### Sync
 
 ```ts
-// The protocol, shared by relays and authorities. Apps mount it in their RpcServer and add their own
-// middleware (auth).
+// The protocol, shared by relays and authorities. Apps mount it in their RpcServer.
 declare const Rpcs: RpcGroup<Subscribe | Push>
-//   Subscribe { format, document, strategy, version, writers: ReplicaId[] }
-//     → Stream<Delta>: first what the caller lacks, then each new delta as it arrives
+//   Subscribe { format, document, strategy, version, authority: boolean }
+//     → Stream<Update { delta, version }>: first what the caller lacks, then each new delta as it arrives
 //   Push { format, document, delta }
-//     → Ack { confirmed: VersionVector }, or fails with Authority.Rejected
+//     → Accepted { confirmed: VersionVector } | Rejected { confirmed, message }
+
+// What a relay and an authority both provide.
+interface Server {
+  readonly subscribe: (request: Subscribe) => Stream<Update, SyncError>
+  readonly push: (request: Push) => Effect<Ack, SyncError>
+}
+
+// Who may connect and what they may do. Servers check it on every request.
+class Authorization extends Context.Service<Authorization, {
+  readonly identify: (headers: Headers) => Effect<string, Forbidden>  // who is asking, as a stable user id
+  readonly authorize: (request: {
+    readonly user: string
+    readonly document: DocumentId
+    readonly access: "read" | "write"
+  }) => Effect<void, Forbidden>
+}>()("effect-delta/Sync/Authorization") {}
+declare const layerAuthorizationAllowAll: Layer<Authorization> // development and tests only
 
 // Who the current changes are for. RPC handlers set it from `identify`; in-process code can provide it.
 declare const CurrentUser: Context.Reference<string>
 
-// Syncs a replica through the Relay for the life of the scope. Many replicas share one remote relay
-// connection.
-declare const connect: (
-  replica: Replica<unknown>,
-  options: { readonly document: DocumentId; readonly retry?: Schedule | undefined }
-) => Effect<Connection, never, Relay | Scope>
-
 interface Connection {
   readonly status: Stream<Status>          // Connecting | Syncing | Synced | Offline { error }
-  readonly unconfirmed: Effect<number>     // my changes the other side hasn't acknowledged yet
+  readonly unconfirmed: Stream<number>     // my changes the other side hasn't acknowledged: now, then each change
   readonly await: Effect<never, SyncError> // fails if the connection gives up (retries exhausted, forbidden, protocol error)
 }
 
-class Forbidden extends Schema.TaggedError<Forbidden>()("Forbidden", { message: Schema.String }) {}
-
 class SyncError extends Schema.TaggedError<SyncError>()("SyncError", {
-  reason: Schema.Union([Disconnected, Forbidden, ProtocolViolation, DeltaError])
+  reason: Schema.Union([Forbidden, ProtocolViolation, Disconnected, Unavailable, DeltaError])
 }) {}
 ```
 
 **How a connection works.** It `Subscribe`s with what the replica has seen and applies the stream of deltas
-it gets back. It `Push`es each local change. On a disconnect it retries with `retry` and resubscribes from
-its current version, so nothing is lost or repeated. Peer-to-peer in the first release means one peer runs
-a relay (with `HistoryStore.layerMemory`) and serves it with `Relay.layerHandlers`, and the other uses
-`Relay.layerRemote`. A symmetric mesh comes later.
+it gets back. Once caught up it `Push`es the replica's own changes the server lacks, then each new one. On a
+`Disconnected` or `Unavailable` error it retries with `retry` and resubscribes from its current version, so
+nothing is lost. The server's first update says what it has, so a server that lost unsaved changes gets
+them again. Peer-to-peer in the first release means one peer runs a relay (with `HistoryStore.layerMemory`)
+and serves it with `Relay.layerHandlers`, and the other uses `Relay.layerRemote`. A symmetric mesh comes
+later.
 
 ### Relay and Authority
 
@@ -447,24 +464,24 @@ Each is one service with three layers:
 
 ```ts
 // Relay: passes changes along and stores them; never rejects.
-class Relay extends Context.Service<Relay, {
-  readonly subscribe: (request: Subscribe) => Stream<Delta, SyncError>
-  readonly push: (request: Push) => Effect<Ack, SyncError>
-}>()("effect-delta/Relay") {}
+class Relay extends Context.Service<Relay, Sync.Server>()("effect-delta/Relay") {}
 declare const layer: Layer<Relay, never, HistoryStore>
 declare const layerRemote: Layer<Relay, never, RpcClient.Protocol>
-declare const layerHandlers: <Rpcs, R>(rpcs: Rpcs, options: HandlerOptions<R>) => Layer<Handlers<Rpcs>, never, Relay | R>
+declare const layerHandlers: Layer<Rpc.ToHandler<Sync.Rpcs>, never, Relay | Sync.Authorization>
 
-// Authority: the same shape, but a push can be rejected.
-class Authority extends Context.Service<Authority, {
-  readonly subscribe: (request: Subscribe) => Stream<Delta, SyncError>
-  readonly push: (request: Push) => Effect<Ack, Rejected | SyncError>
-}>()("effect-delta/Authority") {}
+// Syncs a replica through the Relay for the life of the scope.
+declare const connect: (
+  replica: Replica<unknown>,
+  options: { readonly document: DocumentId; readonly retry?: Schedule | undefined }
+) => Effect<Sync.Connection, never, Relay | Scope> // dual
+
+// Authority: the same shape; its pushes can be answered with Rejected.
+class Authority extends Context.Service<Authority, Sync.Server>()("effect-delta/Authority") {}
 declare const layer: <R>(options: {
   readonly check: (proposal: Proposal) => Effect<void, Rejected, R>
 }) => Layer<Authority, never, HistoryStore | R>
 declare const layerRemote: Layer<Authority, never, RpcClient.Protocol>
-declare const layerHandlers: <Rpcs, R>(rpcs: Rpcs, options: HandlerOptions<R>) => Layer<Handlers<Rpcs>, never, Authority | R>
+declare const layerHandlers: Layer<Rpc.ToHandler<Sync.Rpcs>, never, Authority | Sync.Authorization>
 
 interface Proposal {
   readonly document: DocumentId
@@ -474,33 +491,34 @@ interface Proposal {
   readonly after: string
 }
 
-interface HandlerOptions<R> {
-  readonly identify: Effect<string, never, R> // who is asking, as a stable user id
-  readonly authorize: (request: { readonly document: DocumentId; readonly access: "read" | "write" }) => Effect<void, Sync.Forbidden, R>
-}
-
 class Rejected extends Schema.TaggedError<Rejected>()("Rejected", { message: Schema.String }) {}
 ```
 
-**Who may write what.** The handler layers add the security that matters across a network:
-- `identify` decides who each connection is. Handlers set `Sync.CurrentUser` to it, so a `check` sees the
-  user.
+**Who may write what.** The handler layers add the security that matters across a network, from the
+`Sync.Authorization` service:
+- `identify` decides who each request is from, from its headers (the HTTP request or WebSocket upgrade, so
+  cookies and tokens work). Handlers set `Sync.CurrentUser` to it, so a `check` sees the user.
 - `authorize` decides read and write access per document.
-- Every connection says which replica ids it writes under. A replica id belongs to the first user who
-  writes with it, and changes under ids owned by someone else are refused. So a client can't forge or
-  suppress another user's edits. A connection uploads only its own changes; other devices upload theirs.
-- `identify` and `authorize` read the app's own context, for example a `CurrentUser` provided by the app's
-  `RpcMiddleware`.
+- A replica id belongs to the first user who writes with it, and a push with changes under an id owned by
+  someone else is `Forbidden`. So a client can't forge another user's edits. A connection uploads only
+  its own changes; other devices upload theirs.
 
-**Rejection.** The authority checks a push's changes in order and accepts the longest acceptable prefix.
+**Rejection.** The authority checks a push's changes in order and accepts the longest acceptable prefix,
+answering `Rejected` with what it accepted and the reason.
 The confirmed replica:
 1. drops the rejected change and every unconfirmed change after it, since each was made on top of the last;
 2. emits a `Rejected` edit with the patch that rolls the text back;
 3. switches to a new replica id.
 
 Switching ids means sequence numbers never repeat and never leave a gap, so the authority's version vector
-keeps moving. `Authority.layerRemote` checks that the server really is an authority when it subscribes, and
-a relay mismatch is a `ProtocolViolation`.
+keeps moving. A subscription says whether it expects an authority, and a mismatch either way is a
+`ProtocolViolation`.
+
+**Servers save before they share.** A pushed change is checked, stored, then sent to subscribers. If
+storing fails, the push fails with `Unavailable`, every subscription to that document ends with it, and the
+document is loaded again from the store, so nothing in memory gets ahead of what's saved. Changes that
+build on something the server doesn't have yet (a peer's change that peer hasn't uploaded) wait on a relay;
+an authority can't check them, so it refuses the push as `Malformed`.
 
 ### HistoryStore
 
@@ -508,12 +526,21 @@ a relay mismatch is a `ProtocolViolation`.
 class HistoryStore extends Context.Service<HistoryStore, {
   readonly load: (document: DocumentId) => Effect<Option<Stored>, HistoryStoreError>
   readonly append: (document: DocumentId, delta: Delta) => Effect<void, HistoryStoreError>       // confirmed history; append-only
-  readonly setSnapshot: (document: DocumentId, snapshot: Snapshot) => Effect<void, HistoryStoreError>
   readonly setUnconfirmed: (document: DocumentId, delta: Delta) => Effect<void, HistoryStoreError> // confirmed replicas; rewritten
+  readonly addWriter: (document: DocumentId, replica: ReplicaId, owner: string) => Effect<void, HistoryStoreError>
 }>()("effect-delta/HistoryStore") {}
 
+interface Stored {
+  readonly history: Delta
+  readonly unconfirmed: Delta
+  readonly writers: { readonly [replica: string]: string } // replica id → its owner (servers) or "" (replicas)
+}
+
 declare const layerMemory: Layer<HistoryStore>
-declare const layerKeyValueStore: (options: { readonly prefix: string }) => Layer<HistoryStore, never, KeyValueStore>
+declare const layerKeyValueStore: (options: {
+  readonly prefix: string
+  readonly foldAfter?: number | undefined // default 64
+}) => Layer<HistoryStore, never, KeyValueStore>
 
 // Loads saved history into `replica`, then saves every change for the life of the scope.
 declare const persist: (replica: Replica<unknown>, document: DocumentId) => Effect<Persisted, HistoryStoreError, HistoryStore | Scope>
@@ -521,7 +548,9 @@ interface Persisted { readonly await: Effect<never, HistoryStoreError> }
 ```
 
 **The store stays simple.** `persist` knows the strategy, so it decides when to write a snapshot. For
-replay, the snapshot holds the plain text, so loading doesn't replay anything. A confirmed replica's
+replay, the snapshot holds the plain text, so loading doesn't replay anything; `setSnapshot` arrives with
+the replay strategy. `writers` lets a replica upload changes it made under earlier ids, and lets servers
+remember who owns each id. When its scope closes, `persist` saves once more, so the last edits aren't lost. A confirmed replica's
 unconfirmed changes are stored separately and rewritten after a rejection, so a rejected change never
 comes back on reload.
 
@@ -562,8 +591,8 @@ All accepted 2026-10-15.
    connection, retries and auth middleware, over WebSocket, HTTP, sockets or workers. Peer-to-peer in the
    first release means one peer serves a relay.
 8. **`HistoryStore`** for the persistence service, following `KeyValueStore` and `RateLimiterStore`.
-9. **Servers authorize, and replica ids have owners.** The handler layers take `identify` and `authorize`;
-   an authority's `check` sees the user through `Sync.CurrentUser`.
+9. **Servers authorize, and replica ids have owners.** The `Sync.Authorization` service has `identify` and
+   `authorize`; an authority's `check` sees the user through `Sync.CurrentUser`.
 10. **Keep changes, frontiers and the strategy states internal** in the first release. `Delta` is opaque
     but encodable.
 11. **`make` needs `Crypto`**, and a failure to get random bytes is a defect. Tests use
@@ -576,6 +605,27 @@ All accepted 2026-10-15.
     contract. A multi-region diff can come later as a separate function.
 15. **`TextPatch` mirrors `JsonPatch`**, and instances use PascalCase (`TextPatch.Differ`,
     `Delta.ReducerUnion`), as `Number.ReducerSum` does.
+
+## Changed while building
+
+Found while building the network half (2026-10-15). None changes how a replica is edited or read.
+
+1. **`Sync.connect` became `Relay.connect`.** `Sync` holds only the protocol, which every other module
+   imports, so it can't import `Relay` without a cycle. It reads well too: you connect through a relay.
+2. **Authorization is a service, `Sync.Authorization`, not options on `layerHandlers`.** That's how
+   `eventlog` does it (`EventLogServerAuthorization`). `identify` gets the request's headers, so apps don't
+   need their own `RpcMiddleware`, and `layerHandlers` is a plain layer.
+3. **A rejected push is an answer, not an error.** `Push` answers `Accepted { confirmed }` or
+   `Rejected { confirmed, message }`, because the replica needs to know what was accepted before the
+   rejected change.
+4. **`Subscribe` says whether it expects an authority** (`authority: boolean`), instead of listing its
+   writers. Servers learn writers from pushes.
+5. **`Connection.unconfirmed` is a `Stream<number>`,** like `status`, so an app can show "Saving…" and wait
+   for 0 before closing a document. As an `Effect` it couldn't be watched.
+6. **`SyncError` has an `Unavailable` reason,** for a server that can't load or save a document.
+   Connections retry it, like `Disconnected`.
+7. **`HistoryStore` has `addWriter` and no `setSnapshot` yet.** Snapshots are for the replay strategy and
+   come with it.
 
 ## Not in the first release
 
