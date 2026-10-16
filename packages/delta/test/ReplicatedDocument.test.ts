@@ -87,6 +87,16 @@ describe("ReplicatedDocument", () => {
         )
       }))
 
+    it.effect("refuses an optional field with a constructor default, which would show while it's absent", () =>
+      refuses(
+        Schema.Struct({
+          name: Schema.String,
+          theme: Schema.optionalKey(Schema.String).pipe(Schema.withConstructorDefault(Effect.succeed("light")))
+        }),
+        { name: "" },
+        "an optional field can't have a constructor default"
+      ))
+
     it.effect("refuses an initial value that doesn't fit, or writes texts, entries or optional fields", () =>
       Effect.gen(function*() {
         yield* refuses(Doc, { ...initial, title: "Draft" }, "a text starts empty")
