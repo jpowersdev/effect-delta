@@ -282,7 +282,7 @@ including a list item added without a place in its list, which the authority cou
 
 **Texts and documents shouldn't share a document id.** If they do, each keeps the other's changes without
 showing them. A change with no text ops fits either strategy; servers learn a document's strategy from the
-first text op they apply, or from the replica that subscribes first.
+first text op they store, or from the replica that subscribes first.
 
 ## API
 
@@ -609,9 +609,11 @@ All built, each with tests and an example:
   authority on an older schema rejects the newer apps' changes to the parts it doesn't know. Upgrade the
   authority first.
 - **A document with no text ops yet takes the strategy of whoever gets there first:** the first replica to
-  subscribe, or the first text op applied, which a client with the other strategy (mistaken or hostile) can
-  send. Replicas with the other one are then refused. A server also forgets a strategy it only heard from a
-  subscriber, and after it reloads, takes the next subscriber's.
+  subscribe, or the first text op stored, even one that waits for a change the server never gets, which a
+  client with the other strategy (mistaken or hostile) can send. Replicas with the other one are then
+  refused. Taking it from what's stored keeps one strategy's text ops in the store, so a reload shows what
+  the server did. A server also forgets a strategy it only heard from a subscriber, and after it reloads,
+  takes the next subscriber's.
 - **A replay text finds its own parents by walking the history back** to the last change that touched it.
   A text edited rarely, in a document edited often, walks a long way. Remembering each change's latest
   text parts would fix that.
