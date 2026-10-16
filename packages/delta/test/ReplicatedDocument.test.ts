@@ -765,6 +765,19 @@ describe("ReplicatedDocument", () => {
         assert.notStrictEqual(after.comments, before.comments)
       }))
 
+    it.effect("an unchanged part keeps its identity though it holds NaN", () =>
+      Effect.gen(function*() {
+        const Sizes = Schema.Struct({ box: Schema.Struct({ width: Schema.Number }), count: Schema.Number })
+        const ada = yield* ReplicatedDocument.make(Sizes, {
+          initial: { box: { width: 0 }, count: 0 },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, box: { width: NaN } }))
+        const before = yield* ReplicatedDocument.get(ada)
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, count: 1 }))
+        assert.strictEqual((yield* ReplicatedDocument.get(ada)).box, before.box)
+      }))
+
     it.effect("a field can be named __proto__", () =>
       Effect.gen(function*() {
         // Computed and parsed, so `__proto__` is a field rather than the
