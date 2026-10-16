@@ -81,6 +81,17 @@ const shapeOf = (schema: Schema.Top): InternalShape.Fields | InternalShape.Entri
   return shape
 }
 
+// An initial value must fit its schema, and start as the merge rules say.
+const checkInitial = (schema: Schema.Top, shape: InternalShape.Shape, initial: unknown): Effect.Effect<void> =>
+  Effect.suspend(() => {
+    const valid = Schema.decodeUnknownResult(Schema.toType(schema))(initial)
+    if (Result.isFailure(valid)) {
+      return Effect.die(new Error(`A document's initial value must fit its schema: ${valid.failure.message}`))
+    }
+    InternalShape.checkInitial(shape, initial)
+    return Effect.void
+  })
+
 const makeWith = Effect.fnUntraced(function*(schema: Schema.Top, options: {
   readonly initial: unknown
   readonly strategy: Replica.Strategy
@@ -89,11 +100,7 @@ const makeWith = Effect.fnUntraced(function*(schema: Schema.Top, options: {
 }) {
   const shape = shapeOf(schema)
   const validate = Schema.decodeUnknownResult(Schema.toType(schema))
-  const initial = validate(options.initial)
-  if (Result.isFailure(initial)) {
-    return yield* Effect.die(new Error(`A document's initial value must fit its schema: ${initial.failure.message}`))
-  }
-  InternalShape.checkInitial(shape, options.initial)
+  yield* checkInitial(schema, shape, options.initial)
   const memo: InternalShape.Memo = new Map()
   const engine = yield* InternalEngine.make({
     strategy: options.strategy,
@@ -681,6 +688,8 @@ export const readProposal = <A>(
 ): Effect.Effect<Proposed<A>, Authority.Rejected> =>
   Effect.suspend(() => {
     const shape = shapeOf(schema)
+    return Effect.as(checkInitial(schema, shape, options.initial), shape)
+  }).pipe(Effect.flatMap((shape) => {
     for (const change of (proposal.delta as InternalDelta.DeltaImpl).changes.values()) {
       const misfit = InternalShape.misfit(shape, change)
       if (misfit !== undefined) return Effect.fail(new Authority.Rejected({ message: misfit }))
@@ -690,7 +699,7 @@ export const readProposal = <A>(
       after: InternalShape.readJson(shape, proposal.after, options.initial, existsIn(proposal.exists.after)) as A,
       paths: proposal.paths
     })
-  })
+  }))
 
 const existsIn = (paths: ReadonlyArray<Replica.Path>): (path: Replica.Path) => boolean => {
   const keys = new Set(paths.map(InternalPath.key))

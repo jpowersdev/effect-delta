@@ -301,6 +301,15 @@ const unseenBy = <W extends Write>(at: Slot, write: Write, writes: ReadonlyArray
     ? []
     : writes.filter((other) => other !== write && !seen(write, other))
 
+// A value is history: every reader shares it, so nobody may change it in place.
+const freeze = (json: Schema.Json): Schema.Json => {
+  if (typeof json === "object" && json !== null && !Object.isFrozen(json)) {
+    Object.freeze(json)
+    for (const part of Object.values(json) as Array<Schema.Json>) freeze(part)
+  }
+  return json
+}
+
 // Adds a write to `writes`, at `at`, in order.
 const addWrite = <W extends Write>(at: Slot, writes: Array<W>, write: W): void => {
   let i = writes.length
@@ -998,7 +1007,7 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
   const at = ensureSlot(document, op.path)
   switch (op._tag) {
     case "Set": {
-      const value: ValueWrite = { ...write, value: op.value }
+      const value: ValueWrite = { ...write, value: freeze(op.value) }
       addWrite(at, at.values, value)
       if (found !== undefined) {
         found.wrote(value)
