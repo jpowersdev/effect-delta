@@ -295,7 +295,6 @@ const makeReplay = (): Text => {
       const infos = new Map<string, TreeText.Info>()
       let walker: ReplayText.Walker | undefined
       let extra = 0
-      let applied = 0
       return {
         check: (part) => {
           const change = changeOf(part)
@@ -303,9 +302,14 @@ const makeReplay = (): Text => {
             // Made on top of exactly this text: it applies as is.
             return ReplayText.check(change, value.length)
           }
-          // Concurrent with parts here: place it by replaying. Once there's a
-          // walker, the rest of the batch goes through it too.
-          if (walker === undefined) ({ extra, walker } = walkFrom(incoming.slice(applied), infos))
+          // Concurrent with parts here: place it by replaying the parts of
+          // the batch not applied yet, some of which may never be. Once
+          // there's a walker, the rest of the batch goes through it too.
+          if (walker === undefined) {
+            const walked = walkFrom(incoming.filter((change) => !history.changes.has(key(change))), infos)
+            walker = walked.walker
+            extra = walked.extra
+          }
           ReplayText.moveTo(walker, change.parents)
           // Measured without the extra stand-ins, which a change mustn't reach.
           return ReplayText.check(change, ReplayText.viewLength(walker) - extra)
@@ -324,7 +328,6 @@ const makeReplay = (): Text => {
           }
           History.record(history, change, part.past)
           infos.set(key(change), info)
-          applied++
           return patch
         },
         overlaps: () => {
