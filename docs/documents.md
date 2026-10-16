@@ -97,8 +97,8 @@ What time costs: a device whose clock is far ahead wins concurrent writes until 
 and replicas that see its changes stamp their own later changes after them. Changes stay correctly ordered.
 What's off is which concurrent write wins and, later, the times a history view shows. Relays and
 authorities reject changes stamped more than a day ahead of their own clock, so a broken clock (or a
-forged time) can't spread from them; peers that exchange directly trust each other's, up to the latest time a
-clock reads.
+forged time) can't spread from them; peers that exchange directly trust each other's, up to the latest
+time a clock reads.
 
 ### Fields
 
