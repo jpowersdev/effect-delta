@@ -164,7 +164,9 @@ const makeTree = (): Text => {
 const checkTree = (state: TreeText.State, part: Part): string | undefined => {
   const inserted = new Set<string>()
   const known = (id: Id | null | undefined) =>
-    id === null || id === undefined || inserted.has(idKey(id)) || TreeText.has(state, id)
+    id === null || id === undefined || inserted.has(idKey(id)) ||
+    // Only what its author had seen, so it doesn't matter what else is here.
+    ((part.past[id.replica] ?? 0) > id.seq && TreeText.has(state, id))
   let seq = part.seq
   for (const op of part.ops) {
     if (op._tag === "Insert") {

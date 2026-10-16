@@ -759,7 +759,7 @@ const endsCache = new WeakMap<AnyChange, ReadonlyMap<string, Id>>()
 const check = (
   document: Document,
   change: AnyChange,
-  { parentTime, parentsAreChanges, parts }: Context,
+  { parentTime, parentsAreChanges, parts, past }: Context,
   mergeOf: (path: Path.Path, strategy: Replica.Strategy) => Text.Merge
 ): string | undefined => {
   const name = `Change ${key(change)}`
@@ -771,7 +771,7 @@ const check = (
   const strategy = document.strategy ?? strategyOf([change])
   if (!fitsStrategy(change, strategy)) return `${name} mixes strategies`
 
-  const problem = checkPlaces(document, change)
+  const problem = checkPlaces(document, change, past)
   if (problem !== undefined) return problem
   const textPaths = new Set<string>()
   for (const part of parts) {
@@ -852,7 +852,11 @@ const isWritten = (found: Slot): boolean => found.presences.length > 0 || kindOf
 
 // A position goes next to positions already in its list, or placed in the same
 // list earlier in the change.
-const checkPlaces = (document: Document, change: AnyChange): string | undefined => {
+const checkPlaces = (
+  document: Document,
+  change: AnyChange,
+  past: VersionVector.VersionVector
+): string | undefined => {
   // The positions placed so far, with their lists.
   const placed = new Set<string>()
   let seq = change.seq
@@ -863,7 +867,8 @@ const checkPlaces = (document: Document, change: AnyChange): string | undefined 
       const inList = (id: Id) => `${Path.key(listPath)}${idKey(id)}`
       const known = (id: Id | null | undefined) =>
         id === null || id === undefined || placed.has(inList(id)) ||
-        (list !== undefined && Fugue.find(list, id) !== undefined)
+        // Only what its author had seen, so it doesn't matter what else is here.
+        ((past[id.replica] ?? 0) > id.seq && list !== undefined && Fugue.find(list, id) !== undefined)
       if (op.side === "R" ? op.rightOrigin === undefined : op.rightOrigin !== undefined) {
         return `Change ${key(change)} has a position with a mismatched side and right origin`
       }
