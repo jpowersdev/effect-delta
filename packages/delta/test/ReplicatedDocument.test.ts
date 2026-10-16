@@ -639,6 +639,34 @@ describe("ReplicatedDocument", () => {
           labels: { bug: { name: "Bug", color: "gray" } }
         })
       }))
+
+    it.effect("an optional field an older schema can't read is left out, and kept", () =>
+      Effect.gen(function*() {
+        const Ticket = Schema.Struct({
+          votes: ReplicatedDocument.Counter,
+          priority: Schema.optionalKey(Schema.Literals(["low", "high"]))
+        })
+        const TicketV2 = Schema.Struct({
+          ...Ticket.fields,
+          priority: Schema.optionalKey(Schema.Literals(["low", "high", "urgent"]))
+        })
+        const old = yield* ReplicatedDocument.make(Ticket, {
+          initial: { votes: 0 },
+          replica: Replica.ReplicaId.make("old")
+        })
+        const updated = yield* ReplicatedDocument.make(TicketV2, {
+          initial: { votes: 0 },
+          replica: Replica.ReplicaId.make("new")
+        })
+        yield* ReplicatedDocument.update(updated, (ticket) => ({ ...ticket, priority: "urgent" }))
+        yield* Replica.exchange(old, updated)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(old), { votes: 0 })
+
+        // Its own edits leave it alone.
+        yield* ReplicatedDocument.update(old, (ticket) => ({ ...ticket, votes: 1 }))
+        yield* Replica.exchange(old, updated)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), { votes: 1, priority: "urgent" })
+      }))
   })
 
   describe("changes that don't fit", () => {
