@@ -52,6 +52,8 @@ export interface Field {
   readonly optional: boolean
   /** Whether the schema fills the field in when it's missing. */
   readonly hasDefault: boolean
+  /** For a field the schema fills in, whether two of its values are the same. */
+  readonly equivalence: Equivalence.Equivalence<unknown> | undefined
 }
 
 /** @internal */
@@ -147,7 +149,9 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
         return refuse(path, `a list's items must be structs or classes with a required "${rule.key}" field`)
       }
       // An item's key is never made up: one without it can't be read.
-      const fields = item.fields.map((other) => other === field ? { ...field, hasDefault: false } : other)
+      const fields = item.fields.map((other) =>
+        other === field ? { ...field, hasDefault: false, equivalence: undefined } : other
+      )
       return { _tag: "List", item: { ...item, fields }, key: rule.key }
     }
   }
@@ -202,7 +206,8 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
       name: signature.name,
       shape: compileAst(optional ? withoutUndefined(signature.type) : signature.type, [...path, signature.name]),
       optional,
-      hasDefault
+      hasDefault,
+      equivalence: hasDefault ? Schema.toEquivalence(Schema.make(signature.type)) : undefined
     }
   })
 
@@ -711,9 +716,25 @@ const planAt = (
       return
     }
     case "Fields": {
+      // What the struct shows, once a field that shows its default needs it.
+      let shownValue: unknown
       for (const field of shape.fields) {
         const fieldPath = [...path, field.name]
         const fieldAfter = (after as Record<string, unknown>)[field.name]
+        // Inside an entry or item, a field that nothing this schema can read
+        // was written to shows its default. Left as it shows, it's left
+        // unwritten, so it doesn't write over what a newer schema wrote there,
+        // or over a concurrent write.
+        if (
+          initial === undefined && field.equivalence !== undefined &&
+          readAt(field.shape, documentAt(document, fieldPath), undefined, memo) === Missing
+        ) {
+          shownValue ??= readAt(shape, documentAt(document, path), undefined, memo)
+          if (
+            shownValue !== Missing &&
+            field.equivalence((shownValue as Record<string, unknown>)[field.name], fieldAfter)
+          ) continue
+        }
         if (!field.optional) {
           const fieldInitial = initial === undefined
             ? undefined

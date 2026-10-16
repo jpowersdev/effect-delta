@@ -203,6 +203,8 @@ Entries, items and optional fields have no initial value. One that's missing a r
 older version of the schema) is left out, unless the field has a constructor default
 (`Schema.withConstructorDefault`), which fills it in. Every replica fills it in as it reads, so the default
 must be a constant: one that reads the clock or makes a random id would show differently on each replica.
+A field that shows its default is compared with it, so an `update` that leaves it as it shows doesn't write it,
+nor write over a value only a newer schema can read.
 An optional field can't have one, because it would show while the field is absent; `make` refuses it.
 
 The alternatives:
