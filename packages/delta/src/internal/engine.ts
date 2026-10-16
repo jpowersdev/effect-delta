@@ -9,7 +9,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef"
 import * as Replica from "../Replica.ts"
 import * as TextPatch from "../TextPatch.ts"
 import * as VersionVector from "../VersionVector.ts"
-import { key } from "./change.ts"
+import { idKey, key, lastId } from "./change.ts"
 import * as InternalDelta from "./delta.ts"
 import * as InternalDocument from "./document.ts"
 import * as History from "./history.ts"
@@ -287,13 +287,23 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
             confirmed.version = VersionVector.combine(confirmed.version, version)
             const before = state.document
             // Everything the authority doesn't have was made on top of the
-            // rejected change, and nobody else has seen it, so it all goes.
+            // rejected change, so it all goes. That includes others' changes
+            // made on top of this replica's: an authority that lost what it
+            // accepted had sent it on.
             const { changes, pending } = history()
-            const dropped = [...changes.values()].filter((change) => isUnconfirmed(state, change))
-            state.document = InternalDocument.rebuild(
-              engine.strategy,
-              [...changes.values()].filter((change) => !isUnconfirmed(state, change))
-            )
+            const gone = new Set<string>()
+            const dropped: Array<InternalDocument.AnyChange> = []
+            const kept: Array<InternalDocument.AnyChange> = []
+            // In the order they were applied, so parents come first.
+            for (const change of changes.values()) {
+              if (isUnconfirmed(state, change) || change.parents.some((parent) => gone.has(idKey(parent)))) {
+                gone.add(idKey(lastId(change)))
+                dropped.push(change)
+              } else {
+                kept.push(change)
+              }
+            }
+            state.document = InternalDocument.rebuild(engine.strategy, kept)
             for (const change of pending.values()) history().pending.set(key(change), change)
             // A new id, so sequence numbers are never reused and never skip.
             state.replica = yield* confirmed.freshId
