@@ -736,6 +736,9 @@ const planAt = (
         intents.push({ _tag: "Unset", path: [...path, name] })
       }
       for (const [name, entry] of Object.entries(entries)) {
+        // Decoding leaves out a key the record doesn't take, so writing it
+        // would write what nobody shows.
+        if (!shape.isKey(name)) continue
         planPresence(shape.value, document, [...path, name], { value: entry }, intents, memo)
       }
       return

@@ -568,8 +568,9 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * The new value is compared with the old part by part, and only what changed
  * is written: values that aren't equal (by `Schema.toEquivalence`), texts as
  * one replacement each (as `ReplicatedText.set` does), counters by the
- * difference, records by which keys appear and disappear, and lists by which
- * keys appear, disappear and move. Fails with `Schema.SchemaError` if the new
+ * difference, records by which keys appear and disappear (leaving out keys
+ * the record doesn't take, as decoding does), and lists by which keys appear,
+ * disappear and move. Fails with `Schema.SchemaError` if the new
  * value doesn't fit the schema, if two items of a list have the same key, or
  * if a value encodes to something JSON can't carry, or to JSON that reads
  * back as another value (as a union's members can).

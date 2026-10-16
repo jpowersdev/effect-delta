@@ -408,7 +408,8 @@ interface Proposed<A> { readonly before: A; readonly after: A; readonly paths: R
 - values, with `Schema.toEquivalence`;
 - text fields, with the one-replacement rule `ReplicatedText.set` uses;
 - counters, by the difference;
-- records, by which keys appear and disappear, then the content of entries in both;
+- records, by which keys appear and disappear, then the content of entries in both; as decoding does, keys the
+  record's key schema doesn't take are left out;
 - lists, as [Lists](#lists) says.
 
 The whole call is one change. It fails with `Schema.SchemaError` when a new value doesn't encode, for example
