@@ -632,12 +632,14 @@ const safeIntegers = { minimum: globalThis.Number.MIN_SAFE_INTEGER, maximum: glo
 const zero = BigInt(0)
 const largestStep = BigInt(globalThis.Number.MAX_SAFE_INTEGER)
 
+// The value built from `parts`: the one built before, if its parts were the
+// same, NaN included.
 const share = (memo: Memo, path: Path.Path, parts: ReadonlyArray<unknown>, build: () => unknown): unknown => {
   const k = Path.key(path)
   const previous = memo.get(k)
   if (
     previous !== undefined && previous.parts.length === parts.length &&
-    previous.parts.every((part, i) => part === parts[i])
+    previous.parts.every((part, i) => Object.is(part, parts[i]))
   ) return previous.value
   const value = build()
   if (value !== Missing) memo.set(k, { parts, value })
