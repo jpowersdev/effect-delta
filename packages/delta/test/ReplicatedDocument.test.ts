@@ -155,6 +155,28 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* Replica.version(ada), VersionVector.empty)
       }))
 
+    it.effect("an update writes values as JSON sends them, and fails for one JSON can't send", () =>
+      Effect.gen(function*() {
+        const Measured = Schema.Struct({ size: Schema.Number, extra: Schema.Any })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Measured, {
+            initial: { size: 1, extra: null },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* open("ada")
+        // JSON has no -0, so a replica that receives it as JSON shows 0.
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, size: -0 }))
+        assert.isTrue(Object.is((yield* ReplicatedDocument.get(ada)).size, 0))
+        const failed = yield* Effect.flip(
+          ReplicatedDocument.update(ada, (doc) => ({ ...doc, extra: { at: new Date(0) } }))
+        )
+        assert.strictEqual(failed._tag, "SchemaError")
+        const sent = Schema.encodeSync(Delta.Delta)(yield* Replica.delta(ada, VersionVector.empty))
+        const ben = yield* open("ben")
+        yield* Replica.receive(ben, Schema.decodeUnknownSync(Delta.Delta)(JSON.parse(JSON.stringify(sent))))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
+      }))
+
     // Writes of one value across three replicas, against a model of what each
     // replica has seen, with clocks moving forward and back between writes.
 
