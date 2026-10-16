@@ -563,20 +563,20 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         const loaded = yield* make("loaded")
         yield* Replica.receive(loaded, throughJson(yield* Replica.delta(old.doc, VersionVector.empty)))
         assert.deepStrictEqual(yield* view(loaded), a)
-        // Nobody's edits touched the parts only the newer schema has, but for
-        // when it's due.
-        const alone = yield* ReplicatedDocument.get(forged)
-        assert.deepStrictEqual(a!.value.meta, alone.meta)
-        for (const item of a!.value.items) {
-          const found = alone.items.find(({ id }) => id === item.id)
-          if (found !== undefined) assert.strictEqual(item.extra, found.extra, item.id)
+        // The parts only the newer schema has.
+        const isNewer = (path: ReadonlyArray<string>) => path[0] === "due" || path[0] === "meta" || path[2] === "extra"
+        // The older one's edits leave them alone.
+        const fromOld = (yield* Replica.delta(old.doc, VersionVector.empty)) as InternalDelta.DeltaImpl
+        for (const change of fromOld.changes.values()) {
+          if (change.replica !== "old") continue
+          for (const op of change.ops) assert.isFalse(isNewer(op.path ?? []), JSON.stringify(op))
         }
         for (const peer of peers) yield* peer.edits
-        // The older one isn't told of overlaps in the parts it doesn't describe.
+        // And it isn't told of overlaps in them.
         const told = yield* old.edits
         for (const edit of told) {
           for (const { path } of edit._tag === "Remote" ? edit.overlaps : []) {
-            assert.isFalse(path[0] === "due" || path[0] === "meta" || path[2] === "extra", JSON.stringify(path))
+            assert.isFalse(isNewer(path), JSON.stringify(path))
           }
         }
       }).pipe(Random.withSeed(seed))
