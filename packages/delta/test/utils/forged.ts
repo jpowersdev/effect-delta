@@ -565,6 +565,9 @@ const idsOf = (change: InternalDocument.AnyChange): Map<string, Array<Id>> => {
 
 type ProjectItem = Project["items"][number]
 
+// Forged increments can take a counter to the last safe integer.
+const safely = (n: number) => Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, n))
+
 type Edit = typeof HonestEdit.Type | { readonly _tag: "Type" } & typeof Typing.Type
 
 // Makes an honest edit to a project. Parts that come back keep the texts they
@@ -594,10 +597,7 @@ const editHonestly = Effect.fnUntraced(function*(
     case "Due":
       return yield* update(({ due: _, ...project }) => edit.due === undefined ? project : { ...project, due: edit.due })
     case "Vote":
-      return yield* update((project) => ({
-        ...project,
-        votes: Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, project.votes + edit.by))
-      }))
+      return yield* update((project) => ({ ...project, votes: safely(project.votes + edit.by) }))
     case "Type": {
       const text = textAt(pick(typed, edit.where)!)
       const before = yield* ReplicatedText.get(text)
@@ -611,7 +611,7 @@ const editHonestly = Effect.fnUntraced(function*(
     case "Score":
       return yield* update(({ scores: { k, ...scores }, ...project }) => ({
         ...project,
-        scores: edit.remove ? scores : { ...scores, k: (k ?? 0) + edit.by }
+        scores: edit.remove ? scores : { ...scores, k: safely((k ?? 0) + edit.by) }
       }))
     case "Note": {
       const body = yield* kept(["notes", "a", "body"])
@@ -726,11 +726,7 @@ export const editProject = Effect.fnUntraced(function*(
     case "Status":
       return yield* update((project) => ({ ...project, status: command.status }))
     case "Vote":
-      // Forged increments can take the votes to the last safe integer.
-      return yield* update((project) => ({
-        ...project,
-        votes: Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, project.votes + command.by))
-      }))
+      return yield* update((project) => ({ ...project, votes: safely(project.votes + command.by) }))
     case "Type": {
       const title = ReplicatedDocument.text(doc, ["title"])
       const before = yield* ReplicatedText.get(title)
