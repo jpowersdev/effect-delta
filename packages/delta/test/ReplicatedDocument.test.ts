@@ -155,6 +155,22 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* Replica.receive(carol, yield* Replica.delta(ada, VersionVector.empty)), [])
       }))
 
+    it.effect("concurrent writes of one value don't overlap, however it's written", () =>
+      Effect.gen(function*() {
+        const Tagged = Schema.Struct({ tags: Schema.ReadonlySet(Schema.String) })
+        const tagged = (replica: string) =>
+          ReplicatedDocument.make(Tagged, {
+            initial: { tags: new Set<string>() },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* tagged("ada")
+        const ben = yield* tagged("ben")
+        // The same set, written in another order.
+        yield* ReplicatedDocument.set(ada, { tags: new Set(["bug", "ui"]) })
+        yield* ReplicatedDocument.set(ben, { tags: new Set(["ui", "bug"]) })
+        assert.deepStrictEqual(yield* Replica.exchange(ada, ben), [])
+      }))
+
     it.effect("an update that changes nothing writes nothing", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
@@ -1034,7 +1050,11 @@ describe("ReplicatedDocument", () => {
 
     it.effect("an older schema isn't told of overlaps in parts it doesn't describe", () =>
       Effect.gen(function*() {
-        const V3 = Schema.Struct({ ...V2.fields, notes: ReplicatedDocument.Text })
+        const V3 = Schema.Struct({
+          ...V2.fields,
+          status: Schema.Literals(["draft", "review", "approved", "archived", "deleted"]),
+          notes: ReplicatedDocument.Text
+        })
         const newer = (replica: string) =>
           ReplicatedDocument.make(V3, {
             initial: { ...initial, owner: "nobody", notes: "" },
@@ -1042,11 +1062,11 @@ describe("ReplicatedDocument", () => {
           })
         const ada = yield* newer("ada")
         const ben = yield* newer("ben")
-        // Both write the new parts at once.
+        // Both write the new parts at once, and values it can't read.
         yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["notes"]), 0, "Ada's")
         yield* ReplicatedText.insert(ReplicatedDocument.text(ben, ["notes"]), 0, "Ben's")
-        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, owner: "ada" }))
-        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, owner: "ben" }))
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, owner: "ada", status: "archived" }))
+        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, owner: "ben", status: "deleted" }))
 
         const old = yield* make("old")
         yield* Replica.receive(old, yield* Replica.delta(ada, VersionVector.empty))
