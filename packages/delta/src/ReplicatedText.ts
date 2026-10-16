@@ -66,8 +66,8 @@ const Proto = {
 const model: InternalEngine.Model = {
   read: (document) => InternalDocument.textAt(document, InternalPath.root),
   shows: (overlap) => overlap._tag === "Text" && InternalPath.isRoot(overlap.path),
-  // It reads no values, and its text is always there.
-  reading: { reads: () => false, differ: () => false, comesAndGoes: () => false }
+  // It reads no values, its text is always there, and nothing in it moves.
+  reading: { reads: () => false, differ: () => false, comesAndGoes: () => false, moves: () => false }
 }
 
 const makeWith = Effect.fnUntraced(function*(options: {

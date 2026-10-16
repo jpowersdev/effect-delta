@@ -464,8 +464,9 @@ export type Overlap =
 /**
  * How a replica reads what's written at each path, so that the overlaps it's
  * told of are ones its value shows: a value it can't read meets no other
- * value, two it reads as the same don't differ, and whether a part exists
- * meets nothing where the part is always there.
+ * value, two it reads as the same don't differ, whether a part exists meets
+ * nothing where the part is always there, and a position meets nothing where
+ * the part isn't a list item.
  *
  * @internal
  */
@@ -476,6 +477,8 @@ export interface Reading {
   readonly differ: (path: Path.Path, a: Schema.Json, b: Schema.Json) => boolean
   /** Whether the part at `path` comes and goes: an optional field, a record entry or a list item. */
   readonly comesAndGoes: (path: Path.Path) => boolean
+  /** Whether the part at `path` moves: a list item. */
+  readonly moves: (path: Path.Path) => boolean
 }
 
 // What concurrent writes met over: a value, whether something exists, or a
@@ -559,7 +562,7 @@ class Found {
       const removal = slot(document, path)?.presence
       if (removal === undefined || removal.exists) return []
       const concurrent = lost.filter((each) =>
-        each.editor !== removal.replica && editedConcurrently(document, path, each, removal)
+        each.editor !== removal.replica && editedConcurrently(document, path, each, removal, this.reading)
       )
       if (concurrent.length === 0) return []
       const met = new Set(concurrent.flatMap(({ editor, remover }) => [editor, remover]))
@@ -570,14 +573,20 @@ class Found {
 
 // Whether any of the edits `lost` names was made concurrently with `removal`:
 // neither had seen the other.
-const editedConcurrently = (document: Document, path: Path.Path, lost: Lost, removal: Write): boolean => {
+const editedConcurrently = (
+  document: Document,
+  path: Path.Path,
+  lost: Lost,
+  removal: Write,
+  reading: Reading
+): boolean => {
   const { history } = document
   for (let seq = Math.max(lost.from, VersionVector.get(removal.past, lost.editor)); seq < lost.next;) {
     const change = History.find(history, { replica: lost.editor, seq })!
     // Each change says what it was made on top of, which needn't include
     // what its replica's earlier ones had seen.
     const sawRemoval = VersionVector.get(history.pasts.get(key(change))!, removal.replica) > removal.seq
-    if (!sawRemoval && change.ops.some((op) => editsInside(op, path))) return true
+    if (!sawRemoval && change.ops.some((op) => editsInside(op, path, reading))) return true
     seq = change.seq + change.length
   }
   return false
@@ -585,11 +594,12 @@ const editedConcurrently = (document: Document, path: Path.Path, lost: Lost, rem
 
 // Whether an op edits inside the part at `path`, as `noteInside` and moves
 // count it: under it, or on the text or counter it is, or moving it.
-const editsInside = (op: Op, path: Path.Path): boolean => {
+const editsInside = (op: Op, path: Path.Path, reading: Reading): boolean => {
   const at = pathOf(op)
   return at.length > path.length
     ? Path.equals(at.slice(0, path.length), path)
-    : Path.equals(at, path) && (Text.isOp(op) || op._tag === "Increment" || op._tag === "Place")
+    : Path.equals(at, path) &&
+      (Text.isOp(op) || op._tag === "Increment" || (op._tag === "Place" && reading.moves(path)))
 }
 
 // Whose write shows at a path where writes met: a removal if it won, else the
@@ -1153,13 +1163,17 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       })
       const place: PlaceWrite = { ...write, node }
       addWrite(at, at.places, place)
+      // Where the part isn't a list item, its positions are nothing the
+      // replica shows.
       if (found !== undefined) {
         found.wrote(place)
-        const moved = unseenBy(at, place, at.places).filter((other) => found.had(other))
-        if (moved.length > 0) {
-          found.add(op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
+        if (found.reading.moves(op.path)) {
+          const moved = unseenBy(at, place, at.places).filter((other) => found.had(other))
+          if (moved.length > 0) {
+            found.add(op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
+          }
+          reportRemovals(found, at, place)
         }
-        reportRemovals(found, at, place)
       }
       refreshPosition(at)
       break
@@ -1189,7 +1203,7 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
           found.removed(at.path, { remover: write.replica, editor, from, next })
         }
       }
-      for (const place of unseenBy(at, write, at.places)) {
+      for (const place of found.reading.moves(at.path) ? unseenBy(at, write, at.places) : []) {
         if (found.had(place)) {
           found.removed(at.path, {
             remover: write.replica,

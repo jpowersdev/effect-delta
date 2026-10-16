@@ -901,7 +901,8 @@ const byPath = (writes: ReadonlyArray<Written>): Map<string, Array<Written>> => 
  * exists, or both moved its item; `Removed` where one removed the part and
  * the other edited inside it or moved it, if it ends removed by a removal
  * made concurrently with the edit. A value it can't read meets no other
- * value, and whether a part exists meets nothing where it's always there.
+ * value, whether a part exists meets nothing where it's always there, and a
+ * position meets nothing where the part isn't a list item.
  * `changes` are every change the replica has, `before` and `after` its
  * versions around the merge, and `reading` how it reads what's written.
  */
@@ -917,7 +918,9 @@ export const expectedOverlaps = (
     changes.flatMap((change) => writesOf(change, applied)).filter((write) =>
       write.kind === "value"
         ? reading.reads(write.path, write.value!)
-        : write.kind !== "presence" || reading.comesAndGoes(write.path)
+        : write.kind === "presence"
+        ? reading.comesAndGoes(write.path)
+        : write.kind !== "place" || reading.moves(write.path)
     )
   const had = byPath(writes([...earlier]))
   const received = writes(applied.filter((change) => !earlier.has(change)))
