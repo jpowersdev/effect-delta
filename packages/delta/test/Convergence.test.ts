@@ -676,12 +676,41 @@ describe("schema versions", () => {
           { doc: old as unknown as ReplicatedDocument.ReplicatedDocument<Planner>, schema: OldPlanner, version: "old" }
         ] as const
         const docs = replicas.map(({ doc }) => doc)
+        // Takes in a delta, checking that the merge reports the value and
+        // removal overlaps their rule gives, as the replica's version reads
+        // what met.
+        const receive = Effect.fnUntraced(function*(i: number, delta: Delta.Delta) {
+          const { doc, schema } = replicas[i]!
+          const before = yield* Replica.version(doc)
+          const overlaps = yield* Replica.receive(doc, delta)
+          const changes = [
+            ...((yield* Replica.delta(doc, VersionVector.empty)) as InternalDelta.DeltaImpl).changes.values()
+          ]
+          const shape = InternalShape.compile(schema)
+          const expected = expectedOverlaps(changes, before, yield* Replica.version(doc), InternalShape.reading(shape))
+          const sorted = (found: ReadonlyArray<Replica.Overlap | InternalDocument.Overlap>) =>
+            found.filter(({ _tag }) => _tag !== "Text").map((overlap) => JSON.stringify(overlap)).sort()
+          assert.deepStrictEqual(
+            sorted(overlaps),
+            sorted(expected.filter((overlap) => InternalShape.shows(shape, overlap))),
+            replicas[i]!.version
+          )
+        })
 
         let forged = 0
         for (const command of session) {
           switch (command._tag) {
             case "Sync":
-              if (command.from !== command.to) yield* Replica.exchange(docs[command.from]!, docs[command.to]!)
+              if (command.from !== command.to) {
+                yield* receive(
+                  command.to,
+                  yield* Replica.delta(docs[command.from]!, yield* Replica.version(docs[command.to]!))
+                )
+                yield* receive(
+                  command.from,
+                  yield* Replica.delta(docs[command.to]!, yield* Replica.version(docs[command.from]!))
+                )
+              }
               break
             case "Forge": {
               const doc = docs[command.replica]!
@@ -699,7 +728,7 @@ describe("schema versions", () => {
                 time: Math.max(0, ...[...has.changes.values()].map(({ time }) => time)) + 1,
                 ops
               }])
-              if ((yield* push(delta))._tag === "Accepted") yield* Replica.receive(doc, delta)
+              if ((yield* push(delta))._tag === "Accepted") yield* receive(command.replica, delta)
               break
             }
             default: {
