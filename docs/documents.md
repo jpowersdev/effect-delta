@@ -551,6 +551,10 @@ All built, each with tests and an example:
 - **An authority needs the newest schema.** `readProposal` rejects what its schema can't read, so an
   authority on an older schema rejects the newer apps' changes to the parts it doesn't know. Upgrade the
   authority first.
+- **A check can see an entry or optional field nobody has added.** Text typed into one through a handle, or
+  anything a client writes inside one without adding it, is in a `DocumentProposal`'s JSON, so
+  `readProposal` reads it, while replicas don't show it until it's added. Without the schema, the JSON
+  can't tell such a part from one that exists.
 - **A server forgets a strategy it only heard from a subscriber.** A document with no text ops yet takes the
   strategy of whoever subscribes first, and after the server reloads it, the next subscriber's.
 - **A replay text finds its own parents by walking the history back** to the last change that touched it.

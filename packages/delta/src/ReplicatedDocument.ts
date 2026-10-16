@@ -633,14 +633,20 @@ export interface Proposed<A> {
  * a write from the check (by writing over it with a value the schema can't
  * read, say) while every replica shows it. So `readProposal` fails with
  * `Authority.Rejected` when the change writes where the schema has no part,
- * writes a part with an op its rule doesn't take, or writes a value the schema
- * can't read. A change that fits reads exactly as replicas will show it.
+ * writes a part with an op its rule doesn't take, writes a value the schema
+ * can't read, or gives a list item a key field that names another item. A
+ * change that fits reads as replicas will show it, with one exception
+ * (below).
  *
  * **Gotchas**
  *
  * Read proposals with the newest version of the schema, and upgrade the
  * authority before the apps that write to it: a change from a newer version
  * doesn't fit an older one.
+ *
+ * A record entry or optional field that nobody has added, but that has text
+ * typed into it through `text` (or anything else a client wrote inside it),
+ * reads as there, though replicas don't show it until it's added.
  *
  * **Example** (Only the owner approves)
  *
