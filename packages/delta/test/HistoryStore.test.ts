@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Layer, Option, Schema, Stream } from "effect"
-import { Authority, Delta, HistoryStore, Relay, Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
+import { Authority, Delta, HistoryStore, Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 
@@ -280,52 +280,5 @@ describe("HistoryStore", () => {
         HistoryStore.layerKeyValueStore({ prefix: "client" }).pipe(Layer.provide(KeyValueStore.layerMemory)),
         TestCrypto.layer("store").pipe(Layer.provide(NodeCrypto.layer))
       ])
-    ))
-
-  it.effect("a relay stores a document it can't read, and a replica reloads it intact", () =>
-    Effect.gen(function*() {
-      const laptop = yield* makeDoc("laptop")
-      yield* Effect.scoped(
-        Effect.gen(function*() {
-          const connection = yield* Relay.connect(laptop, { document: notes })
-          yield* ReplicatedDocument.set(laptop, {
-            ...initial,
-            status: "review",
-            votes: 3,
-            comments: { c1: { author: "ada", text: "Hourly?" }, c2: { author: "ben", text: "Fine" } },
-            tasks: [{ id: "t1", title: "Write it", done: false }, { id: "t2", title: "Ship it", done: false }]
-          })
-          yield* ReplicatedDocument.update(laptop, (doc) => ({
-            ...doc,
-            comments: { c2: doc.comments.c2! },
-            tasks: [doc.tasks[1]!, { ...doc.tasks[0]!, done: true }]
-          }))
-          yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["tasks", "t2", "title"]), 7, " today")
-          yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["body"]), 0, "Tokens refresh hourly.")
-          yield* connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)
-        }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
-      )
-
-      // A new relay, as after a restart, loads it from the store.
-      yield* Effect.scoped(
-        Effect.gen(function*() {
-          const phone = yield* makeDoc("phone")
-          const connection = yield* Relay.connect(phone, { document: notes })
-          yield* connection.status.pipe(Stream.filter((status) => status._tag === "Synced"), Stream.runHead)
-          assert.deepStrictEqual(yield* ReplicatedDocument.get(phone), {
-            ...initial,
-            body: "Tokens refresh hourly.",
-            status: "review",
-            votes: 3,
-            comments: { c2: { author: "ben", text: "Fine" } },
-            tasks: [{ id: "t2", title: "Ship it today", done: false }, { id: "t1", title: "Write it", done: true }]
-          })
-          assert.deepStrictEqual(yield* Replica.version(phone), yield* Replica.version(laptop))
-        }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
-      )
-    }).pipe(
-      Effect.provide(
-        HistoryStore.layerKeyValueStore({ prefix: "relay" }).pipe(Layer.provide(KeyValueStore.layerMemory))
-      )
     ))
 })

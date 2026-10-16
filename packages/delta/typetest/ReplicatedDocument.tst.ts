@@ -92,9 +92,8 @@ describe("ReplicatedDocument", () => {
   })
 
   it("readProposal reads typed values", () => {
-    const proposed = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
-    expect(proposed).type.toBe<ReplicatedDocument.Proposed<DesignDoc>>()
-    expect(proposed.before).type.toBe<DesignDoc>()
-    expect(proposed.after.status).type.toBe<"draft" | "review" | "approved">()
+    expect(ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })).type.toBe<
+      ReplicatedDocument.Proposed<DesignDoc>
+    >()
   })
 })

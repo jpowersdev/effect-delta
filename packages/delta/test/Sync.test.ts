@@ -11,6 +11,7 @@ import {
   Sync,
   VersionVector
 } from "effect-delta"
+import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
@@ -21,14 +22,20 @@ const spec = Replica.DocumentId.make("spec")
 const showing = (self: ReplicatedText.ReplicatedText, text: string) =>
   ReplicatedText.changes(self).pipe(Stream.filter((current) => current === text), Stream.runHead, Effect.asVoid)
 
+const Comment = Schema.Struct({ author: Schema.String, text: ReplicatedDocument.Text })
+const Task = Schema.Struct({ id: Schema.String, title: ReplicatedDocument.Text, done: Schema.Boolean })
+
+// Every merge rule, so a relay sees every kind of op.
 const DesignDoc = Schema.Struct({
   title: ReplicatedDocument.Text,
   body: ReplicatedDocument.Text,
   status: Schema.Literals(["draft", "review", "approved"]),
-  votes: ReplicatedDocument.Counter
+  votes: ReplicatedDocument.Counter,
+  comments: Schema.Record(Schema.String, Comment),
+  tasks: ReplicatedDocument.List(Task, { key: "id" })
 })
 type DesignDoc = typeof DesignDoc.Type
-const initial: DesignDoc = { title: "", body: "", status: "draft", votes: 0 }
+const initial: DesignDoc = { title: "", body: "", status: "draft", votes: 0, comments: {}, tasks: [] }
 
 const makeDoc = (replica: string, strategy: Replica.Strategy = "tree") =>
   ReplicatedDocument.make(DesignDoc, { initial, strategy, replica: Replica.ReplicaId.make(replica) })
@@ -271,24 +278,51 @@ describe("Relay", () => {
     }).pipe(Effect.provide(RelayLive)))
 
   describe("documents", () => {
-    it.effect("syncs documents both ways, text fields included", () =>
+    it.effect("stores documents it can't read, and replicas reload them intact", () =>
       Effect.gen(function*() {
         const laptop = yield* makeDoc("laptop")
-        const phone = yield* makeDoc("phone")
-        yield* Relay.connect(laptop, { document: notes })
-        yield* Relay.connect(phone, { document: notes })
+        yield* Effect.scoped(
+          Effect.gen(function*() {
+            const connection = yield* Relay.connect(laptop, { document: notes })
+            yield* ReplicatedDocument.set(laptop, {
+              ...initial,
+              status: "review",
+              votes: 3,
+              comments: { c1: { author: "ada", text: "Hourly?" }, c2: { author: "ben", text: "Fine" } },
+              tasks: [{ id: "t1", title: "Write it", done: false }, { id: "t2", title: "Ship it", done: false }]
+            })
+            yield* ReplicatedDocument.update(laptop, (doc) => ({
+              ...doc,
+              comments: { c2: doc.comments.c2! },
+              tasks: [doc.tasks[1]!, { ...doc.tasks[0]!, done: true }]
+            }))
+            yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["tasks", "t2", "title"]), 7, " today")
+            yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["body"]), 0, "Tokens refresh hourly.")
+            yield* connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)
+          }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+        )
 
-        yield* ReplicatedDocument.update(laptop, (doc) => ({ ...doc, status: "review", votes: 1 }))
-        yield* ReplicatedText.insert(ReplicatedDocument.text(laptop, ["body"]), 0, "Hello")
-        yield* until(phone, (doc) => doc.body === "Hello")
-        yield* ReplicatedText.insert(ReplicatedDocument.text(phone, ["body"]), 5, ", world")
-        yield* ReplicatedDocument.update(phone, (doc) => ({ ...doc, votes: doc.votes + 1 }))
-        yield* until(laptop, (doc) => doc.votes === 2)
-
-        const value = yield* ReplicatedDocument.get(laptop)
-        assert.deepStrictEqual(value, { ...initial, body: "Hello, world", status: "review", votes: 2 })
-        assert.deepStrictEqual(yield* ReplicatedDocument.get(phone), value)
-      }).pipe(Effect.scoped, Effect.provide(RelayLive)))
+        // A new relay, as after a restart, loads it from the store.
+        yield* Effect.scoped(
+          Effect.gen(function*() {
+            const phone = yield* makeDoc("phone")
+            yield* synced(yield* Relay.connect(phone, { document: notes }))
+            assert.deepStrictEqual(yield* ReplicatedDocument.get(phone), {
+              ...initial,
+              body: "Tokens refresh hourly.",
+              status: "review",
+              votes: 3,
+              comments: { c2: { author: "ben", text: "Fine" } },
+              tasks: [{ id: "t2", title: "Ship it today", done: false }, { id: "t1", title: "Write it", done: true }]
+            })
+            assert.deepStrictEqual(yield* Replica.version(phone), yield* Replica.version(laptop))
+          }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+        )
+      }).pipe(
+        Effect.provide(
+          HistoryStore.layerKeyValueStore({ prefix: "relay" }).pipe(Layer.provide(KeyValueStore.layerMemory))
+        )
+      ))
 
     it.effect("syncs replicas on two versions of a schema, which it doesn't need", () =>
       Effect.gen(function*() {

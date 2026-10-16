@@ -1,8 +1,9 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Option, Schema, Stream } from "effect"
+import { Clock, Effect, Exit, Option, Schema, Stream } from "effect"
 import { Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import { TestClock } from "effect/testing"
+import { letters, makeTexts, syncAll, TextSession, Which } from "./utils/sessions.ts"
 
 const Comment = Schema.Struct({ author: Schema.String, text: ReplicatedDocument.Text })
 
@@ -85,7 +86,7 @@ describe("ReplicatedDocument", () => {
         )
       }))
 
-    it.effect("refuses an initial value that writes texts, entries or optional fields", () =>
+    it.effect("refuses an initial value that doesn't fit, or writes texts, entries or optional fields", () =>
       Effect.gen(function*() {
         yield* refuses(Doc, { ...initial, title: "Draft" }, "a text starts empty")
         yield* refuses(Doc, { ...initial, labels: { urgent: 1 } }, "a record starts empty")
@@ -121,35 +122,6 @@ describe("ReplicatedDocument", () => {
         assert.strictEqual((yield* converged(ada, ben)).status, "review")
       }))
 
-    it.effect("writes in the same millisecond go to the larger replica id", () =>
-      Effect.gen(function*() {
-        const { ada, ben } = yield* pair
-        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, status: "approved" }))
-        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "review" }))
-        yield* Replica.exchange(ada, ben)
-        assert.strictEqual((yield* converged(ada, ben)).status, "approved")
-      }))
-
-    it.effect("a write beats the writes it was made on top of, even with a clock behind", () =>
-      Effect.gen(function*() {
-        const { ada, ben } = yield* pair
-        yield* TestClock.setTime(60_000)
-        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "approved" }))
-        yield* Replica.exchange(ada, ben)
-        yield* TestClock.setTime(0)
-        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, status: "review" }))
-        assert.deepStrictEqual(yield* Replica.exchange(ada, ben), [])
-        assert.strictEqual((yield* converged(ada, ben)).status, "review")
-      }))
-
-    it.effect("concurrent writes of the same value aren't an overlap", () =>
-      Effect.gen(function*() {
-        const { ada, ben } = yield* pair
-        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "review" }))
-        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, status: "review" }))
-        assert.deepStrictEqual(yield* Replica.exchange(ada, ben), [])
-      }))
-
     it.effect("an update that changes nothing writes nothing", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
@@ -157,21 +129,161 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* Replica.version(ada), VersionVector.empty)
       }))
 
-    it.effect("an update is one change, and fails without writing if the value doesn't fit", () =>
+    it.effect("an update is one change", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
         yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "review", due: "friday", votes: 2 }))
         const delta = yield* Replica.delta(ada, VersionVector.empty)
         assert.strictEqual((delta as InternalDelta.DeltaImpl).changes.size, 1)
+      }))
 
+    it.effect("an update fails without writing if the value doesn't fit", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
         const failed = yield* Effect.flip(
           ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "done" as never, votes: 3 }))
         )
         assert.strictEqual(failed._tag, "SchemaError")
         const counted = yield* Effect.flip(ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes: 2.5 })))
         assert.strictEqual(counted._tag, "SchemaError")
-        assert.deepStrictEqual(yield* Replica.version(ada), { ada: 3 })
+        assert.deepStrictEqual(yield* Replica.version(ada), VersionVector.empty)
       }))
+
+    // Writes of one value across three replicas, against a model of what each
+    // replica has seen, with clocks moving forward and back between writes.
+
+    const Theme = Schema.Literals(["light", "dark", "dim"])
+    const Settings = Schema.Struct({ theme: Theme })
+
+    const WriteCommand = Schema.Union([
+      Schema.TaggedStruct("Write", { replica: Which, theme: Theme }),
+      Schema.TaggedStruct("Adjust", { millis: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 5 })) }),
+      Schema.TaggedStruct("SetTime", { millis: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 20 })) }),
+      Schema.TaggedStruct("Sync", { from: Which, to: Which })
+    ])
+
+    const WriteSession = Schema.Array(WriteCommand).check(Schema.isMaxLength(40))
+
+    interface Write {
+      readonly replica: string
+      readonly seq: number
+      readonly time: number
+      readonly theme: typeof Theme.Type
+      /** What its replica had seen. */
+      readonly past: VersionVector.VersionVector
+    }
+
+    const writeKey = (write: Write) => `${write.seq}@${write.replica}`
+    const saw = (by: Write, write: Write) => (by.past[write.replica] ?? 0) > write.seq
+    const concurrent = (a: Write, b: Write) => !saw(a, b) && !saw(b, a)
+    const isLater = (a: Write, b: Write) =>
+      a.time !== b.time ? a.time > b.time : a.replica !== b.replica ? a.replica > b.replica : a.seq > b.seq
+    const latestOf = (writes: Iterable<Write>): Write | undefined => {
+      let found: Write | undefined
+      for (const write of writes) if (found === undefined || isLater(write, found)) found = write
+      return found
+    }
+    const versionOf = (writes: Iterable<Write>): VersionVector.VersionVector => {
+      const version: Record<string, number> = {}
+      for (const { replica, seq } of writes) version[replica] = Math.max(version[replica] ?? 0, seq + 1)
+      return version
+    }
+
+    // A merge reports a Value overlap exactly when a write it receives is
+    // concurrent with another write, received or not, that has a different value.
+    // The overlap names every replica in such a pair, and whose write shows.
+    const assertValueOverlaps = (
+      overlaps: ReadonlyArray<Replica.Overlap>,
+      had: ReadonlyArray<Write>,
+      received: ReadonlyArray<Write>
+    ) => {
+      const all = [...had, ...received]
+      const met = received.flatMap((write) =>
+        all.filter((other) => other.theme !== write.theme && concurrent(other, write)).map((other) => [write, other])
+      )
+      if (met.length === 0) return assert.deepStrictEqual(overlaps, [])
+      assert.deepStrictEqual(overlaps, [{
+        _tag: "Value",
+        path: ["theme"],
+        replicas: [...new Set(met.flat().map(({ replica }) => replica))].sort().map((id) => Replica.ReplicaId.make(id)),
+        kept: Replica.ReplicaId.make(latestOf(all)!.replica)
+      }])
+    }
+
+    it.effect.prop(
+      "a value is its largest write, and merges report concurrent writes that differ",
+      { session: WriteSession },
+      Effect.fnUntraced(function*({ session }) {
+        const ids = ["r0", "r1", "r2"]
+        const docs = yield* Effect.forEach(
+          ids,
+          (id) =>
+            ReplicatedDocument.make(Settings, { initial: { theme: "light" }, replica: Replica.ReplicaId.make(id) })
+        )
+        // The writes each replica has seen, by key.
+        const seen = ids.map(() => new Map<string, Write>())
+        const shows = (writes: Map<string, Write>) => latestOf(writes.values())?.theme ?? "light"
+
+        for (const command of session) {
+          switch (command._tag) {
+            case "Write": {
+              const known = seen[command.replica]!
+              yield* ReplicatedDocument.update(docs[command.replica]!, () => ({ theme: command.theme }))
+              // Writing what it already shows writes nothing.
+              if (shows(known) === command.theme) break
+              const replica = ids[command.replica]!
+              const writes = [...known.values()]
+              const write: Write = {
+                replica,
+                seq: writes.filter((write) => write.replica === replica).length,
+                // Later than everything the replica had seen, whatever its clock says.
+                time: Math.max(yield* Clock.currentTimeMillis, ...writes.map(({ time }) => time + 1)),
+                theme: command.theme,
+                past: versionOf(writes)
+              }
+              known.set(writeKey(write), write)
+              break
+            }
+            case "Adjust":
+              yield* TestClock.adjust(command.millis)
+              break
+            case "SetTime":
+              yield* TestClock.setTime(command.millis)
+              break
+            case "Sync": {
+              if (command.from === command.to) break
+              const [a, b] = [docs[command.from]!, docs[command.to]!]
+              const [knownA, knownB] = [seen[command.from]!, seen[command.to]!]
+              const [toA, toB] = yield* Effect.all([
+                Replica.delta(b, yield* Replica.version(a)),
+                Replica.delta(a, yield* Replica.version(b))
+              ])
+              const [hadA, hadB] = [[...knownA.values()], [...knownB.values()]]
+              const forA = hadB.filter((write) => !knownA.has(writeKey(write)))
+              const forB = hadA.filter((write) => !knownB.has(writeKey(write)))
+              assertValueOverlaps(yield* Replica.receive(a, toA), hadA, forA)
+              assertValueOverlaps(yield* Replica.receive(b, toB), hadB, forB)
+              for (const write of [...forA, ...forB]) {
+                knownA.set(writeKey(write), write)
+                knownB.set(writeKey(write), write)
+              }
+              break
+            }
+          }
+          for (const [i, doc] of docs.entries()) {
+            assert.strictEqual((yield* ReplicatedDocument.get(doc)).theme, shows(seen[i]!), `r${i}'s value`)
+            assert.deepStrictEqual(yield* Replica.version(doc), versionOf(seen[i]!.values()), `r${i}'s version`)
+          }
+        }
+
+        yield* syncAll(docs)
+        const everything = latestOf(seen.flatMap((writes) => [...writes.values()]))
+        for (const doc of docs) {
+          assert.strictEqual((yield* ReplicatedDocument.get(doc)).theme, everything?.theme ?? "light")
+        }
+      }),
+      { arbitrary: { runs: 200, size: 100 } }
+    )
   })
 
   describe("counters", () => {
@@ -257,7 +369,7 @@ describe("ReplicatedDocument", () => {
         assert.strictEqual(comments.c1!.author, "ben")
       }))
 
-    it.effect("entries whose content is a value are written whole", () =>
+    it.effect("a record of values merges entry by entry", () =>
       Effect.gen(function*() {
         const { ada, ben } = yield* pair
         yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, labels: { urgent: 1, later: 2 } }))
@@ -313,9 +425,101 @@ describe("ReplicatedDocument", () => {
         )
       }))
 
-    it("a path that isn't a text is a defect", () => {
-      const doc = Effect.runSync(make("ada"))
-      assert.throws(() => ReplicatedDocument.text(doc, ["status"]), "isn't a text field")
+    it.effect("a path that isn't a text is a defect", () =>
+      Effect.gen(function*() {
+        const doc = yield* make("ada")
+        assert.throws(() => ReplicatedDocument.text(doc, ["status"]), "isn't a text field")
+      }))
+
+    // A document's text field must be a replicated text in every way: the same
+    // edits and syncs give the same text, anchors and overlaps, step by step. Only
+    // the field is edited, so its characters get the same ids as the text's.
+
+    const Page = Schema.Struct({ title: Schema.String, body: ReplicatedDocument.Text })
+
+    describe.each(["tree", "replay"] as const)("against a replicated text (%s)", (strategy) => {
+      it.effect.prop(
+        "every step gives the same text, overlaps and anchors",
+        { session: TextSession },
+        Effect.fnUntraced(function*({ session }) {
+          const texts = yield* makeTexts(strategy)
+          const pages = yield* Effect.forEach(
+            ["r0", "r1", "r2"],
+            (id) =>
+              ReplicatedDocument.make(Page, {
+                initial: { title: "", body: "" },
+                strategy,
+                replica: Replica.ReplicaId.make(id)
+              })
+          )
+          const fields = pages.map((page) => ReplicatedDocument.text(page, ["body"]))
+          const anchors: Array<ReplicatedText.Anchor> = []
+          // A text's overlaps are at [], a field's at its path.
+          const withoutPath = (overlaps: ReadonlyArray<Replica.Overlap>, path: Replica.Path) =>
+            overlaps.map(({ path: at, ...overlap }) => {
+              assert.deepStrictEqual(at, path)
+              return overlap
+            })
+
+          for (const command of session) {
+            const both = <A>(f: (texts: ReadonlyArray<ReplicatedText.Editable>) => Effect.Effect<A, unknown>) =>
+              Effect.all([f(texts), f(fields)])
+            switch (command._tag) {
+              case "Insert": {
+                const text = yield* ReplicatedText.get(texts[command.replica]!)
+                const index = Math.floor(command.at * (text.length + 1) / 1001)
+                yield* both((editables) =>
+                  ReplicatedText.insert(editables[command.replica]!, index, letters(command.text))
+                )
+                break
+              }
+              case "Remove": {
+                const text = yield* ReplicatedText.get(texts[command.replica]!)
+                if (text.length === 0) break
+                const index = Math.floor(command.at * text.length / 1001)
+                const length = Math.min(command.length, text.length - index)
+                yield* both((editables) => ReplicatedText.remove(editables[command.replica]!, index, length))
+                break
+              }
+              case "Sync": {
+                if (command.from === command.to) break
+                const fromText = yield* Replica.exchange(texts[command.from]!, texts[command.to]!)
+                const fromField = yield* Replica.exchange(pages[command.from]!, pages[command.to]!)
+                assert.deepStrictEqual(withoutPath(fromField, ["body"]), withoutPath(fromText, []), "overlaps")
+                break
+              }
+              case "Anchor": {
+                const text = yield* ReplicatedText.get(texts[command.replica]!)
+                const index = Math.floor(command.at * (text.length + 1) / 1001)
+                const side = command.after ? "after" : "before"
+                const [inText, inField] = yield* both((editables) =>
+                  ReplicatedText.anchor(editables[command.replica]!, index, side)
+                )
+                assert.deepStrictEqual(inField, inText, "anchor")
+                anchors.push(inText)
+                break
+              }
+            }
+            for (const i of [0, 1, 2]) {
+              const text = yield* ReplicatedText.get(texts[i]!)
+              assert.strictEqual(yield* ReplicatedText.get(fields[i]!), text, `replica ${i}`)
+              assert.strictEqual((yield* ReplicatedDocument.get(pages[i]!)).body, text, `replica ${i}'s value`)
+            }
+          }
+
+          for (const anchor of anchors) {
+            for (const i of [0, 1, 2]) {
+              assert.deepStrictEqual(
+                yield* ReplicatedText.locate(fields[i]!, anchor),
+                yield* ReplicatedText.locate(texts[i]!, anchor),
+                "located"
+              )
+            }
+          }
+        }),
+        // The default size allows sessions of only two or three commands.
+        { arbitrary: { runs: 100, size: 100 } }
+      )
     })
   })
 
