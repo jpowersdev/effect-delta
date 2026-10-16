@@ -955,6 +955,27 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
       }))
 
+    it.effect("changes made after one stamped at the latest time a clock reads are stamped after it, and accepted", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
+        yield* Replica.receive(
+          ada,
+          InternalDelta.fromChanges([{
+            replica: "mallory",
+            seq: 0,
+            length: 1,
+            parents: [],
+            // The last millisecond a `Date` holds.
+            time: 8.64e15,
+            ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+          }])
+        )
+        for (const votes of [1, 2]) yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes }))
+        const ben = yield* make("ben")
+        yield* Replica.receive(ben, yield* Replica.delta(ada, VersionVector.empty))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), { ...initial, status: "review", votes: 2 })
+      }))
+
     it.effect("a bad change is dropped, and the changes ready behind it still apply", () =>
       Effect.gen(function*() {
         const { ada, ben } = yield* pair
