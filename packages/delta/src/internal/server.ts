@@ -112,8 +112,12 @@ export const make = Effect.fnUntraced(function*(options: {
         // Subscribed under the lock, so no update lands between the first one
         // and the rest.
         const subscription = yield* PubSub.subscribe(document.updates)
+        // Only what's been checked and applied: changes that wait for what
+        // they build on are sent once they've joined the document.
         const first = new Sync.Update({
-          delta: InternalDelta.fromChanges(History.since(history, request.version)),
+          delta: InternalDelta.fromChanges(
+            History.since(history, request.version).filter((change) => history.changes.has(key(change)))
+          ),
           version: held(history)
         })
         return Stream.concat(Stream.succeed(first), Stream.fromSubscription(subscription)).pipe(
@@ -202,6 +206,8 @@ export const make = Effect.fnUntraced(function*(options: {
         const pushed = new Set(fresh.map(key))
         unsaved = pushed
         for (const change of fresh) state.history.pending.set(key(change), change)
+        // What this push may apply: these, and changes that waited for them.
+        const waiting = [...state.history.pending.values()]
 
         let rejected: string | undefined
         let malformed = empty
@@ -265,16 +271,21 @@ export const make = Effect.fnUntraced(function*(options: {
         }
 
         const kept = fresh.filter((change) => history.changes.has(key(change)) || history.pending.has(key(change)))
+        // Subscribers are sent what's been checked and applied, whoever
+        // pushed it: a change that waits might turn out bad.
+        const applied = waiting.filter((change) => history.changes.has(key(change)))
         // Applying a text op sets it, but kept changes that wait count too:
         // the store has them, so a reload would learn it from them.
         document.state.strategy ??= InternalDocument.strategyOf(kept)
         if (kept.length > 0) {
           saving = true
           yield* save(store, document, kept, user)
-          yield* PubSub.publish(
-            document.updates,
-            new Sync.Update({ delta: InternalDelta.fromChanges(kept), version: held(history) })
-          )
+          if (applied.length > 0) {
+            yield* PubSub.publish(
+              document.updates,
+              new Sync.Update({ delta: InternalDelta.fromChanges(applied), version: held(history) })
+            )
+          }
         }
         unsaved = undefined
         saving = false
