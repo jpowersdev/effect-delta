@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { Clock, Effect, Exit, Option, Schema, Stream } from "effect"
 import { Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
+import type * as InternalDocument from "effect-delta/internal/document"
 import { TestClock } from "effect/testing"
 import { letters, makeTexts, syncAll, TextSession, Which } from "./utils/sessions.ts"
 
@@ -931,6 +932,29 @@ describe("ReplicatedDocument", () => {
         assert.strictEqual(failed._tag, "SchemaError")
         assert.deepStrictEqual(yield* Replica.version(board), version)
         assert.deepStrictEqual(yield* ReplicatedDocument.get(board), { ...empty, tasks: [task("a")] })
+      }))
+
+    it.effect("a change that places an item next to a position in another list is malformed", () =>
+      Effect.gen(function*() {
+        const board = yield* makeBoard("ada")
+        // A tag, then a task placed after the tag's position.
+        const change: InternalDocument.AnyChange = {
+          replica: "other",
+          seq: 0,
+          length: 4,
+          parents: [],
+          time: 0,
+          ops: [
+            { _tag: "Set", path: ["tags", "x"], value: "bug" },
+            { _tag: "Place", path: ["tags", "x"], parent: null, side: "L" },
+            { _tag: "Add", path: ["tasks", "a"] },
+            { _tag: "Place", path: ["tasks", "a"], parent: { replica: "other", seq: 1 }, side: "L" }
+          ]
+        }
+        const error = yield* Effect.flip(Replica.receive(board, InternalDelta.fromChanges([change])))
+        assert.strictEqual(error.reason._tag, "Malformed")
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(board), empty)
+        assert.deepStrictEqual(yield* Replica.version(board), VersionVector.empty)
       }))
 
     it.effect("an older schema keeps items it can't read, and its updates leave them alone", () =>
