@@ -1063,6 +1063,37 @@ describe("Authority", () => {
       }).pipe(Effect.provide(Gated))
     }).pipe(Effect.scoped, Effect.provide(CryptoTest)))
 
+  it.effect("tells a text of a rejection that leaves it as it was", () =>
+    Effect.gen(function*() {
+      const gate = yield* Deferred.make<void>()
+      const Gated = Layer.effect(Authority.Authority)(Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        return {
+          subscribe: authority.subscribe,
+          push: (request: Sync.PushRequest) => Effect.andThen(Deferred.await(gate), authority.push(request))
+        }
+      })).pipe(Layer.provide(NoSecrets))
+
+      yield* Effect.gen(function*() {
+        const notes = yield* ReplicatedText.makeConfirmed({ document: spec })
+        yield* synced(notes.connection)
+        const { edits } = yield* ReplicatedText.subscribe(notes)
+        // Held at the gate, then rejected, but removed before the answer
+        // comes back: rolling both back leaves the text as it was.
+        yield* ReplicatedText.insert(notes, 0, "secret")
+        yield* ReplicatedText.remove(notes, 0, 6)
+        yield* Deferred.succeed(gate, undefined)
+        yield* Stream.runHead(Stream.filter(notes.connection.unconfirmed, (count) => count === 0))
+        yield* ReplicatedText.insert(notes, 0, "a plan")
+        let local = 0
+        const told = yield* edits.pipe(
+          Stream.takeUntil((edit) => edit._tag === "Local" && ++local === 3),
+          Stream.runCollect
+        )
+        assert.deepStrictEqual(told.map(({ _tag }) => _tag), ["Local", "Local", "Rejected", "Local"])
+      }).pipe(Effect.provide(Gated))
+    }).pipe(Effect.scoped, Effect.provide(CryptoTest)))
+
   it.effect("accepts a push up to the first change it rejects", () =>
     Effect.gen(function*() {
       const authority = yield* Authority.Authority
