@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Option, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
 import {
   Authority,
   Delta,
@@ -153,6 +153,50 @@ describe("HistoryStore", () => {
       yield* Effect.scoped(Effect.flatMap(openDoc("session-2"), (second) => receive(second, review)))
       const third = yield* Effect.scoped(Effect.flatMap(openDoc("session-3"), ReplicatedDocument.get))
       assert.deepStrictEqual(third, { ...initial, status: "review", votes: 1 })
+    }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
+  it.effect("persist keeps what a replica shows when a change reuses the key of one that turned out bad", () =>
+    Effect.gen(function*() {
+      const review: InternalDocument.AnyChange = {
+        replica: "ada",
+        seq: 0,
+        length: 1,
+        parents: [],
+        time: 10,
+        ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+      }
+      // Made on top of `review`, but stamped earlier: saved while it waits,
+      // then refused.
+      const early: InternalDocument.AnyChange = {
+        replica: "mallory",
+        seq: 0,
+        length: 1,
+        parents: [{ replica: "ada", seq: 0 }],
+        time: 5,
+        ops: [{ _tag: "Set", path: ["status"], value: "approved" }]
+      }
+      // Another change under its key, which the store can't keep beside it.
+      const reused: InternalDocument.AnyChange = {
+        ...early,
+        time: 60,
+        ops: [{ _tag: "Increment", path: ["votes"], by: 1 }]
+      }
+      const receive = (doc: Replica.Replica<unknown>, change: InternalDocument.AnyChange) =>
+        Effect.exit(Replica.receive(doc, InternalDelta.fromChanges([change])))
+      const [shown, received] = yield* Effect.scoped(Effect.gen(function*() {
+        const first = yield* openDoc("session-1")
+        yield* receive(first, early)
+        yield* ReplicatedDocument.update(first, (doc) => ({ ...doc, title: "Plan" }))
+        // Saved before the next arrives.
+        yield* Effect.yieldNow
+        yield* receive(first, review)
+        const received = yield* receive(first, reused)
+        return [yield* ReplicatedDocument.get(first), received] as const
+      }))
+      const reopened = yield* Effect.scoped(Effect.flatMap(openDoc("session-2"), ReplicatedDocument.get))
+      assert.deepStrictEqual(reopened, shown)
+      if (Exit.isSuccess(received)) return assert.fail("expected the reused key to be refused")
+      assert.strictEqual(Option.getOrThrow(Cause.findErrorOption(received.cause)).reason._tag, "ReplicaIdReused")
     }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
   it.effect("layerKeyValueStore keeps every key under the prefix, and folds", () => {

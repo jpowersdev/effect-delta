@@ -1,6 +1,20 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Deferred, Effect, Equal, Exit, Fiber, Layer, Option, Queue, Schedule, Schema, Stream } from "effect"
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Equal,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Schedule,
+  Schema,
+  Stream
+} from "effect"
 import {
   Authority,
   Delta,
@@ -389,6 +403,60 @@ describe("Relay", () => {
         yield* Replica.receive(carol, Option.getOrThrow(first).delta)
         assert.deepStrictEqual(yield* ReplicatedDocument.get(carol), yield* ReplicatedDocument.get(ben))
       }).pipe(Effect.provide(RelayLive)))
+
+    it.effect("keeps what it sent when a change reuses the key of one that turned out bad", () =>
+      Effect.gen(function*() {
+        const review: InternalDocument.AnyChange = {
+          replica: "ada",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 10,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }
+        // Made on top of `review`, but stamped earlier: stored while it
+        // waits, then refused.
+        const early: InternalDocument.AnyChange = {
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [{ replica: "ada", seq: 0 }],
+          time: 5,
+          ops: [{ _tag: "Set", path: ["status"], value: "approved" }]
+        }
+        // Another change under its key, which the store can't keep beside it.
+        const reused: InternalDocument.AnyChange = {
+          ...early,
+          time: 60,
+          ops: [{ _tag: "Increment", path: ["votes"], by: 1 }]
+        }
+        // What a relay sends a replica that subscribes.
+        const sent = Effect.gen(function*() {
+          const relay = yield* Relay.Relay
+          const first = yield* Stream.runHead(
+            relay.subscribe({ format: Sync.FORMAT, document: notes, strategy: "tree", version: {}, authority: false })
+          )
+          const doc = yield* makeDoc("subscriber")
+          yield* Replica.receive(doc, Option.getOrThrow(first).delta)
+          return yield* ReplicatedDocument.get(doc)
+        })
+        const [before, pushed] = yield* Effect.gen(function*() {
+          const relay = yield* Relay.Relay
+          const push = (change: InternalDocument.AnyChange) =>
+            Effect.exit(
+              relay.push({ format: Sync.FORMAT, document: notes, delta: InternalDelta.fromChanges([change]) })
+            )
+          yield* push(early)
+          yield* push(review)
+          const pushed = yield* push(reused)
+          return [yield* sent, pushed] as const
+        }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+        // Loaded again from the store.
+        assert.deepStrictEqual(yield* sent.pipe(Effect.provide(Layer.fresh(Relay.layer))), before)
+        if (Exit.isSuccess(pushed)) return assert.fail("expected the reused key to be refused")
+        const error = Option.getOrThrow(Cause.findErrorOption(pushed.cause))
+        assert.isTrue(error.reason._tag === "DeltaError" && error.reason.reason._tag === "ReplicaIdReused")
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
     it.effect("stores documents it can't read, and replicas reload them intact", () =>
       Effect.gen(function*() {
