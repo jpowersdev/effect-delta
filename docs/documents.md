@@ -43,8 +43,8 @@ New terms only; the rest are in [`vocabulary.md`](./vocabulary.md).
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- | --------------------------------------------- |
 | **Field**         | A named part of a struct: `title`, `status`.                                                                                                              | Yjs and Automerge map keys, Loro container keys             | `Schema.Struct` fields                        |
 | **Entry**         | A key and its content in a record. Entries are added and removed.                                                                                         | Automerge map key, Riak map entry                           | `Schema.Record`; Effect's `Record` module     |
-| **Path**          | Where a part of a document is: field names and record keys from the root, such as `["comments", "c1", "text"]`. The root is `[]`.                          | Automerge path, JSON Pointer, json-joy path                 | `ReadonlyArray<string>`, like Schema's issue paths |
-| **Merge rule**    | How one part of a document combines concurrent changes, worked out from its schema: fields, entries, text, counter or latest write.                       | CRDT type, Loro container type, Collabs "Collab"            | `SchemaAST`, walked like `Schema.toEquivalence` |
+| **Path**          | Where a part of a document is: field names, record keys and list item keys from the root, such as `["comments", "c1", "text"]`. The root is `[]`. | Automerge path, JSON Pointer, json-joy path                 | `ReadonlyArray<string>`, like Schema's issue paths |
+| **Merge rule**    | How one part of a document combines concurrent changes, worked out from its schema: fields, entries, text, counter, items or latest write.                | CRDT type, Loro container type, Collabs "Collab"            | `SchemaAST`, walked like `Schema.toEquivalence` |
 | **Latest write**  | The default rule: the value written last shows. "Last" is by write time, then replica id.                                                                 | Last-writer-wins (LWW) register                             | `Order`, `Combiner.max`                       |
 | **Write time**    | When a change was made, in milliseconds from `Clock`, moved later when needed so a change is always later than everything its replica had seen.            | Hybrid logical clock (HLC); Automerge's change `time`       | `Clock`                                       |
 | **Initial value** | What a document shows for parts nobody has written yet. Part of the document's definition, like its schema, so it's the same everywhere.                    | docustore `initial`; json-joy schema defaults               | —                                             |
@@ -116,10 +116,12 @@ That gives two behaviours:
   or a counter included. An edit inside an entry says nothing about whether the entry exists, so a removal
   still removes it. The merge reports a `Removed` overlap. Most apps treat a deleted card or comment the
   same way.
-- **Content is kept when an entry is removed.** Adding the key again brings the entry back with everyone's
-  edits, including ones that arrived after the removal. So undoing a removal (later) loses nothing.
-  Likewise, a key that two replicas add concurrently is one entry whose contents merge. Two entries would
-  leave one hidden behind the other, the problem Loro fixed with mergeable containers.
+- **Content is kept when an entry is removed**, everyone's edits included, even ones that arrive after the
+  removal. So undoing a removal (later) can bring it all back. Adding the key again with `update` writes
+  the content it's given over what was kept, as an edit to it: texts are compared with the kept text, and
+  values are written again. Likewise, a key that two replicas add concurrently is one entry whose contents
+  merge. Two entries would leave one hidden behind the other, the problem Loro fixed with mergeable
+  containers.
 
 The alternative is **edits keep an entry**: an edit inside counts as adding it, so a later edit brings back an
 entry removed earlier. We don't recommend it, because something you just deleted can reappear because of an
@@ -412,7 +414,7 @@ interface Proposed<A> { readonly before: A; readonly after: A; readonly paths: R
 The whole call is one change. It fails with `Schema.SchemaError` when a new value doesn't encode, for example
 when it fails a check, or encodes to something JSON can't carry (`Schema.Any` passes anything on), or to JSON
 that reads back as another value (a union of a number and a string writes the string `"NaN"` as the number's
-JSON). Values are
+JSON), and when two items of a list have the same key. Values are
 written as JSON sends them, so `-0` is written as `0`, and a `-0` in JSON text, which other languages send,
 is read as `0`.
 
@@ -439,7 +441,7 @@ type Path = ReadonlyArray<string>
 
 type Overlap =
   | { readonly _tag: "Text"; readonly path: Path; readonly range: Range; readonly anchors: AnchorRange; readonly replicas: ReadonlyArray<ReplicaId> }
-  // Both wrote different values here (or one removed it); `kept` is whose write shows.
+  // Both wrote different values here, both moved this list item, or one removed it; `kept` is whose write shows.
   | { readonly _tag: "Value"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId>; readonly kept: ReplicaId }
   // One removed this entry, item or optional field while the other changed something inside it, or moved
   // it. It stays removed.
@@ -499,8 +501,8 @@ Decided (2026-10-15):
    the special part first, like `ReplicatedText`. *Alternatives:* `ReplicatedValue` (vague),
    `ReplicatedStruct` (too narrow: the root can be a record).
 2. **Merge rules come from the schema**, with two markers, `ReplicatedDocument.Text` and
-   `ReplicatedDocument.Counter`. Everything unmarked is a field, an entry, or a value that takes the latest
-   write.
+   `ReplicatedDocument.Counter`, and lists made with `ReplicatedDocument.List`. Everything else is a field,
+   an entry, or a value that takes the latest write.
 3. **The latest write is decided by write time** (wall clock, never earlier than what the replica has seen),
    then replica id. *Alternative:* Lamport order, which needs no clock but lets the longer history win.
 4. **An entry's content is kept when it's removed, and a removal wins over edits it hadn't seen.** The merge
@@ -564,6 +566,8 @@ All built, each with tests and an example:
 - **An authority that loses changes it accepted** (a store restored from a backup, say) leaves confirmed
   replicas to recover one change at a time: a change it has lost is rolled back when it's pushed again,
   and one built on another replica's lost change is refused as malformed until that replica pushes first.
+  A replica that had saved a lost change as confirmed brings it back each time it reopens, until it's
+  pushed and rolled back again, with any edits made on top of it in the meantime.
 - **Counters are exact only within the safe integers.** A counter's increments add up exactly, but it reads
   as a JavaScript number, so a total (with its initial value) beyond 2^53 reads as the nearest safe
   integer.

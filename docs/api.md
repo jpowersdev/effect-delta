@@ -85,6 +85,7 @@ const program = Effect.gen(function*() {
   // Launch is Friday. Sessions last 812 hours.    (or 128; the same on both laptops)
 
   for (const overlap of overlaps) {
+    if (overlap._tag !== "Text") continue
     const range = yield* ReplicatedText.locateRange(alice, overlap.anchors)
     yield* Console.log("Both changed:", Option.getOrUndefined(range))
   }
@@ -587,10 +588,11 @@ interface Persisted { readonly await: Effect<never, HistoryStoreError> }
 ```
 
 **The store stays simple.** `persist` knows the strategy, so it decides when to write a snapshot. For
-replay, it writes one when its scope closes and after every 4,096 characters of history in between. Loading
-records the history without replaying it, takes the texts from the snapshot, and merges only the changes
-saved after it; a snapshot that doesn't match the history is ignored. `writers` lets a replica upload
-changes it made under earlier ids, and lets servers remember who owns each id. When its scope closes,
+replay, it writes one when its scope closes and after every 4,096 sequence numbers of history in between
+(one per character, and one per document op). Loading records the history without replaying it, takes the
+texts from the snapshot, and merges only the changes saved after it; a snapshot that doesn't match the
+history is ignored. `writers` lets a replica upload changes it made under earlier ids, and lets servers
+remember who owns each id. When its scope closes,
 `persist` saves once more, so the last edits aren't lost. A confirmed replica's
 unconfirmed changes are stored separately and rewritten after a rejection, so a rejected change never
 comes back on reload.

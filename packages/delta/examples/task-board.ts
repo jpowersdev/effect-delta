@@ -74,11 +74,15 @@ const program = Effect.gen(function*() {
   // [x] Update the pricing page
   // [ ] Publish the docs
   // [ ] Brief support
-  // [ ] Fix the login bug on Safari    at the bottom, or at the top: wherever
-  //                                    it was moved later; the same on both laptops
+  // [ ] Fix the login bug on Safari
+  //
+  // The bug is where one of them moved it: here, at the top, or just before
+  // "Brief support", which Ada added after "Publish the docs" as Ben moved the
+  // bug there. The move with the later write time wins, and in the same
+  // millisecond the larger replica id; the same on both laptops.
 
   yield* Console.log(overlaps)
-  // [{ _tag: "Value", path: ["tasks", "login"], replicas: [...], kept: <whoever moved it later> }]
+  // [{ _tag: "Value", path: ["tasks", "login"], replicas: [...], kept: <whoever's move won> }]
 })
 
 program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain)
