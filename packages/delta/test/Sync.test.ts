@@ -1142,6 +1142,31 @@ describe("Authority", () => {
       }).pipe(Effect.provide(Copying))
     })
 
+    it.effect("a proposal names what exists by the same paths as what the change wrote", () => {
+      const proposals: Array<Authority.DocumentProposal> = []
+      const Recording = Authority.layer({
+        check: (proposal) => Effect.sync(() => proposal._tag === "Document" && proposals.push(proposal))
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const doc = yield* makeDoc("doc")
+        yield* ReplicatedDocument.update(doc, (value) => ({
+          ...value,
+          tasks: [{ id: "t1", title: "", done: false }],
+          comments: { c1: { author: "ada", text: "" } }
+        }))
+        yield* authority.push({ format: Sync.FORMAT, document: spec, delta: yield* Replica.delta(doc, {}) })
+        const [proposal] = proposals
+        assert.deepStrictEqual(proposal!.paths.filter((path) => path.length === 2), [["comments", "c1"], [
+          "tasks",
+          "t1"
+        ]])
+        const exists = proposal!.exists.after.map((path) => JSON.stringify(path))
+        assert.include(exists, JSON.stringify(["tasks", "t1"]))
+        assert.notInclude(exists, JSON.stringify(["tasks", "0"]))
+      }).pipe(Effect.provide(Recording))
+    })
+
     it.effect("a confirmed document syncs with nothing else", () =>
       Effect.gen(function*() {
         const confirmed = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
