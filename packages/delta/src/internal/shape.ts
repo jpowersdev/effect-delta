@@ -227,11 +227,16 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
     return { name: signature.name, shape, optional, hasDefault }
   })
 
-// An optional field's `undefined` counts as absent.
+// An optional field's `undefined` counts as absent, so it's no value the
+// field can read.
 const withoutUndefined = (ast: SchemaAST.AST): SchemaAST.AST => {
   if (!SchemaAST.isUnion(ast)) return ast
   const defined = ast.types.filter((type) => !SchemaAST.isUndefined(type))
-  return defined.length === 1 ? defined[0]! : ast
+  return defined.length === 1
+    ? defined[0]!
+    : defined.length === ast.types.length
+    ? ast
+    : new SchemaAST.Union(defined, ast.options, ast.annotations, ast.checks)
 }
 
 // Whether an item's field `key` holds strings, as the steps of a path are.
