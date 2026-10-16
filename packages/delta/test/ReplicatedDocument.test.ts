@@ -472,7 +472,7 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
       }))
 
-    it.effect("read as the nearest whole number the schema allows, so the document stays readable", () =>
+    it.effect("read as the nearest whole number the schema allows, which an update elsewhere leaves unwritten", () =>
       Effect.gen(function*() {
         class Poll extends Schema.Class<Poll>("Poll")({ yes: ReplicatedDocument.Counter, title: Schema.String }) {}
         const poll = (replica: string) =>
@@ -487,8 +487,12 @@ describe("ReplicatedDocument", () => {
         yield* ReplicatedDocument.update(ben, (doc) => new Poll({ ...doc, yes: 1 }))
         yield* Replica.exchange(ada, ben)
         assert.strictEqual((yield* ReplicatedDocument.get(ada)).yes, Number.MAX_SAFE_INTEGER)
+        // An update elsewhere leaves it as it reads, so it doesn't write it.
+        const before = yield* Replica.version(ada)
         yield* ReplicatedDocument.update(ada, (doc) => new Poll({ ...doc, title: "Lunch?" }))
         assert.strictEqual((yield* ReplicatedDocument.get(ada)).title, "Lunch?")
+        const delta = (yield* Replica.delta(ada, before)) as InternalDelta.DeltaImpl
+        assert.deepStrictEqual([...delta.changes.values()].flatMap(({ ops }) => ops.map((op) => op.path)), [["title"]])
       }))
   })
 
