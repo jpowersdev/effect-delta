@@ -326,6 +326,14 @@ export const List: {
  * Without a `replica` option, a fresh random replica id comes from `Crypto`,
  * which platform layers such as `NodeServices.layer` provide.
  *
+ * **Gotchas**
+ *
+ * A class's constructor is given fields that merges combine, which nobody
+ * checked together, so it must take any values its fields can hold. One that
+ * throws for some, as a check would, is a check `make` can't see: an entry or
+ * item holding such a value is left out, and a document whose own fields
+ * hold one can't be read, a defect from then on.
+ *
  * **Example** (Two copies of a document)
  *
  * ```ts import.meta.vitest

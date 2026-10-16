@@ -604,7 +604,8 @@ const isJsonObject = (json: Schema.Json | undefined): json is Schema.JsonObject 
 
 const readRoot = (shape: Shape, source: Source, initial: unknown, memo: Memo): unknown => {
   const value = readAt(shape, source, { value: initial }, memo)
-  if (value === Missing) throw new Error("A document's value couldn't be read")
+  // Only a constructor that throws, for fields a merge combined, leaves it so.
+  if (value === Missing) throw new Error("A document's value couldn't be read: a constructor threw for its fields")
   return value
 }
 

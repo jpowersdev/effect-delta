@@ -191,7 +191,9 @@ Anything without its own rule is written and replaced whole.
 - **On a merged part, they can't.** A merge combines writes that nobody checked together. That covers a check
   across a struct's fields, a text's length, a record's size, or a counter's range. `make` refuses such a
   schema, as a defect. Rules like these belong in an authority's check, which sees every change before anyone
-  else does.
+  else does. A class's constructor that throws for some values of its fields is such a check, one `make`
+  can't see: an entry or item holding one is left out, and a document whose own fields hold one can't be
+  read.
 
 ### The initial value
 
