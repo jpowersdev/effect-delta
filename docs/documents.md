@@ -565,9 +565,10 @@ All built, each with tests and an example:
   one of them shows the difference. An explicit move, like the text handles, comes with path-scoped writes.
 - **An authority that loses changes it accepted** (a store restored from a backup, say) leaves confirmed
   replicas to recover one change at a time: a change it has lost is rolled back when it's pushed again,
-  and one built on another replica's lost change is refused as malformed until that replica pushes first.
-  A replica that had saved a lost change as confirmed brings it back each time it reopens, until it's
-  pushed and rolled back again, with any edits made on top of it in the meantime.
+  and one built on another replica's lost change is refused as malformed, which ends the connection of the
+  replica that pushed it, until that other replica has pushed first. A replica that had saved a lost change
+  as confirmed brings it back each time it reopens, until it's pushed and rolled back again, with any edits
+  made on top of it in the meantime.
 - **Counters are exact only within the safe integers.** A counter's increments add up exactly, but it reads
   as a JavaScript number, so a total (with its initial value) beyond 2^53 reads as the nearest safe
   integer.

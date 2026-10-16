@@ -388,10 +388,48 @@ export interface ConfirmedOptions<A> {
  * **Details**
  *
  * Edits apply immediately and are unconfirmed until the authority
- * acknowledges them. When the authority rejects a change, the replica drops
- * it and every unconfirmed change made after it, emits a `Rejected` edit with
- * the value rolled back, and continues under a new replica id. The
- * authority's check reads its changes with `ReplicatedDocument.readProposal`.
+ * acknowledges them, and the replica never gives them to anything else:
+ * `Replica.exchange` and `Replica.receive` fail with `AuthorityOnly`. When the
+ * authority rejects a change, the replica drops it and every unconfirmed
+ * change made after it, emits a `Rejected` edit with the value rolled back,
+ * and continues under a new replica id. The authority's check reads its
+ * changes with `ReplicatedDocument.readProposal`.
+ *
+ * **Example** (Rolling back a status only the owner may set)
+ *
+ * ```ts import.meta.vitest
+ * import { NodeServices } from "@effect/platform-node"
+ * import { Effect, Layer, Schema, Stream } from "effect"
+ * import { Authority, HistoryStore, Replica, ReplicatedDocument, Sync } from "effect-delta"
+ *
+ * const Spec = Schema.Struct({ body: ReplicatedDocument.Text, status: Schema.Literals(["draft", "approved"]) })
+ * const initial = { body: "", status: "draft" } as const
+ *
+ * const OwnerApproves = Authority.layer({
+ *   check: (proposal) =>
+ *     Effect.gen(function*() {
+ *       if (proposal._tag === "Text") return yield* new Authority.Rejected({ message: "Specs aren't texts" })
+ *       const { after } = yield* ReplicatedDocument.readProposal(proposal, Spec, { initial })
+ *       if (after.status === "approved" && proposal.user !== "owner") {
+ *         return yield* new Authority.Rejected({ message: "Only the owner can approve" })
+ *       }
+ *     })
+ * }).pipe(Layer.provide(HistoryStore.layerMemory))
+ *
+ * const program = Effect.gen(function*() {
+ *   const spec = yield* ReplicatedDocument.makeConfirmed(Spec, { initial, document: Replica.DocumentId.make("spec") })
+ *   const { edits } = yield* ReplicatedDocument.subscribe(spec)
+ *   yield* ReplicatedDocument.update(spec, (current) => ({ ...current, status: "approved" }))
+ *   yield* edits.pipe(Stream.filter((edit) => edit._tag === "Rejected"), Stream.runHead)
+ *   return yield* ReplicatedDocument.get(spec)
+ * })
+ *
+ * await Effect.runPromise(program.pipe(
+ *   Effect.scoped,
+ *   Effect.provideService(Sync.CurrentUser, "reviewer"),
+ *   Effect.provide([OwnerApproves, NodeServices.layer])
+ * )) // => { body: "", status: "draft" }
+ * ```
  *
  * @stability unstable
  * @category constructors
@@ -475,6 +513,30 @@ export interface Subscription<A> {
 /**
  * Subscribes to the document's edits for the life of the scope. No edit is
  * missed between reading `value` and the first of `edits`.
+ *
+ * **Example** (Watching edits)
+ *
+ * ```ts import.meta.vitest
+ * import { Effect, Option, Schema, Stream } from "effect"
+ * import { Replica, ReplicatedDocument } from "effect-delta"
+ *
+ * const Note = Schema.Struct({ pinned: Schema.Boolean })
+ *
+ * const program = Effect.gen(function*() {
+ *   const note = yield* ReplicatedDocument.make(Note, {
+ *     initial: { pinned: false },
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
+ *   const { edits, value } = yield* ReplicatedDocument.subscribe(note)
+ *   yield* ReplicatedDocument.set(note, { pinned: true })
+ *   const first = yield* Stream.runHead(edits)
+ *   return [value, first]
+ * })
+ *
+ * const [value, first] = await Effect.runPromise(program.pipe(Effect.scoped))
+ * value // => { pinned: false }
+ * first // => Option.some({ _tag: "Local", value: { pinned: true } })
+ * ```
  *
  * @stability unstable
  * @category getters
