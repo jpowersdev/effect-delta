@@ -228,13 +228,15 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
   })
 
 // An optional field's `undefined` counts as absent, so it's no value the
-// field can read.
+// field can read, however deep in its unions. The union's checks still hold.
 const withoutUndefined = (ast: SchemaAST.AST): SchemaAST.AST => {
   if (!SchemaAST.isUnion(ast)) return ast
-  const defined = ast.types.filter((type) => !SchemaAST.isUndefined(type))
-  return defined.length === 1
-    ? defined[0]!
-    : defined.length === ast.types.length
+  const defined = ast.types.flatMap((type) => SchemaAST.isUndefined(type) ? [] : [withoutUndefined(type)])
+  if (defined.length === 1) {
+    const [only] = defined
+    return ast.checks === undefined ? only! : Schema.make<Schema.Codec<unknown>>(only!).check(...ast.checks).ast
+  }
+  return defined.length === ast.types.length && defined.every((type, i) => type === ast.types[i])
     ? ast
     : new SchemaAST.Union(defined, ast.options, ast.annotations, ast.checks)
 }
