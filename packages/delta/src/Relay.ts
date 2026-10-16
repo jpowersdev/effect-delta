@@ -118,6 +118,8 @@ export interface ConnectOptions {
  * lacks once caught up, then each new one. After a lost connection it retries
  * and resubscribes from where the replica is, so nothing is lost. A replica can
  * connect to any number of relays and still exchange with peers directly.
+ * A replica made with `makeConfirmed` answers only to its authority:
+ * connecting it to a relay is a defect.
  *
  * **Example** (Two devices syncing through a relay)
  *

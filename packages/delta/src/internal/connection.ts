@@ -33,6 +33,10 @@ export const connect = Effect.fnUntraced(function*(
   }
 ): Effect.fn.Return<Sync.Connection, never, Scope.Scope> {
   const core = InternalReplica.core(replica)
+  // Its changes may still be rejected, so they mustn't reach anything else.
+  if (!options.authority && core.confirmed !== undefined) {
+    return yield* Effect.die(new Error("A replica that answers to an authority can't also connect to a relay"))
+  }
   const status = yield* SubscriptionRef.make<Sync.Status>({ _tag: "Connecting" })
   // What the server is known to have, from its updates and acknowledgements.
   let serverVersion = VersionVector.empty
