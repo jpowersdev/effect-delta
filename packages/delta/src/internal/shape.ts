@@ -229,6 +229,8 @@ const hasRule = (ast: SchemaAST.AST, visited: Set<SchemaAST.AST>): boolean => {
   }
 }
 
+const asJson = Schema.decodeUnknownResult(Schema.Json)
+
 const compileValue = (ast: SchemaAST.AST): Value => {
   const schema = Schema.make<Schema.Codec<unknown>>(ast)
   const codec = Schema.toCodecJson(schema)
@@ -236,7 +238,11 @@ const compileValue = (ast: SchemaAST.AST): Value => {
   const decode = Schema.decodeUnknownResult(codec)
   return {
     _tag: "Value",
-    encode: (value) => encode(value) as Result.Result<Schema.Json, Schema.SchemaError>,
+    // As JSON sends it, so the replica that writes it shows what the rest
+    // receive: some codecs, such as `Schema.Any`'s, pass on what JSON can't
+    // carry, and JSON has no -0.
+    encode: (value) =>
+      Result.map(Result.flatMap(encode(value), asJson), (json) => JSON.parse(JSON.stringify(json)) as Schema.Json),
     decode: (json) => decode(json),
     equivalence: Schema.toEquivalence(schema)
   }

@@ -495,7 +495,8 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * is written: values that aren't equal (by `Schema.toEquivalence`), texts as
  * one replacement each (as `ReplicatedText.set` does), counters by the
  * difference, and records and lists by which keys appear and disappear. Fails
- * with `Schema.SchemaError` if the new value doesn't fit the schema.
+ * with `Schema.SchemaError` if the new value doesn't fit the schema, or a
+ * value encodes to something JSON can't carry.
  *
  * Editors should edit text fields through `text`, which says exactly what the
  * user did; `update` has to work it out.
