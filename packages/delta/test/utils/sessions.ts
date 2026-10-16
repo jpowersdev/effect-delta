@@ -1,6 +1,7 @@
 import { assert } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { Replica, ReplicatedDocument, ReplicatedText } from "effect-delta"
+import type * as InternalDocument from "effect-delta/internal/document"
 import { TestClock } from "effect/testing"
 
 // Random sessions across three replicas, with partial syncs along the way.
@@ -253,3 +254,236 @@ export const stepBoards = Effect.fnUntraced(function*(
   }
   return []
 })
+
+// Two versions of a schema ---------------------------------------------------
+
+// An older and a newer release of one app's schema, whose replicas sync with
+// each other. The newer one takes more literals in every value, and has
+// fields the older one lacks: optional, or filled in by a constructor
+// default. List items are classes, and record entries tagged structs, whose
+// `_tag` has a default; one record's keys follow a template; and records sit
+// inside records and inside list items.
+
+const withDefault = <const L extends ReadonlyArray<string>>(literals: L) =>
+  Schema.Literals(literals).pipe(Schema.withConstructorDefault(Effect.succeed(literals[0]!)))
+
+class OldCard extends Schema.Class<OldCard>("OldCard")({
+  id: Schema.String,
+  title: ReplicatedDocument.Text,
+  level: withDefault(["low", "high"]),
+  tags: Schema.Record(Schema.String, Schema.Literals(["a", "b"]))
+}) {}
+
+class Card extends Schema.Class<Card>("Card")({
+  id: Schema.String,
+  title: ReplicatedDocument.Text,
+  level: withDefault(["low", "high", "top"]),
+  color: withDefault(["gray", "red"]),
+  tags: Schema.Record(Schema.String, Schema.Literals(["a", "b", "c"]))
+}) {}
+
+const NoteKey = Schema.TemplateLiteral(["n", Schema.String])
+
+export const OldPlanner = Schema.Struct({
+  status: Schema.Literals(["open", "shut"]),
+  cards: ReplicatedDocument.List(OldCard, { key: "id" }),
+  notes: Schema.Record(NoteKey, Schema.TaggedStruct("Note", { pinned: Schema.Boolean })),
+  groups: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Literals(["low", "high"])))
+})
+
+export const Planner = Schema.Struct({
+  status: Schema.Literals(["open", "shut", "gone"]),
+  cards: ReplicatedDocument.List(Card, { key: "id" }),
+  notes: Schema.Record(
+    NoteKey,
+    Schema.TaggedStruct("Note", { pinned: Schema.Boolean, mood: Schema.optionalKey(Schema.Literals(["ok", "sad"])) })
+  ),
+  groups: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Literals(["low", "high", "top"])))
+})
+export type Planner = typeof Planner.Type
+
+// The same on both versions.
+export const initialPlanner = { status: "open", cards: [], notes: {}, groups: {} } as const
+
+// What each version can write.
+const choices = {
+  old: {
+    status: ["open", "shut"],
+    level: ["low", "high"],
+    color: [],
+    tag: ["a", "b"],
+    mood: [],
+    group: ["low", "high"]
+  },
+  new: {
+    status: ["open", "shut", "gone"],
+    level: ["low", "high", "top"],
+    color: ["gray", "red"],
+    tag: ["a", "b", "c"],
+    mood: ["ok", "sad"],
+    group: ["low", "high", "top"]
+  }
+} as const
+
+const PlannerCommand = Schema.Union([
+  Schema.TaggedStruct("Status", { replica: Which, pick: Fraction }),
+  // Adds a card, or moves it, and changes what's given.
+  Schema.TaggedStruct("Card", {
+    replica: Which,
+    key: Schema.Literals(["c1", "c2"]),
+    at: Fraction,
+    title: Schema.optionalKey(Short),
+    level: Schema.optionalKey(Fraction),
+    color: Schema.optionalKey(Fraction),
+    // Sets one of its tags, or with null, removes it.
+    tag: Schema.optionalKey(Schema.Struct({ key: Schema.Literals(["t1", "t2"]), pick: Schema.NullOr(Fraction) }))
+  }),
+  Schema.TaggedStruct("Uncard", { replica: Which, at: Fraction }),
+  // Adds, changes or removes a note. "x1" is a key the record doesn't take.
+  Schema.TaggedStruct("Note", {
+    replica: Which,
+    key: Schema.Literals(["n1", "n2", "x1"]),
+    pinned: Schema.optionalKey(Schema.Boolean),
+    mood: Schema.optionalKey(Schema.NullOr(Fraction)),
+    remove: Schema.Boolean
+  }),
+  // Sets an entry of a group, or with null, removes it, or with `whole`, the
+  // group.
+  Schema.TaggedStruct("Group", {
+    replica: Which,
+    group: Schema.Literals(["g1", "g2"]),
+    key: Schema.Literals(["k1", "k2"]),
+    pick: Schema.NullOr(Fraction),
+    whole: Schema.Boolean
+  }),
+  // Sets the value the replica shows.
+  Schema.TaggedStruct("Same", { replica: Which }),
+  // A change made directly, as a client of the newer version could send it,
+  // which only an authority on that version lets through.
+  Schema.TaggedStruct("Forge", {
+    replica: Which,
+    ops: Schema.Array(
+      Schema.Struct({ op: Schema.Literals(["Set", "Add", "Unset"]), path: Fraction, value: Fraction })
+    ).check(Schema.isMinLength(1), Schema.isMaxLength(3))
+  }),
+  Schema.TaggedStruct("Sync", { from: Which, to: Which })
+])
+
+export const PlannerSession = Schema.Array(PlannerCommand).check(Schema.isMaxLength(40))
+
+const choose = <A>(among: ReadonlyArray<A>, at: number): A => among[itemAt(at, among.length)]!
+
+/**
+ * The value an edit sets, worked out from the value a replica on `version`
+ * shows, with what that version can write.
+ */
+export const editPlanner = (
+  version: keyof typeof choices,
+  planner: Planner,
+  command: Extract<typeof PlannerCommand.Type, { readonly _tag: "Status" | "Card" | "Uncard" | "Note" | "Group" }>
+): Planner => {
+  const can = choices[version]
+  switch (command._tag) {
+    case "Status":
+      return { ...planner, status: choose(can.status, command.pick) }
+    case "Card": {
+      const existing = planner.cards.find(({ id }) => id === command.key)
+      const others = planner.cards.filter(({ id }) => id !== command.key)
+      const tags: Record<string, string> = { ...existing?.tags }
+      if (command.tag?.pick === null) delete tags[command.tag.key]
+      else if (command.tag !== undefined) tags[command.tag.key] = choose(can.tag, command.tag.pick)
+      const fields = {
+        ...existing,
+        id: command.key,
+        title: command.title === undefined ? existing?.title ?? "" : letters(command.title),
+        tags,
+        ...(command.level === undefined ? {} : { level: choose(can.level, command.level) }),
+        ...(command.color === undefined || version === "old" ? {} : { color: choose(can.color, command.color) })
+      }
+      // Made with the version's class, which fills in its defaults.
+      const card = (version === "old" ? new OldCard(fields as never) : new Card(fields as never)) as Card
+      const index = gapAt(command.at, others.length)
+      return { ...planner, cards: [...others.slice(0, index), card, ...others.slice(index)] }
+    }
+    case "Uncard": {
+      const index = itemAt(command.at, planner.cards.length)
+      return { ...planner, cards: planner.cards.filter((_, i) => i !== index) }
+    }
+    case "Note": {
+      const { [command.key as `n${string}`]: existing, ...notes } = planner.notes
+      if (command.remove) return { ...planner, notes }
+      const mood = version === "old" || command.mood === null
+        ? undefined
+        : command.mood === undefined
+        ? existing?.mood
+        : choose(can.mood, command.mood)
+      const note = { _tag: "Note", pinned: command.pinned ?? existing?.pinned ?? false, ...(mood && { mood }) } as const
+      return { ...planner, notes: { ...notes, [command.key]: note } }
+    }
+    case "Group": {
+      const { [command.group]: group, ...groups } = planner.groups
+      if (command.whole) return { ...planner, groups }
+      const { [command.key]: _, ...entries } = group ?? {}
+      return {
+        ...planner,
+        groups: {
+          ...groups,
+          [command.group]: command.pick === null
+            ? entries
+            : { ...entries, [command.key]: choose(can.group, command.pick) }
+        }
+      }
+    }
+  }
+}
+
+// Where a forged op writes, and what it writes.
+const plannerValues: ReadonlyArray<ReadonlyArray<string>> = [
+  ["status"],
+  ...["c1", "c2"].flatMap((c) => [["cards", c, "id"], ["cards", c, "level"], ["cards", c, "color"], [
+    "cards",
+    c,
+    "tags",
+    "t1"
+  ]]),
+  ...["n1", "x1"].flatMap((n) => [["notes", n, "_tag"], ["notes", n, "pinned"], ["notes", n, "mood"]]),
+  ["groups", "g1", "k1"]
+]
+const plannerPresences: ReadonlyArray<ReadonlyArray<string>> = [
+  ["cards", "c1"],
+  ["cards", "c2"],
+  ["cards", "c1", "tags", "t1"],
+  ["notes", "n1"],
+  ["notes", "n2"],
+  ["notes", "n1", "mood"],
+  ["groups", "g1"],
+  ["groups", "g1", "k1"]
+]
+const plannerJson: ReadonlyArray<Schema.Json> = [
+  "open",
+  "gone",
+  "low",
+  "top",
+  "red",
+  "a",
+  "c",
+  "Note",
+  "Card",
+  "ok",
+  true,
+  false,
+  "c1",
+  "c2"
+]
+
+/** The ops of a forged change. A card is placed at the start as it's added. */
+export const forgedPlannerOps = (
+  ops: Extract<typeof PlannerCommand.Type, { readonly _tag: "Forge" }>["ops"]
+): Array<InternalDocument.Op> =>
+  ops.flatMap(({ op, path, value }): Array<InternalDocument.Op> => {
+    if (op === "Set") return [{ _tag: "Set", path: choose(plannerValues, path), value: choose(plannerJson, value) }]
+    const at = choose(plannerPresences, path)
+    return op === "Add" && at[0] === "cards" && at.length === 2
+      ? [{ _tag: "Add", path: at }, { _tag: "Place", path: at, parent: null, side: "R", rightOrigin: null }]
+      : [{ _tag: op, path: at }]
+  })

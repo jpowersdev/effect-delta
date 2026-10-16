@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Equal, Exit, Layer, Option, Predicate, Queue, Random, Schema, Scope, Stream } from "effect"
 import {
+  Authority,
   Delta,
   HistoryStore,
   Relay,
@@ -34,10 +35,16 @@ import {
   Board,
   documentRuns,
   DocumentSession,
+  editPlanner,
+  forgedPlannerOps,
   Fraction,
   initialBoard,
+  initialPlanner,
   letters,
   makeBoards,
+  OldPlanner,
+  Planner,
+  PlannerSession,
   stepBoards,
   syncAll,
   viewOf,
@@ -618,5 +625,140 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
       }).pipe(Random.withSeed(seed))
     }),
     { arbitrary: { ...forgedRuns, runs: 50 } }
+  )
+})
+
+// Schema versions ---------------------------------------------------------
+
+// Replicas on an older and a newer version of a schema, editing and syncing
+// among changes a client of the newer one makes directly, which they take
+// only when an authority on the newer one lets them through.
+
+describe("schema versions", () => {
+  // What a value shows at `path`, as JSON. List items are found by their `id`.
+  const shownAt = (value: unknown, path: ReadonlyArray<string>): string | undefined =>
+    JSON.stringify(partAt(value, path))
+  const ids = (value: unknown, path: ReadonlyArray<string>) =>
+    JSON.stringify((partAt(value, path) as ReadonlyArray<{ readonly id: string }> | undefined)?.map(({ id }) => id))
+
+  it.effect.prop(
+    "replicas on each version write only what they change, and agree with each other and the authority",
+    { session: PlannerSession },
+    Effect.fnUntraced(function*({ session }) {
+      // Every change the authority took, with what its check read.
+      const proposals: Array<{ readonly proposed: ReplicatedDocument.Proposed<Planner>; readonly delta: Delta.Delta }> =
+        []
+      const Reading = Authority.layer({
+        check: (proposal) =>
+          proposal._tag === "Text"
+            ? Effect.fail(new Authority.Rejected({ message: "Planners aren't texts" }))
+            : Effect.map(
+              ReplicatedDocument.readProposal(proposal, Planner, { initial: initialPlanner }),
+              (proposed) => {
+                proposals.push({ proposed, delta: proposal.delta })
+              }
+            )
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      yield* Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const document = Replica.DocumentId.make("planner")
+        const push = (delta: Delta.Delta) => authority.push({ format: Sync.FORMAT, document, delta })
+        const newer = (replica: string) =>
+          ReplicatedDocument.make(Planner, { initial: initialPlanner, replica: Replica.ReplicaId.make(replica) })
+        const older = (replica: string) =>
+          ReplicatedDocument.make(OldPlanner, { initial: initialPlanner, replica: Replica.ReplicaId.make(replica) })
+        const old = yield* older("old")
+        // Edited alike: each writes what its version can.
+        const replicas = [
+          { doc: yield* newer("a"), schema: Planner, version: "new" },
+          { doc: yield* newer("b"), schema: Planner, version: "new" },
+          { doc: old as unknown as ReplicatedDocument.ReplicatedDocument<Planner>, schema: OldPlanner, version: "old" }
+        ] as const
+        const docs = replicas.map(({ doc }) => doc)
+
+        let forged = 0
+        for (const command of session) {
+          switch (command._tag) {
+            case "Sync":
+              if (command.from !== command.to) yield* Replica.exchange(docs[command.from]!, docs[command.to]!)
+              break
+            case "Forge": {
+              const doc = docs[command.replica]!
+              const has = (yield* Replica.delta(doc, VersionVector.empty)) as InternalDelta.DeltaImpl
+              const ops = forgedPlannerOps(command.ops)
+              const delta = InternalDelta.fromChanges([{
+                replica: `forger-${forged++}`,
+                seq: 0,
+                length: ops.length,
+                // On top of everything the replica has.
+                parents: Object.entries(yield* Replica.version(doc)).map(([replica, next]) => ({
+                  replica,
+                  seq: next - 1
+                })),
+                time: Math.max(0, ...[...has.changes.values()].map(({ time }) => time)) + 1,
+                ops
+              }])
+              if ((yield* push(delta))._tag === "Accepted") yield* Replica.receive(doc, delta)
+              break
+            }
+            default: {
+              const { doc, schema, version } = replicas[command.replica]!
+              const before = yield* ReplicatedDocument.get(doc)
+              const since = yield* Replica.version(doc)
+              const value = command._tag === "Same" ? before : editPlanner(version, before, command)
+              yield* ReplicatedDocument.set(doc, value)
+              // It shows what it's given, as its schema reads it.
+              const after = yield* ReplicatedDocument.get(doc)
+              assert.deepStrictEqual(after, Schema.decodeUnknownSync(Schema.toType(schema))(value))
+              // It writes only what changed in what it shows: nothing of what
+              // it can't read, nor a default it shows. A move changes where
+              // the item is, and an entry or item that appears is written
+              // over what was kept of it.
+              const delta = (yield* Replica.delta(doc, since)) as InternalDelta.DeltaImpl
+              for (const op of [...delta.changes.values()].flatMap(({ ops }) => ops)) {
+                const path = op.path ?? []
+                const appears = path.some((_, i) =>
+                  partAt(before, path.slice(0, i + 1)) === undefined &&
+                  partAt(after, path.slice(0, i + 1)) !== undefined
+                )
+                assert.isTrue(
+                  appears || shownAt(before, path) !== shownAt(after, path) ||
+                    (op._tag === "Place" && ids(before, path.slice(0, -1)) !== ids(after, path.slice(0, -1))),
+                  `${version} wrote ${JSON.stringify(op)}`
+                )
+              }
+              // And the authority, on the newer version, takes it.
+              if (delta.changes.size > 0) assert.strictEqual((yield* push(delta))._tag, "Accepted")
+            }
+          }
+        }
+        yield* syncAll(docs)
+
+        const value = yield* ReplicatedDocument.get(docs[0]!)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(docs[1]!), value)
+        const version = yield* Replica.version(docs[0]!)
+        for (const doc of docs) {
+          assert.deepStrictEqual(yield* Replica.version(doc), version)
+          // Setting what it shows writes nothing.
+          yield* ReplicatedDocument.set(doc, yield* ReplicatedDocument.get(doc))
+          assert.deepStrictEqual(yield* Replica.version(doc), version)
+        }
+        // A replica on the older version that takes it all at once, as JSON,
+        // shows what the older one does.
+        const fresh = yield* older("fresh")
+        yield* Replica.receive(fresh, throughJson(yield* Replica.delta(old, VersionVector.empty)))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(fresh), yield* ReplicatedDocument.get(old))
+        // The check read each change as a replica on the newer version shows
+        // it, given them in the order it checked them.
+        const replica = yield* newer("replica")
+        for (const { delta, proposed } of proposals) {
+          assert.deepStrictEqual(proposed.before, yield* ReplicatedDocument.get(replica))
+          yield* Replica.receive(replica, delta)
+          assert.deepStrictEqual(proposed.after, yield* ReplicatedDocument.get(replica))
+        }
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(replica), value)
+      }).pipe(Effect.provide(Reading))
+    }),
+    { arbitrary: documentRuns }
   )
 })
