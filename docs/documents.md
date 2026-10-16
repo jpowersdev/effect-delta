@@ -192,8 +192,8 @@ Anything without its own rule is written and replaced whole.
   across a struct's fields, a text's length, a record's size, or a counter's range. `make` refuses such a
   schema, as a defect. Rules like these belong in an authority's check, which sees every change before anyone
   else does. A class's constructor that throws for some values of its fields is such a check, one `make`
-  can't see: an entry or item holding one is left out, and while a document's own fields hold one, merges and
-  updates fail as a defect.
+  can't see: an entry, item or optional field holding one is left out, and while a required field holds one,
+  the document shows its earlier value, and merges and updates fail as a defect.
 
 ### The initial value
 

@@ -331,10 +331,11 @@ export const List: {
  *
  * A class's constructor is given fields that merges combine, which nobody
  * checked together, so it must take any values its fields can hold. One that
- * throws for some, as a check would, is a check `make` can't see: an entry or
- * item holding such a value is left out, and while the document's own fields
- * hold one, merges and updates fail as a defect, and it shows its earlier
- * value.
+ * throws for some, as a check would, is a check `make` can't see: an entry,
+ * item or optional field holding such values is left out. While a required
+ * field holds them, the document shows its earlier value, updates fail as a
+ * defect before writing anything, and merges and text edits fail as a defect
+ * after they're applied, until a change gives the class values it takes.
  *
  * **Example** (Two copies of a document)
  *
