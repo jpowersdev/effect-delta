@@ -87,6 +87,28 @@ describe("HistoryStore", () => {
       assert.strictEqual(third, "Hello, world")
     }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+  it.effect("persist saves only what the store doesn't have", () => {
+    // Counts the changes each append saves.
+    const appended: Array<number> = []
+    const Counting = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*() {
+      const store = yield* HistoryStore.HistoryStore
+      return {
+        ...store,
+        append: (document, delta) => {
+          appended.push((delta as InternalDelta.DeltaImpl).changes.size)
+          return store.append(document, delta)
+        }
+      }
+    })).pipe(Layer.provide(HistoryStore.layerMemory))
+    return Effect.gen(function*() {
+      yield* Effect.scoped(Effect.flatMap(open("session-1"), (first) => ReplicatedText.insert(first, 0, "Hello")))
+      appended.length = 0
+      // Opened again, with no edits: nothing new to save.
+      yield* Effect.scoped(open("session-2"))
+      assert.deepStrictEqual(appended, [])
+    }).pipe(Effect.provide(Counting))
+  })
+
   it.effect("persist keeps a document across restarts, in either store", () =>
     Effect.forEach([
       HistoryStore.layerMemory,
