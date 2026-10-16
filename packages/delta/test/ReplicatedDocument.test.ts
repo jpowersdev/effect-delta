@@ -435,6 +435,34 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual((yield* converged(ada, ben)).comments, {})
       }))
 
+    it.effect("an edit inside an entry meets the removal it hadn't seen, whatever removal comes with it", () =>
+      Effect.gen(function*() {
+        // Eve's removal is applied after Dan's edit, or before it.
+        for (const eve of ["eve", "a-eve"]) {
+          const ada = yield* make("ada")
+          yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, comments: { c1: comment("ada", "Draft") } }))
+          const others = yield* Effect.forEach(["ben", "dan", eve], (name) => make(name))
+          for (const other of others) yield* Replica.exchange(ada, other)
+          const [ben, dan, last] = others
+          yield* ReplicatedDocument.update(ben!, (doc) => ({ ...doc, comments: {} }))
+          yield* ReplicatedDocument.update(dan!, (doc) => ({ ...doc, comments: { c1: comment("dan", "Draft") } }))
+          // Eve's is the latest removal.
+          yield* TestClock.adjust(1000)
+          yield* ReplicatedDocument.update(last!, (doc) => ({ ...doc, comments: {} }))
+          // Ada has Ben's removal, then gets Dan's edit and Eve's removal together.
+          yield* Replica.exchange(ada, ben!)
+          const together = Delta.combine(
+            yield* Replica.delta(dan!, VersionVector.empty),
+            yield* Replica.delta(last!, VersionVector.empty)
+          )
+          assert.deepStrictEqual(yield* Replica.receive(ada, together), [{
+            _tag: "Removed",
+            path: ["comments", "c1"],
+            replicas: [Replica.ReplicaId.make("ben"), Replica.ReplicaId.make("dan")]
+          }], eve)
+        }
+      }))
+
     it.effect("adding a removed entry back brings back everyone's edits", () =>
       Effect.gen(function*() {
         const { ada, ben } = yield* pair
