@@ -12,11 +12,13 @@ import {
 } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
+import * as InternalShape from "effect-delta/internal/shape"
 import { KeyValueStore } from "effect/persistence"
 import {
   asOld,
   editProject,
   EditSession,
+  expectedOverlaps,
   forgedRuns,
   ForgedSession,
   forgeSession,
@@ -271,30 +273,51 @@ const partAt = (value: unknown, path: ReadonlyArray<string>): unknown => {
   return current
 }
 
-// Checks the overlaps edits reported against the value they came with: a text
+// Checks the overlaps a merge reported against the value it came with: a text
 // overlap's range is in its text, and a removal's entry or item doesn't show.
-// Which overlaps a merge reports depends on what the replica had before it,
-// so they aren't the same however the changes arrive.
-const checkOverlaps = (edits: Iterable<ReplicatedDocument.Edit<unknown>>): void => {
-  for (const edit of edits) {
-    if (edit._tag !== "Remote") continue
-    for (const overlap of edit.overlaps) {
-      const part = partAt(edit.value, overlap.path)
-      switch (overlap._tag) {
-        case "Text":
-          if (Predicate.isString(part)) {
-            assert.isTrue(
-              0 <= overlap.range.start && overlap.range.start <= overlap.range.end && overlap.range.end <= part.length,
-              `${JSON.stringify(overlap)} in ${JSON.stringify(part)}`
-            )
-          }
-          break
-        case "Removed":
-          assert.isUndefined(part, JSON.stringify(overlap))
-          break
-      }
+// And its value and removal overlaps are the ones their rule gives for what
+// the replica had before the merge (`before`) and received in it (up to
+// `after`), in the parts its schema shows. Which overlaps a merge reports
+// depends on what the replica had, so they aren't the same however the
+// changes arrive.
+const checkOverlaps = (
+  edit: ReplicatedDocument.Edit<unknown>,
+  merge: {
+    readonly changes: ReadonlyArray<InternalDocument.AnyChange>
+    readonly before: VersionVector.VersionVector
+    readonly after: VersionVector.VersionVector
+    readonly shape: InternalShape.Shape
+  }
+): void => {
+  if (edit._tag !== "Remote") return
+  for (const overlap of edit.overlaps) {
+    const part = partAt(edit.value, overlap.path)
+    switch (overlap._tag) {
+      case "Text":
+        if (Predicate.isString(part)) {
+          assert.isTrue(
+            0 <= overlap.range.start && overlap.range.start <= overlap.range.end && overlap.range.end <= part.length,
+            `${JSON.stringify(overlap)} in ${JSON.stringify(part)}`
+          )
+        }
+        break
+      case "Removed":
+        assert.isUndefined(part, JSON.stringify(overlap))
+        break
     }
   }
+  const { after, before, changes, shape } = merge
+  const sorted = (overlaps: ReadonlyArray<Replica.Overlap | InternalDocument.Overlap>) =>
+    overlaps.filter(({ _tag }) => _tag !== "Text").map((overlap) => JSON.stringify(overlap)).sort()
+  const received = changes.filter((change) =>
+    change.seq + change.length > VersionVector.get(before, change.replica) &&
+    change.seq + change.length <= VersionVector.get(after, change.replica)
+  )
+  assert.deepStrictEqual(
+    sorted(edit.overlaps),
+    sorted(expectedOverlaps(changes, before, after).filter((overlap) => InternalShape.shows(shape, overlap))),
+    `receiving ${JSON.stringify(received)}`
+  )
 }
 
 describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => {
@@ -337,17 +360,19 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
     }
   })
   // A replica that edits and receives, failing or not, and afterwards says
-  // what its subscribers were told.
-  const watched = <A>(doc: ReplicatedDocument.ReplicatedDocument<A>) =>
+  // what its subscribers were told, having checked the overlaps.
+  const watched = <A>(doc: ReplicatedDocument.ReplicatedDocument<A>, schema: Schema.Top) =>
     Effect.gen(function*() {
       const { edits } = yield* ReplicatedDocument.subscribe(doc)
-      let told = 0
       // Each edit or merge that changes the replica is one edit to tell.
+      const told: Array<{ readonly before: VersionVector.VersionVector; readonly after: VersionVector.VersionVector }> =
+        []
       const tracked = <B, E, R>(effect: Effect.Effect<B, E, R>) =>
         Effect.gen(function*() {
           const before = yield* Replica.version(doc)
           const exit = yield* Effect.exit(effect)
-          if (VersionVector.compare(yield* Replica.version(doc), before) !== "equal") told++
+          const after = yield* Replica.version(doc)
+          if (VersionVector.compare(after, before) !== "equal") told.push({ before, after })
           return exit
         })
       return {
@@ -355,7 +380,14 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         tracked,
         // Received one hop away.
         receive: (delta: Delta.Delta) => Effect.flatMap(hop(delta), (sent) => tracked(Replica.receive(doc, sent))),
-        edits: Effect.suspend(() => Stream.runCollect(Stream.take(edits, told)))
+        edits: Effect.gen(function*() {
+          const all = yield* Stream.runCollect(Stream.take(edits, told.length))
+          const delta = (yield* Replica.delta(doc, VersionVector.empty)) as InternalDelta.DeltaImpl
+          const changes = [...delta.changes.values()]
+          const shape = InternalShape.compile(schema)
+          for (const [i, edit] of all.entries()) checkOverlaps(edit, { changes, ...told[i]!, shape })
+          return all
+        })
       }
     })
   const inOrder = Replica.DocumentId.make("in-order")
@@ -375,7 +407,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         })
         // As the session sends them, a replica and a relay accept the same
         // ones.
-        const doc = yield* watched(yield* make("in-order"))
+        const doc = yield* watched(yield* make("in-order"), Project)
         const changes = yield* forgeSession(strategy, session, (batch) =>
           Effect.gen(function*() {
             const received = yield* doc.receive(InternalDelta.fromChanges(batch))
@@ -385,20 +417,20 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
             return (change: InternalDocument.AnyChange) => kept.changes.has(key(change))
           }))
         const expected = yield* view(doc.doc)
-        checkOverlaps(yield* doc.edits)
+        yield* doc.edits
         assert.deepStrictEqual(yield* fromRelay(relay, inOrder), expected)
 
-        const atOnce = yield* watched(yield* make("at-once"))
+        const atOnce = yield* watched(yield* make("at-once"), Project)
         yield* atOnce.receive(InternalDelta.fromChanges(changes))
         assert.deepStrictEqual(yield* view(atOnce.doc), expected)
-        checkOverlaps(yield* atOnce.edits)
+        yield* atOnce.edits
 
         // One at a time, shuffled and repeated, to a replica that saves them,
         // and to a relay whose subscriber takes what it sends. Behind the
         // relay, a replica that's reopened from what it saved now and then,
         // so it starts from texts saved partway.
         yield* Effect.scoped(Effect.gen(function*() {
-          const oneByOne = yield* watched(yield* make("one-by-one"))
+          const oneByOne = yield* watched(yield* make("one-by-one"), Project)
           yield* HistoryStore.persist(oneByOne.doc, saved)
           let reopened = 0
           const open = Effect.fnUntraced(function*() {
@@ -420,7 +452,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
             }
           }
           assert.deepStrictEqual(yield* view(oneByOne.doc), expected)
-          checkOverlaps(yield* oneByOne.edits)
+          yield* oneByOne.edits
           yield* Scope.close(back.scope, Exit.void)
         })).pipe(Random.withSeed(seed))
         const fromShuffled = yield* fromRelay(relay, shuffled)
@@ -471,8 +503,8 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         // Two peers on the schema and one on an older version of it, editing
         // among forged changes, some stamped far ahead, which they take
         // directly. And one that takes only the forged changes.
-        const peers = [yield* watched(yield* make("a")), yield* watched(yield* make("b"))] as const
-        const old = yield* watched(yield* makeOld("old"))
+        const peers = [yield* watched(yield* make("a"), Project), yield* watched(yield* make("b"), Project)] as const
+        const old = yield* watched(yield* makeOld("old"), OldProject)
         const everyone = [...peers, old] as const
         const forged = yield* make("forged")
         const exchange = Effect.fnUntraced(function*(i: number, j: number) {
@@ -533,10 +565,9 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
           const found = alone.items.find(({ id }) => id === item.id)
           if (found !== undefined) assert.strictEqual(item.extra, found.extra, item.id)
         }
-        for (const peer of peers) checkOverlaps(yield* peer.edits)
+        for (const peer of peers) yield* peer.edits
         // The older one isn't told of overlaps in the parts it doesn't describe.
         const told = yield* old.edits
-        checkOverlaps(told)
         for (const edit of told) {
           for (const { path } of edit._tag === "Remote" ? edit.overlaps : []) {
             assert.isFalse(path[0] === "due" || path[0] === "meta" || path[2] === "extra", JSON.stringify(path))

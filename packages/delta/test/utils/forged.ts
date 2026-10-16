@@ -1,6 +1,7 @@
-import { Effect, Random, Schema, Stream, Struct } from "effect"
-import { Delta, type Replica, ReplicatedDocument, ReplicatedText, Sync } from "effect-delta"
-import type * as InternalDocument from "effect-delta/internal/document"
+import { Effect, Equal, Random, Schema, Stream, Struct } from "effect"
+import { Delta, Replica, ReplicatedDocument, ReplicatedText, Sync, VersionVector } from "effect-delta"
+import * as InternalDelta from "effect-delta/internal/delta"
+import * as InternalDocument from "effect-delta/internal/document"
 import { Fraction, gapAt, itemAt, Which } from "./sessions.ts"
 
 // Changes made directly, as a buggy or malicious client could send them,
@@ -18,6 +19,11 @@ import { Fraction, gapAt, itemAt, Which } from "./sessions.ts"
 // they're sent, the caller says which were kept: later changes don't build on
 // the rest, and their writers carry on under new replica ids, so later
 // changes don't all wait on them.
+//
+// About half are made honestly instead, by extra replicas that take some of
+// the changes made so far and edit as an app does: they write, remove and
+// move the same parts as each other and the forger, without seeing each
+// other's changes, so well-formed changes meet in every way a merge reports.
 
 const Sub = Schema.Struct({ id: Schema.String, note: Schema.optionalKey(ReplicatedDocument.Text) })
 const Tag = Schema.Struct({ label: ReplicatedDocument.Text, n: ReplicatedDocument.Counter })
@@ -30,11 +36,13 @@ const Item = Schema.Struct({
   subs: ReplicatedDocument.List(Sub, { key: "id" })
 })
 
-// Every merge rule, with records and lists inside list items.
+// Every merge rule, with records and lists inside list items, and entries that
+// are counters.
 export const Project = Schema.Struct({
   status: Schema.Literals(["draft", "done"]),
   title: ReplicatedDocument.Text,
   votes: ReplicatedDocument.Counter,
+  scores: Schema.Record(Schema.String, ReplicatedDocument.Counter),
   notes: Schema.Record(Schema.String, Schema.Struct({ body: ReplicatedDocument.Text, pinned: Schema.Boolean })),
   due: Schema.optionalKey(Schema.Literals(["mon", "fri"])),
   meta: Schema.optionalKey(Schema.Struct({ x: ReplicatedDocument.Text, y: Schema.Boolean })),
@@ -43,7 +51,15 @@ export const Project = Schema.Struct({
 })
 export type Project = typeof Project.Type
 
-export const initialProject: Project = { status: "draft", title: "", votes: 0, notes: {}, items: [], vals: [] }
+export const initialProject: Project = {
+  status: "draft",
+  title: "",
+  votes: 0,
+  scores: {},
+  notes: {},
+  items: [],
+  vals: []
+}
 
 // The project as an older version of its schema has it, before the optional
 // fields were added.
@@ -85,13 +101,14 @@ const values: ReadonlyArray<Path> = [
   ...each((i) => [["items", i, "id"], ["items", i, "done"], ["items", i, "extra"], ["items", i, "subs", "s", "id"]])
 ]
 const presences: ReadonlyArray<Path> = [
+  ["scores", "k"],
   ["notes", "a"],
   ["due"],
   ["meta"],
   ["meta", "x"],
   ...each((i) => [["items", i], ["items", i, "tags", "t"], ["items", i, "extra"], ["items", i, "subs", "s"]])
 ]
-const counters: ReadonlyArray<Path> = [["votes"], ...each((i) => [["items", i, "tags", "t", "n"]])]
+const counters: ReadonlyArray<Path> = [["votes"], ["scores", "k"], ...each((i) => [["items", i, "tags", "t", "n"]])]
 // And parts the schema doesn't have, the root among them.
 const anywhere: ReadonlyArray<Path> = [
   ...texts,
@@ -110,6 +127,7 @@ const json: ReadonlyArray<Schema.Json> = ["draft", "done", "i1", "i2", "s", "a",
 // Parts written the way a replica writes them, so lists and entries fill up:
 // their ops, then for a list item, a position at the start of its list.
 const blocks: ReadonlyArray<{ readonly ops: ReadonlyArray<InternalDocument.Op>; readonly item?: Path }> = [
+  { ops: [{ _tag: "Add", path: ["scores", "k"] }, { _tag: "Increment", path: ["scores", "k"], by: 1 }] },
   { ops: [{ _tag: "Add", path: ["notes", "a"] }, { _tag: "Set", path: ["notes", "a", "pinned"], value: false }] },
   { ops: [{ _tag: "Add", path: ["meta"] }, { _tag: "Set", path: ["meta", "y"], value: true }] },
   { ops: [{ _tag: "Set", path: ["vals", "v1"], value: "x" }], item: ["vals", "v1"] },
@@ -189,6 +207,31 @@ const OpCommand = Schema.Union([
   Schema.TaggedStruct("Remove", { where: Where, target: Ref, length: Length, index: Index })
 ])
 
+const ItemKey = Schema.Literals(["i1", "i2"])
+
+// An edit an app makes, whatever the replica shows.
+const HonestEdit = Schema.Union([
+  Schema.TaggedStruct("Status", { status: Project.fields.status }),
+  Schema.TaggedStruct("Due", { due: Schema.optionalKey(Schema.Literals(["mon", "fri"])) }),
+  Schema.TaggedStruct("Vote", { by: Schema.Literals([-1, 1, 2]) }),
+  Schema.TaggedStruct("Score", { remove: Schema.Boolean, by: Schema.Literals([1, 2]) }),
+  Schema.TaggedStruct("Note", { remove: Schema.Boolean, pinned: Schema.Boolean }),
+  Schema.TaggedStruct("Meta", { remove: Schema.Boolean, y: Schema.Boolean }),
+  // Adds or moves an item, or removes it.
+  Schema.TaggedStruct("Item", { key: ItemKey, at: Fraction, remove: Schema.Boolean }),
+  // The rest change an item, adding it if it doesn't show.
+  Schema.TaggedStruct("Done", { key: ItemKey, done: Schema.Boolean }),
+  Schema.TaggedStruct("Extra", { key: ItemKey, extra: Schema.optionalKey(Schema.Literals(["a", "b"])) }),
+  Schema.TaggedStruct("Tag", { key: ItemKey, remove: Schema.Boolean, by: Schema.Literals([0, 1]) }),
+  // Adds its sub, with or without its note, or removes it.
+  Schema.TaggedStruct("Sub", { key: ItemKey, remove: Schema.Boolean, note: Schema.Boolean }),
+  Schema.TaggedStruct("Value", { at: Fraction, value: Schema.Literals(["x", "y"]), remove: Schema.Boolean })
+])
+
+// Types `text` into one of `typed`, whether or not its part shows, or with "",
+// removes up to two characters.
+const Typing = Schema.Struct({ where: Fraction, at: Fraction, text: Schema.Literals(["x", "yz", ""]) })
+
 const ChangeCommand = Schema.Struct({
   writer: Which,
   // Whether it's made on top of its writer's last change, as a replica's is.
@@ -208,7 +251,11 @@ const ChangeCommand = Schema.Struct({
   ops: Schema.Array(OpCommand).check(Schema.isMaxLength(3)),
   // How it's sent: 0 and 1 now, with any sent together with it; 2 together
   // with the next one; 3 after the next ones sent.
-  send: between(0, 3)
+  send: between(0, 3),
+  // Made instead by the writer's honest replica, after it takes `others` and
+  // what they were made on top of: typing if there's `typing`, or else the
+  // edit. The rest is ignored.
+  honest: Schema.optionalKey(Schema.Struct({ edit: HonestEdit, typing: Schema.optionalKey(Typing) }))
 })
 
 export const ForgedSession = Schema.Array(ChangeCommand).check(Schema.isMaxLength(30))
@@ -252,7 +299,7 @@ const makeForger = (strategy: Replica.Strategy, options: { readonly ahead: boole
     names[writer] = `w${writer}-${renamed[writer]}`
   }
 
-  const forge = (command: typeof ChangeCommand.Type): InternalDocument.AnyChange => {
+  const forgeDirectly = (command: typeof ChangeCommand.Type): InternalDocument.AnyChange => {
     const seqOf = (replica: string) => command.quirk === 3 ? -1 : next.get(replica) ?? 0
     while (used.has(`${seqOf(names[command.writer]!)}@${names[command.writer]}`)) rename(command.writer)
     const replica = names[command.writer]!
@@ -382,6 +429,57 @@ const makeForger = (strategy: Replica.Strategy, options: { readonly ahead: boole
     return change
   }
 
+  // One replica per writer, made when it first edits.
+  const honest = new Map<number, ReplicatedDocument.ReplicatedDocument<Project>>()
+  const forgeHonestly = Effect.fnUntraced(
+    function*(writer: number, others: ReadonlyArray<number>, edit: Edit) {
+      const replica = `h${writer}`
+      let doc = honest.get(writer)
+      if (doc === undefined) {
+        doc = yield* ReplicatedDocument.make(Project, {
+          initial: initialProject,
+          strategy,
+          replica: Replica.ReplicaId.make(replica)
+        })
+        honest.set(writer, doc)
+      }
+      const taken = new Set<number>()
+      for (const at of others) {
+        const i = pick(made.flatMap((other, i) => other.dropped ? [] : [i]), at)
+        if (i === undefined) continue
+        taken.add(i)
+        for (const before of made[i]!.past) taken.add(before)
+      }
+      // Bad ones among them are refused, and the rest taken.
+      yield* Effect.exit(Replica.receive(doc, InternalDelta.fromChanges([...taken].map((i) => made[i]!.change))))
+      const version = yield* Replica.version(doc)
+      yield* editHonestly(doc, edit)
+      const has = (yield* Replica.delta(doc, VersionVector.empty)) as InternalDelta.DeltaImpl
+      const change = [...has.changes.values()].find((change) =>
+        change.replica === replica && change.seq >= VersionVector.get(version, replica)
+      )
+      if (change === undefined) return undefined
+      // Made on top of everything it had applied.
+      const applied = new Set(
+        [...has.changes.values()].filter((change) =>
+          change.seq + change.length <= VersionVector.get(version, change.replica)
+        )
+      )
+      const past = new Set(made.flatMap((other, i) => applied.has(other.change) ? [i] : []))
+      made.push({ change, past, ids: idsOf(change), dropped: false })
+      return change
+    }
+  )
+
+  const forge = (command: typeof ChangeCommand.Type): Effect.Effect<InternalDocument.AnyChange | undefined> =>
+    command.honest === undefined
+      ? Effect.succeed(forgeDirectly(command))
+      : forgeHonestly(
+        command.writer,
+        command.others,
+        command.honest.typing === undefined ? command.honest.edit : { _tag: "Type", ...command.honest.typing }
+      )
+
   // Says that a change wasn't kept.
   const drop = (change: InternalDocument.AnyChange): void => {
     const found = made.find((other) => other.change === change)!
@@ -421,7 +519,8 @@ export const forgeSession = <E, R>(
       for (const change of sent) if (!kept(change)) forger.drop(change)
     })
     for (const command of session) {
-      const change = forger.forge(command)
+      const change = yield* forger.forge(command)
+      if (change === undefined) continue
       changes.push(change)
       if (command.send === 3) late.push(change)
       else together.push(change)
@@ -436,6 +535,140 @@ export const forgeSession = <E, R>(
     yield* flush(late)
     return changes
   })
+
+// The texts honest edits type into, few so they often meet: one always there,
+// one in an entry, and one in a list item and an optional field in it.
+const typed: ReadonlyArray<Path> = [
+  ["title"],
+  ["notes", "a", "body"],
+  ["items", "i1", "title"],
+  ["items", "i1", "subs", "s", "note"]
+]
+
+// The characters a change inserted into each text, and the positions it placed
+// in each list, by path.
+const idsOf = (change: InternalDocument.AnyChange): Map<string, Array<Id>> => {
+  const ids = new Map<string, Array<Id>>()
+  const note = (path: Path, id: Id) => {
+    const k = pathKey(path)
+    ids.set(k, [...(ids.get(k) ?? []), id])
+  }
+  let seq = change.seq
+  for (const op of change.ops) {
+    if (op._tag === "Insert") {
+      for (let i = 0; i < op.text.length; i++) {
+        note(InternalDocument.pathOf(op), { replica: change.replica, seq: seq + i })
+      }
+    } else if (op._tag === "Place") {
+      note(op.path.slice(0, -1), { replica: change.replica, seq })
+    }
+    seq += InternalDocument.opLength(op)
+  }
+  return ids
+}
+
+type ProjectItem = Project["items"][number]
+
+type Edit = typeof HonestEdit.Type | { readonly _tag: "Type" } & typeof Typing.Type
+
+// Makes an honest edit to a project. Parts that come back keep the texts they
+// had.
+const editHonestly = Effect.fnUntraced(function*(
+  doc: ReplicatedDocument.ReplicatedDocument<Project>,
+  edit: Edit
+) {
+  const update = (f: (project: Project) => Project) => Effect.orDie(ReplicatedDocument.update(doc, f))
+  const textAt = (path: Path) => ReplicatedDocument.text(doc, path as never)
+  const kept = (path: Path) => ReplicatedText.get(textAt(path))
+  // Changes an item, adding it at the end if it doesn't show.
+  const inItem = (key: string, f: (item: ProjectItem) => ProjectItem) =>
+    Effect.flatMap(kept(["items", key, "title"]), (title) =>
+      update((project) => {
+        const found = project.items.find(({ id }) => id === key)
+        return {
+          ...project,
+          items: found === undefined
+            ? [...project.items, f({ id: key, title, done: false, tags: {}, subs: [] })]
+            : project.items.map((item) => item === found ? f(item) : item)
+        }
+      }))
+  switch (edit._tag) {
+    case "Status":
+      return yield* update((project) => ({ ...project, status: edit.status }))
+    case "Due":
+      return yield* update(({ due: _, ...project }) => edit.due === undefined ? project : { ...project, due: edit.due })
+    case "Vote":
+      return yield* update((project) => ({
+        ...project,
+        votes: Math.max(Number.MIN_SAFE_INTEGER, Math.min(Number.MAX_SAFE_INTEGER, project.votes + edit.by))
+      }))
+    case "Type": {
+      const text = textAt(pick(typed, edit.where)!)
+      const before = yield* ReplicatedText.get(text)
+      if (edit.text !== "") {
+        return yield* Effect.orDie(ReplicatedText.insert(text, gapAt(edit.at, before.length), edit.text))
+      }
+      if (before.length === 0) return
+      const index = itemAt(edit.at, before.length)
+      return yield* Effect.orDie(ReplicatedText.remove(text, index, Math.min(2, before.length - index)))
+    }
+    case "Score":
+      return yield* update(({ scores: { k, ...scores }, ...project }) => ({
+        ...project,
+        scores: edit.remove ? scores : { ...scores, k: (k ?? 0) + edit.by }
+      }))
+    case "Note": {
+      const body = yield* kept(["notes", "a", "body"])
+      return yield* update(({ notes: { a: _, ...notes }, ...project }) => ({
+        ...project,
+        notes: edit.remove ? notes : { ...notes, a: { body, pinned: edit.pinned } }
+      }))
+    }
+    case "Meta": {
+      const x = yield* kept(["meta", "x"])
+      return yield* update(({ meta: _, ...project }) => edit.remove ? project : { ...project, meta: { x, y: edit.y } })
+    }
+    case "Item": {
+      const title = yield* kept(["items", edit.key, "title"])
+      return yield* update((project) => {
+        const found = project.items.find(({ id }) => id === edit.key)
+        const items = project.items.filter(({ id }) => id !== edit.key)
+        if (edit.remove) return { ...project, items }
+        const item = found ?? { id: edit.key, title, done: false, tags: {}, subs: [] }
+        const index = gapAt(edit.at, items.length)
+        return { ...project, items: [...items.slice(0, index), item, ...items.slice(index)] }
+      })
+    }
+    case "Done":
+      return yield* inItem(edit.key, (item) => ({ ...item, done: edit.done }))
+    case "Extra":
+      return yield* inItem(
+        edit.key,
+        ({ extra: _, ...item }) => edit.extra === undefined ? item : { ...item, extra: edit.extra }
+      )
+    case "Tag": {
+      const label = yield* kept(["items", edit.key, "tags", "t", "label"])
+      return yield* inItem(edit.key, ({ tags: { t, ...tags }, ...item }) => ({
+        ...item,
+        tags: edit.remove ? tags : { ...tags, t: { label: t?.label ?? label, n: (t?.n ?? 0) + edit.by } }
+      }))
+    }
+    case "Sub": {
+      const note = yield* kept(["items", edit.key, "subs", "s", "note"])
+      return yield* inItem(edit.key, (item) => ({
+        ...item,
+        subs: edit.remove ? [] : [edit.note ? { id: "s", note } : { id: "s" }]
+      }))
+    }
+    case "Value":
+      return yield* update((project) => {
+        const { vals } = project
+        if (edit.remove) return { ...project, vals: vals.filter((_, i) => i !== itemAt(edit.at, vals.length)) }
+        const index = gapAt(edit.at, vals.length)
+        return { ...project, vals: [...vals.slice(0, index), edit.value, ...vals.slice(index)] }
+      })
+  }
+})
 
 // Sending --------------------------------------------------------------------
 
@@ -534,3 +767,177 @@ export const editProject = Effect.fnUntraced(function*(
       return yield* options.reopen
   }
 })
+
+// Overlaps -------------------------------------------------------------------
+
+type Overlap = Exclude<InternalDocument.Overlap, { readonly _tag: "Text" }>
+
+interface Written {
+  readonly replica: string
+  readonly seq: number
+  readonly time: number
+  /** What its change's author had seen. */
+  readonly past: VersionVector.VersionVector
+  readonly path: Path
+  readonly key: string
+  /** A value, whether the part exists, a list item's position, or an edit inside the part. */
+  readonly kind: "value" | "presence" | "place" | "inside"
+  readonly value?: Schema.Json
+  readonly exists?: boolean
+}
+
+const saw = (by: Written, write: Written): boolean =>
+  by.replica === write.replica ? write.seq < by.seq : (by.past[write.replica] ?? 0) > write.seq
+
+const isLater = (a: Written, b: Written): boolean =>
+  a.time !== b.time ? a.time > b.time : a.replica !== b.replica ? a.replica > b.replica : a.seq > b.seq
+
+const latest = (writes: ReadonlyArray<Written>): Written | undefined =>
+  writes.reduce<Written | undefined>(
+    (found, write) => found === undefined || isLater(write, found) ? write : found,
+    undefined
+  )
+
+// A change's writes, worked out once: its parents are among `changes`.
+const written = new WeakMap<InternalDocument.AnyChange, ReadonlyArray<Written>>()
+const pasts = new WeakMap<InternalDocument.AnyChange, VersionVector.VersionVector>()
+
+const pastOf = (
+  change: InternalDocument.AnyChange,
+  changes: ReadonlyArray<InternalDocument.AnyChange>
+): VersionVector.VersionVector => {
+  let past = pasts.get(change)
+  if (past === undefined) {
+    const seen: Record<string, number> = {}
+    for (const parent of change.parents) {
+      const owner = changes.find((other) =>
+        other.replica === parent.replica && other.seq <= parent.seq && parent.seq < other.seq + other.length
+      )!
+      for (const [replica, next] of Object.entries(pastOf(owner, changes))) {
+        seen[replica] = Math.max(seen[replica] ?? 0, next)
+      }
+      seen[parent.replica] = Math.max(seen[parent.replica] ?? 0, parent.seq + 1)
+    }
+    past = seen
+    pasts.set(change, past)
+  }
+  return past
+}
+
+// An op edits inside every part above it, and a text or counter op inside its
+// own part too.
+const writesOf = (
+  change: InternalDocument.AnyChange,
+  changes: ReadonlyArray<InternalDocument.AnyChange>
+): ReadonlyArray<Written> => {
+  let writes = written.get(change)
+  if (writes === undefined) {
+    const found: Array<Written> = []
+    const past = pastOf(change, changes)
+    let seq = change.seq
+    for (const op of change.ops) {
+      const path = InternalDocument.pathOf(op)
+      const write = (kind: Written["kind"], at: Path, rest?: Pick<Written, "value" | "exists">) =>
+        found.push({ replica: change.replica, seq, time: change.time, past, path: at, key: pathKey(at), kind, ...rest })
+      for (let i = 0; i < path.length; i++) write("inside", path.slice(0, i))
+      switch (op._tag) {
+        case "Set":
+          write("value", path, { value: op.value })
+          write("presence", path, { exists: true })
+          break
+        case "Add":
+          write("presence", path, { exists: true })
+          break
+        case "Unset":
+          write("presence", path, { exists: false })
+          break
+        case "Place":
+          write("place", path)
+          break
+        default:
+          write("inside", path)
+      }
+      seq += InternalDocument.opLength(op)
+    }
+    writes = found
+    written.set(change, writes)
+  }
+  return writes
+}
+
+const byPath = (writes: ReadonlyArray<Written>): Map<string, Array<Written>> => {
+  const paths = new Map<string, Array<Written>>()
+  for (const write of writes) {
+    const at = paths.get(write.key)
+    if (at === undefined) paths.set(write.key, [write])
+    else at.push(write)
+  }
+  return paths
+}
+
+/**
+ * The value and removal overlaps a merge reports, by their rule: a write the
+ * replica had meets one it received that hadn't seen it. `Value` where they
+ * wrote different values, said differently whether the part exists, or both
+ * moved its item; `Removed` where one removed the part and the other edited
+ * inside it or moved it, if it ends removed. `changes` are every change the
+ * replica has, and `before` and `after` its versions around the merge.
+ */
+export const expectedOverlaps = (
+  changes: ReadonlyArray<InternalDocument.AnyChange>,
+  before: VersionVector.VersionVector,
+  after: VersionVector.VersionVector
+): Array<Overlap> => {
+  const within = (version: VersionVector.VersionVector) => (change: InternalDocument.AnyChange) =>
+    change.seq + change.length <= VersionVector.get(version, change.replica)
+  const applied = changes.filter(within(after))
+  const writes = (changes: ReadonlyArray<InternalDocument.AnyChange>) =>
+    changes.flatMap((change) => writesOf(change, applied))
+  const had = byPath(writes(applied.filter(within(before))))
+  const received = writes(applied.filter((change) => !within(before)(change)))
+  const all = byPath([...[...had.values()].flat(), ...received])
+
+  const found = new Map<
+    string,
+    { tag: Overlap["_tag"]; path: Path; replicas: Set<string>; over: Set<Written["kind"]> }
+  >()
+  const meet = (tag: Overlap["_tag"], write: Written, other: Written, over: Written["kind"]) => {
+    const k = `${tag}${write.key}`
+    const entry = found.get(k) ?? { tag, path: write.path, replicas: new Set(), over: new Set() }
+    entry.replicas.add(write.replica).add(other.replica)
+    entry.over.add(over)
+    found.set(k, entry)
+  }
+  const removes = (write: Written) => write.kind === "presence" && write.exists === false
+  const editsInside = (write: Written) => write.kind === "inside" || write.kind === "place"
+  for (const write of received) {
+    for (const other of had.get(write.key) ?? []) {
+      if (saw(write, other)) continue
+      if (write.kind === other.kind) {
+        const differ = write.kind === "value"
+          ? !Equal.equals(write.value, other.value)
+          : write.kind === "presence"
+          ? write.exists !== other.exists
+          : write.kind === "place"
+        if (differ) meet("Value", write, other, write.kind)
+      }
+      if ((removes(write) && editsInside(other)) || (editsInside(write) && removes(other))) {
+        meet("Removed", write, other, "presence")
+      }
+    }
+  }
+
+  const at = (path: Path, kind: Written["kind"]) =>
+    latest((all.get(pathKey(path)) ?? []).filter((write) => write.kind === kind))
+  return [...found.values()].flatMap(({ over, path, replicas, tag }): Array<Overlap> => {
+    const presence = at(path, "presence")
+    const sorted = [...replicas].sort()
+    if (tag === "Removed") return presence?.exists === false ? [{ _tag: "Removed", path, replicas: sorted }] : []
+    // Whose write shows: a removal that won, or else the latest of what they
+    // wrote.
+    const kept = presence !== undefined && (presence.exists === false || (over.size === 1 && over.has("presence")))
+      ? presence
+      : at(path, over.has("value") ? "value" : "place")!
+    return [{ _tag: "Value", path, replicas: sorted, kept: kept.replica }]
+  })
+}
