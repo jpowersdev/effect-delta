@@ -194,8 +194,9 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
     receive: (delta) =>
       state.confirmed !== undefined
         ? Effect.fail(deltaError(new Replica.AuthorityOnly()))
-        : locked(engine, Effect.suspend(() => receive(engine, delta as InternalDelta.DeltaImpl))),
-    accept: (delta) => locked(engine, Effect.suspend(() => receive(engine, delta as InternalDelta.DeltaImpl))),
+        : locked(engine, Effect.suspend(() => receive(engine, delta as InternalDelta.DeltaImpl, { overlaps: true }))),
+    accept: (delta) =>
+      locked(engine, Effect.suspend(() => receive(engine, delta as InternalDelta.DeltaImpl, { overlaps: true }))),
     outgoing: (since) =>
       locked(
         engine,
@@ -227,8 +228,11 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
     restore: (stored) => {
       // A change saved while it waited, which turned out to be bad, is
       // dropped again, as a relay drops it when it loads.
-      const restore = (delta: InternalDelta.DeltaImpl) =>
-        receive(engine, delta).pipe(Effect.catchReason("DeltaError", "Malformed", () => Effect.void), Effect.asVoid)
+      const restore = (delta: InternalDelta.DeltaImpl, options: { readonly overlaps: boolean }) =>
+        receive(engine, delta, options).pipe(
+          Effect.catchReason("DeltaError", "Malformed", () => Effect.void),
+          Effect.asVoid
+        )
       return locked(
         engine,
         Effect.suspend(() => {
@@ -256,13 +260,14 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
               )
               state.document = loaded
               const after = InternalDelta.fromChanges(changes.filter((change) => !inSnapshot(change)))
+              // Loaded, as the snapshot's were, so they don't meet them.
               return Effect.andThen(
                 publish(engine, { _tag: "Remote", texts, overlaps: [], message: "" }),
-                restore(after)
+                restore(after, { overlaps: false })
               )
             }
           }
-          return restore(all)
+          return restore(all, { overlaps: true })
         })
       )
     },
@@ -319,7 +324,8 @@ const isUnconfirmed = (state: State, change: InternalDocument.AnyChange): boolea
 
 const receive = (
   engine: Engine,
-  delta: InternalDelta.DeltaImpl
+  delta: InternalDelta.DeltaImpl,
+  options: { readonly overlaps: boolean }
 ): Effect.Effect<ReadonlyArray<Replica.Overlap>, Replica.DeltaError> => {
   const { state } = engine
   const { history } = state.document
@@ -339,7 +345,7 @@ const receive = (
   if (arrived.reused !== undefined) return reused(arrived.reused)
 
   // A bad change is dropped, and the rest are applied without it.
-  const integrated = InternalDocument.integrateReady(state.document, { overlaps: true })
+  const integrated = InternalDocument.integrateReady(state.document, options)
   const overlaps = integrated.overlaps.filter(engine.model.shows).map(toOverlap)
   const published = integrated.applied === 0
     ? Effect.void
