@@ -61,6 +61,11 @@ describe("ReplicatedDocument", () => {
     )
   })
 
+  it("a document takes only its own type's values", () => {
+    expect(doc).type.not.toBeAssignableTo<ReplicatedDocument.ReplicatedDocument<{ readonly status: string }>>()
+    expect(doc.pipe).type.not.toBeCallableWith(ReplicatedDocument.set({ nonsense: 1 }))
+  })
+
   it("set and update are pipeable", () => {
     expect(doc.pipe(ReplicatedDocument.set(initial))).type.toBe<Effect.Effect<void, Schema.SchemaError>>()
     expect(doc.pipe(ReplicatedDocument.update((value) => ({ ...value, status: "review" })))).type.toBe<
