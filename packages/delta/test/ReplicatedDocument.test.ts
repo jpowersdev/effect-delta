@@ -1236,6 +1236,34 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), { votes: 1, priority: "urgent" })
       }))
 
+    it.effect("an optional field whose union has undefined among other members can't read what's undefined", () =>
+      Effect.gen(function*() {
+        const Ticket = Schema.Struct({
+          votes: ReplicatedDocument.Counter,
+          due: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number, Schema.Undefined]))
+        })
+        const TicketV2 = Schema.Struct({
+          ...Ticket.fields,
+          due: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number, Schema.Null]))
+        })
+        const old = yield* ReplicatedDocument.make(Ticket, {
+          initial: { votes: 0 },
+          replica: Replica.ReplicaId.make("old")
+        })
+        const updated = yield* ReplicatedDocument.make(TicketV2, {
+          initial: { votes: 0 },
+          replica: Replica.ReplicaId.make("new")
+        })
+        yield* ReplicatedDocument.update(updated, (ticket) => ({ ...ticket, due: null }))
+        yield* Replica.exchange(old, updated)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(old), { votes: 0 })
+
+        // Its own edits leave it alone.
+        yield* ReplicatedDocument.update(old, (ticket) => ({ ...ticket, votes: 1 }))
+        yield* Replica.exchange(old, updated)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), { votes: 1, due: null })
+      }))
+
     it.effect("an older schema is told only of overlaps between writes it can read", () =>
       Effect.gen(function*() {
         const V3 = Schema.Struct({
