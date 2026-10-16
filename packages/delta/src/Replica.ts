@@ -332,6 +332,10 @@ export const delta: {
  * once and in any order relative to others. Changes that arrive before the
  * changes they were made on top of wait inside the replica until those arrive.
  *
+ * When it fails with `Malformed`, the rest of the delta is still applied, and
+ * subscribers are told about it, overlaps included; only the returned
+ * overlaps are lost.
+ *
  * @stability unstable
  * @category combinators
  * @since 0.1.0
