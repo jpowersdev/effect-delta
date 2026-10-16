@@ -85,6 +85,18 @@ describe("ReplicatedDocument", () => {
           { tasks: [] },
           `required "id" field`
         )
+        // To Schema, a record with literal keys among others is a struct with
+        // a rest: its literal keys are fields.
+        yield* refuses(
+          Schema.Struct({ panes: Schema.Record(Schema.Union([Schema.Literal("main"), Schema.String]), Schema.Int) }),
+          { panes: { main: 0 } },
+          "a struct can't have a rest"
+        )
+        yield* refuses(
+          Schema.StructWithRest(Schema.Struct({ title: Schema.String }), [Schema.Record(Schema.String, Schema.Int)]),
+          { title: "" },
+          "a struct can't have a rest"
+        )
       }))
 
     it.effect("refuses an optional field with a constructor default, which would show while it's absent", () =>
@@ -681,6 +693,26 @@ describe("ReplicatedDocument", () => {
         const delta = (yield* Replica.delta(ada, VersionVector.empty)) as InternalDelta.DeltaImpl
         const paths = [...delta.changes.values()].flatMap((change) => change.ops.map((op) => op.path))
         assert.deepStrictEqual(paths, [["byId", "user-1"]])
+      }))
+
+    it.effect("a record whose keys fit any of several patterns merges entry by entry", () =>
+      Effect.gen(function*() {
+        const Key = Schema.Union([
+          Schema.TemplateLiteral(["user-", Schema.String]),
+          Schema.TemplateLiteral(["team-", Schema.String])
+        ])
+        const Access = Schema.Struct({ notes: Schema.Record(Key, ReplicatedDocument.Text) })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Access, { initial: { notes: {} }, replica: Replica.ReplicaId.make(replica) })
+        const ada = yield* open("ada")
+        const ben = yield* open("ben")
+        yield* ReplicatedDocument.update(ada, () => ({ notes: { "user-ada": "Mine" } }))
+        yield* ReplicatedDocument.update(ben, () => ({ notes: { "team-core": "Ours" } }))
+        yield* Replica.exchange(ada, ben)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ada), {
+          notes: { "team-core": "Ours", "user-ada": "Mine" }
+        })
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
       }))
 
     it.effect("an optional field comes and goes", () =>
