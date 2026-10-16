@@ -31,10 +31,10 @@ describe("VersionVector", () => {
 
   it("a replica id can't be __proto__, which a version vector can't hold", () => {
     assert.isTrue(Exit.isFailure(Schema.decodeUnknownExit(Replica.ReplicaId)("__proto__")))
-    // Parsed, so `__proto__` is a key rather than the object's prototype.
-    assert.isTrue(
-      Exit.isFailure(Schema.decodeUnknownExit(VersionVector.VersionVector)(JSON.parse(`{ "__proto__": 1 }`)))
-    )
+    // Parsed, so `__proto__` is a key rather than the object's prototype. A
+    // version vector leaves it out, as it does any key that isn't a replica id.
+    const decoded = Schema.decodeUnknownSync(VersionVector.VersionVector)(JSON.parse(`{ "__proto__": 1, "a": 2 }`))
+    assert.deepStrictEqual(Object.keys(decoded), ["a"])
     const change = {
       replica: "__proto__",
       seq: 0,
