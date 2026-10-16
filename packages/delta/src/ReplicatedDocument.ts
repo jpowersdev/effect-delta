@@ -233,8 +233,8 @@ export const Text: Schema.String = Schema.String.annotate({ [InternalShape.RuleK
 
 /**
  * Marks a whole number as a counter, which merges by adding: two concurrent
- * increments of 1 make 2. `update` writes the difference between the old
- * value and the new one.
+ * increments of 1 make 2. `update` writes the difference between the total
+ * and the new value.
  *
  * **Details**
  *

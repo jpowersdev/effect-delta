@@ -599,6 +599,8 @@ const readItem = (shape: List, item: Source, memo: Memo): unknown => {
 }
 
 const safeIntegers = { minimum: globalThis.Number.MIN_SAFE_INTEGER, maximum: globalThis.Number.MAX_SAFE_INTEGER }
+const zero = BigInt(0)
+const largestStep = BigInt(globalThis.Number.MAX_SAFE_INTEGER)
 
 const share = (memo: Memo, path: Path.Path, parts: ReadonlyArray<unknown>, build: () => unknown): unknown => {
   const k = Path.key(path)
@@ -656,8 +658,14 @@ const planAt = (
       return
     }
     case "Counter": {
-      const by = (after as number) - (readAt(shape, documentAt(document, path), initial, memo) as number)
-      if (by !== 0) intents.push({ _tag: "Increment", path, by })
+      // From the exact total, which reads only as near as a safe integer
+      // can, in steps an op can carry.
+      const total = BigInt((initial?.value as number | undefined) ?? 0) + InternalDocument.totalAt(document, path)
+      for (let by = BigInt(after as number) - total; by !== zero;) {
+        const step = by > largestStep ? largestStep : by < -largestStep ? -largestStep : by
+        intents.push({ _tag: "Increment", path, by: globalThis.Number(step) })
+        by -= step
+      }
       return
     }
     case "Value": {

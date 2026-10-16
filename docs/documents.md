@@ -135,7 +135,9 @@ work per field. With replay, a field replays only the changes that touched it.
 A counter holds whole numbers. Fractions added in a different order on each replica can round differently in
 floating point, so replicas would disagree. An `update` that takes a counter from 5 to 7 records +2, and
 concurrent +2 and +3 make 10. Totals are kept exactly, because whole numbers past 2^53 round too; a total
-past the safe integers reads as the nearest one, the same on every replica, so it's still an `Int`.
+past the safe integers reads as the nearest one, the same on every replica, so it's still an `Int`. `update`
+records the difference from the exact total, in as many increments as it takes, so the counter then shows
+the value it was given.
 
 ### Lists
 

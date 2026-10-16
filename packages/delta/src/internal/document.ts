@@ -318,7 +318,14 @@ export const valuesAt = (document: Document, path: Path.Path): ReadonlyArray<Val
 export const exists = (document: Document, path: Path.Path): boolean => slot(document, path)?.presence?.exists ?? false
 
 /** @internal */
-export const counterAt = (document: Document, path: Path.Path): number => Number(slot(document, path)?.counter ?? 0)
+export const counterAt = (document: Document, path: Path.Path): number => Number(totalAt(document, path))
+
+/**
+ * The exact sum of the counter at `path`'s increments.
+ *
+ * @internal
+ */
+export const totalAt = (document: Document, path: Path.Path): bigint => slot(document, path)?.counter ?? BigInt(0)
 
 /**
  * The names of the paths written under `path`, in order.
