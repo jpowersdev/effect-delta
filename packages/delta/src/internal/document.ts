@@ -475,7 +475,7 @@ class Found {
     entry.over.add(over)
   }
   list(document: Document): Array<Overlap> {
-    // A removal can win partway through a batch and lose to a later write.
+    // A removal is reported where it may win, and listed only if it does.
     return [...this.found.values()].filter(({ path, tag }) => tag === "Value" || !exists(document, path)).map(
       ({ over, path, replicas, tag }) => {
         const sorted = [...replicas].sort(compareReplica)
@@ -996,10 +996,7 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
         if (moved.length > 0) {
           found.add("Value", op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
         }
-        // A move that a removal it hadn't seen wins over.
-        if (at.presence?.exists === false && found.had(at.presence) && !seen(place, at.presence)) {
-          found.add("Removed", op.path, [at.presence.replica, place.replica], "presence")
-        }
+        reportRemovals(found, at, place)
       }
       refreshPosition(at)
       break
@@ -1018,9 +1015,9 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
     if (differing.length > 0) {
       found.add("Value", at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
     }
-    // A removal that wins over edits under the entry, or moves of the item, it
-    // hadn't seen.
-    if (!write.exists && at.presence === write) {
+    // A removal over edits under the entry, or moves of the item, it hadn't
+    // seen, if it's removed in the end.
+    if (!write.exists) {
       const editors = [
         ...Object.entries(found.below(at)).filter(([replica, next]) =>
           replica !== write.replica && next > (write.past[replica] ?? 0)
@@ -1036,7 +1033,7 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
 }
 
 // Records an op of `length` sequence numbers under every path above it, and
-// reports an edit inside an entry that a removal it hadn't seen wins over.
+// reports an edit inside an entry that removals it hadn't seen may win over.
 const noteBelow = (
   document: Document,
   path: Path.Path,
@@ -1048,12 +1045,19 @@ const noteBelow = (
     const above = ensureSlot(document, prefix)
     found?.writingBelow(above)
     above.below[write.replica] = Math.max(above.below[write.replica] ?? 0, write.seq + length)
-    const presence = above.presence
-    if (
-      found !== undefined && presence !== undefined && !presence.exists && found.had(presence) && !seen(write, presence)
-    ) {
-      found.add("Removed", prefix, [presence.replica, write.replica], "presence")
-    }
+    if (found !== undefined) reportRemovals(found, above, write)
+  }
+}
+
+// Reports a write at or under `at` against every removal there it hadn't
+// seen, whichever is latest now: the merge lists it if `at` ends removed.
+const reportRemovals = (found: Found, at: Slot, write: Write): void => {
+  const removals = unseenBy(at, write, at.presences).filter((other) => !other.exists && found.had(other))
+  if (removals.length > 0) {
+    found.add("Removed", at.path, [
+      write.replica,
+      ...removals.map(({ replica }) => replica)
+    ], "presence")
   }
 }
 
