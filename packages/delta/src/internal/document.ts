@@ -203,8 +203,11 @@ export interface Slot {
   readonly presences: Array<PresenceWrite>
   /** The latest of them. */
   presence: PresenceWrite | undefined
-  /** Per replica, the sequence number after its last op under this path. */
-  readonly below: Record<string, number>
+  /**
+   * Per replica, the sequence number after its last edit inside this path: an
+   * op under it, or on the text or counter it holds.
+   */
+  readonly inside: Record<string, number>
   /** Per replica, the sequence number after its last write of a value, presence or position here. */
   readonly written: Record<string, number>
   /** For a list: its items' positions. */
@@ -260,7 +263,7 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
       values: [],
       presences: [],
       presence: undefined,
-      below: {},
+      inside: {},
       written: {},
       list: undefined,
       places: []
@@ -447,7 +450,7 @@ class Found {
   // Writes meet only what was here before the merge, as text edits do: two
   // that both arrive in it, as when a document loads, don't count.
   private readonly fresh = new Set<Write>()
-  private readonly belowBefore = new Map<Slot, Record<string, number>>()
+  private readonly insideBefore = new Map<Slot, Record<string, number>>()
   /** Notes a write the merge made. */
   wrote(write: Write): void {
     this.fresh.add(write)
@@ -456,13 +459,13 @@ class Found {
   had(write: Write): boolean {
     return !this.fresh.has(write)
   }
-  /** What had been written under a path before the merge. */
-  below(at: Slot): Record<string, number> {
-    return this.belowBefore.get(at) ?? at.below
+  /** What had been edited inside a path before the merge. */
+  inside(at: Slot): Record<string, number> {
+    return this.insideBefore.get(at) ?? at.inside
   }
-  /** Notes what's under a path, before the merge first writes under it. */
-  writingBelow(at: Slot): void {
-    if (!this.belowBefore.has(at)) this.belowBefore.set(at, { ...at.below })
+  /** Notes what's inside a path, before the merge first edits inside it. */
+  editingInside(at: Slot): void {
+    if (!this.insideBefore.has(at)) this.insideBefore.set(at, { ...at.inside })
   }
   add(tag: "Value" | "Removed", path: Path.Path, replicas: Iterable<string>, over: Over): void {
     const k = `${tag}${Path.key(path)}`
@@ -641,7 +644,7 @@ const applyChanges = (
       } else {
         applyOp(document, op, write, found)
       }
-      noteBelow(document, pathOf(op), write, opLength(op), found)
+      noteInside(document, op, write, found)
       seq += opLength(op)
     }
     History.record(document.history, change, context.past)
@@ -1015,11 +1018,11 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
     if (differing.length > 0) {
       found.add("Value", at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
     }
-    // A removal over edits under the entry, or moves of the item, it hadn't
+    // A removal over edits inside the entry, or moves of the item, it hadn't
     // seen, if it's removed in the end.
     if (!write.exists) {
       const editors = [
-        ...Object.entries(found.below(at)).filter(([replica, next]) =>
+        ...Object.entries(found.inside(at)).filter(([replica, next]) =>
           replica !== write.replica && next > (write.past[replica] ?? 0)
         ),
         ...unseenBy(at, write, at.places).filter((other) => found.had(other)).map((other) => [other.replica] as const)
@@ -1032,20 +1035,18 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
   if (!Path.isRoot(at.path) && slot(document, Path.parent(at.path))?.list !== undefined) refreshPosition(at)
 }
 
-// Records an op of `length` sequence numbers under every path above it, and
-// reports an edit inside an entry that removals it hadn't seen may win over.
-const noteBelow = (
-  document: Document,
-  path: Path.Path,
-  write: Write,
-  length: number,
-  found: Found | undefined
-): void => {
-  for (const prefix of Path.prefixes(path)) {
-    const above = ensureSlot(document, prefix)
-    found?.writingBelow(above)
-    above.below[write.replica] = Math.max(above.below[write.replica] ?? 0, write.seq + length)
-    if (found !== undefined) reportRemovals(found, above, write)
+// Records an op as an edit inside every path above it, and for a text or
+// counter op, inside its own: what an entry, item or optional field that's a
+// text or a counter holds is its content. Reports it against the removals it
+// hadn't seen that may win over it.
+const noteInside = (document: Document, op: Op, write: Write, found: Found | undefined): void => {
+  const path = pathOf(op)
+  const paths = Text.isOp(op) || op._tag === "Increment" ? [...Path.prefixes(path), path] : Path.prefixes(path)
+  for (const inside of paths) {
+    const at = ensureSlot(document, inside)
+    found?.editingInside(at)
+    at.inside[write.replica] = Math.max(at.inside[write.replica] ?? 0, write.seq + opLength(op))
+    if (found !== undefined) reportRemovals(found, at, write)
   }
 }
 
@@ -1121,7 +1122,7 @@ export const edit = (
   const write = (op: Exclude<Op, Text.Op>) => {
     const done: Write = { replica: options.replica, seq, time: options.time, past }
     applyOp(document, op, done, undefined)
-    noteBelow(document, op.path, done, 1, undefined)
+    noteInside(document, op, done, undefined)
     ops.push(op)
     seq++
   }
@@ -1147,9 +1148,9 @@ export const edit = (
         ensureSlot(document, intent.path).text = text
         const pathed = Path.isRoot(intent.path) ? {} : { path: intent.path }
         for (const op of edited.ops) {
-          ops.push({ ...op, ...pathed })
-          const done: Write = { replica: options.replica, seq, time: options.time, past }
-          noteBelow(document, intent.path, done, Text.opLength(op), undefined)
+          const pathedOp = { ...op, ...pathed }
+          ops.push(pathedOp)
+          noteInside(document, pathedOp, { replica: options.replica, seq, time: options.time, past }, undefined)
           seq += Text.opLength(op)
         }
         composeText(texts, intent.path, edited.patch)
@@ -1216,7 +1217,7 @@ export const load = (
     for (const op of change.ops) {
       const write: Write = { replica: change.replica, seq, time: change.time, past }
       if (!Text.isOp(op)) applyOp(document, op, write, undefined)
-      noteBelow(document, pathOf(op), write, opLength(op), undefined)
+      noteInside(document, op, write, undefined)
       seq += opLength(op)
     }
     const owner = (id: Id) => History.find(history, id)
