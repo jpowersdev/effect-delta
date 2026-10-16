@@ -362,11 +362,9 @@ const jsonAt = (document: Document, path: Path.Path): Schema.Json | undefined =>
     case "value":
       return found.values.at(-1)!.value
   }
-  // A list only if every part under it is one of its items, so a stray
-  // position can't turn a struct into a list.
-  if (
-    found.list !== undefined && [...found.children].every((name) => slot(document, [...path, name])!.places.length > 0)
-  ) {
+  // A list shows its items, as a replica's list does: anything else under it
+  // is a part no schema has there.
+  if (found.list !== undefined) {
     const items: Array<Schema.Json> = []
     for (const item of itemsAt(document, path)) {
       const json = jsonAt(document, [...path, item])
@@ -692,10 +690,11 @@ const check = (
 /**
  * Whether a change's ops agree with what's at their paths: a text, a counter
  * and a value have nothing under them, a value is never added (writing it
- * says it exists), and the root is a text or has parts. Without a schema, this
- * is what an authority can check so its JSON of a document is never
- * ambiguous; replicas and relays keep such changes, and readers ignore what
- * their schema doesn't have.
+ * says it exists), the root is a text or has parts, and a list holds items
+ * that are values or have parts. Without a schema, this is what an authority
+ * can check so its JSON of a document shows what replicas do; replicas and
+ * relays keep such changes, and readers ignore what their schema doesn't
+ * have.
  *
  * @internal
  */
@@ -704,9 +703,11 @@ export const checkPaths = (document: Document, change: AnyChange): string | unde
   const kinds = new Map<string, Kind>()
   const added = new Set<string>()
   const parents = new Set<string>()
+  const placed = new Set<string>()
   const kindAt = (path: Path.Path) => kinds.get(Path.key(path)) ?? kindOf(slot(document, path))
   const addedAt = (path: Path.Path) => added.has(Path.key(path)) || (slot(document, path)?.added ?? false)
   const hasChildren = (path: Path.Path) => parents.has(Path.key(path)) || (slot(document, path)?.children.size ?? 0) > 0
+  const placedAt = (path: Path.Path) => placed.has(Path.key(path)) || (slot(document, path)?.places.length ?? 0) > 0
   for (const op of change.ops) {
     const path = pathOf(op)
     const k = Path.key(path)
@@ -721,12 +722,22 @@ export const checkPaths = (document: Document, change: AnyChange): string | unde
       if ((here !== undefined && here !== kind) || hasChildren(path) || (kind === "value" && addedAt(path))) {
         return `${name} writes a ${kind} where there's ${here === undefined ? "something else" : `a ${here}`}`
       }
+      if (kind !== "value" && placedAt(path)) return `${name} writes a ${kind} where there's a list item`
       kinds.set(k, kind)
     } else if (op._tag === "Add") {
       if (here === "value") return `${name} adds a value`
       added.add(k)
-    } else if (op._tag === "Place" && (here === "text" || here === "counter")) {
-      return `${name} places a ${here} in a list`
+    } else if (op._tag === "Place") {
+      if (here === "text" || here === "counter") return `${name} places a ${here} in a list`
+      // A path is a list from its first position on, so a struct or record
+      // with parts never becomes one.
+      const listPath = Path.parent(path)
+      if (Path.isRoot(listPath)) return `${name} places a list item in the root`
+      const list = slot(document, listPath)
+      if (list !== undefined && list.list === undefined && list.children.size > 0) {
+        return `${name} places a list item among parts that aren't items`
+      }
+      placed.add(k)
     }
     for (const prefix of Path.prefixes(path)) parents.add(Path.key(prefix))
   }
