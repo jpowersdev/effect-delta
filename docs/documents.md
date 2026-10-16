@@ -237,8 +237,10 @@ they do now, plus `time`.
 | `Increment { path, by }`                                | 1                | Adds to the counter at the path.                                          |
 | `Place { path, parent, side, rightOrigin? }`            | 1                | Gives the list item at the path a new position, placed as a tree `Insert` places a character. |
 
-A change's ops on one text come together, and its parents are the last ids of changes. Receivers check both
-(`Malformed` otherwise), and check text ops and positions against the text and list at their path.
+A change's ops on one text come together, each op takes at least one sequence number, and its parents are the
+last ids of changes. Receivers check all three (`Malformed` otherwise), and check that text ops and positions
+name only characters and positions their author had seen at their path, so whether a change is accepted
+doesn't depend on what else the receiver has.
 
 **Servers don't need the schema.** Ops say what they do, so a relay or an authority applies a document's
 changes without the app's code. Values are JSON, texts are texts, counters are numbers. A server checks what
@@ -573,8 +575,9 @@ All built, each with tests and an example:
    item by the id of the write that added it.
 4. **Existence is `Set` for values and `Add` for everything else,** texts and counters included: an
    optional text field is added, then edited.
-5. **Changes must keep one text's ops together, and name the last ids of changes as parents.** Both hold for
-   every change a replica makes; receivers reject others as `Malformed`.
+5. **Changes must keep one text's ops together, take a sequence number or more for each op, and name the
+   last ids of changes as parents.** All three hold for every change a replica makes; receivers reject others
+   as `Malformed`.
 6. **A replay text's parents are found by walking the change graph,** not from version vectors. The
    Eg-walker conformance data has replica ids whose changes aren't in sequence order, which version vectors
    can't describe.

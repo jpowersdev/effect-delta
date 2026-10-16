@@ -545,8 +545,9 @@ keeps moving. A subscription says whether it expects an authority, and a mismatc
 **Servers save before they share.** A pushed change is checked, stored, then sent to subscribers. If
 storing fails, the push fails with `Unavailable`, every subscription to that document ends with it, and the
 document is loaded again from the store, so nothing in memory gets ahead of what's saved. Changes that
-build on something the server doesn't have yet (a peer's change that peer hasn't uploaded) wait on a relay;
-an authority can't check them, so it refuses the push as `Malformed`.
+build on something the server doesn't have yet (a peer's change that peer hasn't uploaded) wait on a relay,
+which stores them and sends them to subscribers once it has checked them; an authority can't check them, so
+it refuses the push as `Malformed`.
 
 ### HistoryStore
 
