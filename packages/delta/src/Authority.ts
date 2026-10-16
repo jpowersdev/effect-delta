@@ -126,8 +126,9 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  *
  * Before `check`, the authority refuses changes it can tell are malformed, ones
  * stamped more than a day ahead of its clock, and ones that would make a path
- * of a document hold two kinds of thing (a text and a value, say), so the JSON
- * a `DocumentProposal` has is never ambiguous.
+ * of a document hold two kinds of thing (a text and a value, say), so a
+ * `DocumentProposal` has each part where replicas have it. See
+ * `ReplicatedDocument.readProposal` for what it can't show.
  *
  * **Example** (Only editors may edit)
  *

@@ -626,8 +626,11 @@ export interface Proposed<A> {
  *
  * A proposal has only each value's latest write, so a value this schema
  * can't decode reads as its initial value, where a replica would show an
- * earlier write. Read proposals with the newest version of the schema, and
- * upgrade the authority before the apps that write to it.
+ * earlier write, and so does a required field that was removed, where a
+ * replica would show its latest write. Read proposals with the newest version
+ * of the schema, and upgrade the authority before the apps that write to it.
+ * A client can do either on purpose to hide a write from a check, so a check
+ * on a value doesn't hold against a hostile client.
  *
  * **Example** (Only the owner approves)
  *

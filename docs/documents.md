@@ -244,8 +244,9 @@ relay serves every app, and every version of each app's schema.
 **Nobody rejects a change for not fitting a schema.** Any one replica that did would refuse what the others
 accept, and a relay that did would cut off everyone it had passed the change to. Replicas keep such changes
 and don't show them, as they do for parts a newer schema adds. An authority also rejects ops that would make
-one path hold two kinds of thing (a text and a value, or a value with parts under it), so the JSON its check
-reads is never ambiguous.
+one path hold two kinds of thing (a text and a value, a value with parts under it, or a list and a struct), so
+the JSON its check reads has each part where replicas have it. What JSON can't say is under
+[Known limits](#known-limits).
 
 **Texts and documents shouldn't share a document id.** If they do, each keeps the other's changes without
 showing them. A change with no text ops fits either strategy; servers learn a document's strategy from its
@@ -535,12 +536,18 @@ All built, each with tests and an example:
 - **Removed entries and items keep their content** until pruning exists.
 - **Replicas on different schema versions** can show different values for the parts only one understands.
 - **An authority's first write to a path decides what it holds.** Without the schema, an authority can't
-  tell which of a value and a text belongs at a path no one has written yet, so a client could claim a path
-  with the wrong kind of write and leave later writes there rejected. An authority with the schema would
-  check each op against it.
+  tell which of a value and a text, or of a list and a struct, belongs at a path no one has written yet, so
+  a client could claim a path with the wrong kind of write and leave later writes there rejected, or claim
+  a struct as a list and write under it where a check can't see. Editing a text field of an item that was
+  never added claims an empty list as a struct this way. An authority with the schema would check each op
+  against it.
 - **Servers refuse a replica whose clock runs more than a day ahead,** until it's fixed.
-- **An authority should have the newest schema.** A proposal has only each value's latest write, so an
-  authority on an older schema reads a value it can't decode as its initial value, not as an earlier write.
+- **A check sees each value's latest write, as JSON.** A replica shows the latest write its schema can
+  decode, and still shows a required field someone removed; JSON can't say either. So an authority on an older
+  schema reads a value it can't decode as its initial value, not as an earlier write, and should have the
+  newest schema. And a client can hide a write from a check on purpose, by writing a value no schema decodes
+  over it, or by removing the field after writing it, so a check on a value doesn't hold against a hostile
+  client.
 - **A server forgets a strategy it only heard from a subscriber.** A document with no text ops yet takes the
   strategy of whoever subscribes first, and after the server reloads it, the next subscriber's.
 - **A replay text finds its own parents by walking the history back** to the last change that touched it.
