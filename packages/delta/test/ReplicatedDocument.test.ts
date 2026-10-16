@@ -335,6 +335,25 @@ describe("ReplicatedDocument", () => {
           }))
         assert.deepStrictEqual(totals, [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER])
       }))
+
+    it.effect("read as the nearest whole number the schema allows, so the document stays readable", () =>
+      Effect.gen(function*() {
+        class Poll extends Schema.Class<Poll>("Poll")({ yes: ReplicatedDocument.Counter, title: Schema.String }) {}
+        const poll = (replica: string) =>
+          ReplicatedDocument.make(Poll, {
+            initial: new Poll({ yes: 0, title: "" }),
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* poll("ada")
+        const ben = yield* poll("ben")
+        // Together they pass the largest safe integer, which isn't an Int.
+        yield* ReplicatedDocument.update(ada, (doc) => new Poll({ ...doc, yes: Number.MAX_SAFE_INTEGER }))
+        yield* ReplicatedDocument.update(ben, (doc) => new Poll({ ...doc, yes: 1 }))
+        yield* Replica.exchange(ada, ben)
+        assert.strictEqual((yield* ReplicatedDocument.get(ada)).yes, Number.MAX_SAFE_INTEGER)
+        yield* ReplicatedDocument.update(ada, (doc) => new Poll({ ...doc, title: "Lunch?" }))
+        assert.strictEqual((yield* ReplicatedDocument.get(ada)).title, "Lunch?")
+      }))
   })
 
   describe("entries", () => {
