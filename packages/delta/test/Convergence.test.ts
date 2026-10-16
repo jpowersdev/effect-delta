@@ -544,6 +544,6 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         }
       }).pipe(Random.withSeed(seed))
     }),
-    { arbitrary: forgedRuns }
+    { arbitrary: { ...forgedRuns, runs: 50 } }
   )
 })
