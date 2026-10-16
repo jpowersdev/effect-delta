@@ -308,6 +308,47 @@ describe("Relay", () => {
     }).pipe(Effect.provide(RelayLive)))
 
   describe("documents", () => {
+    it.effect("sends subscribers only changes it has checked", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const laptop = yield* makeDoc("laptop")
+        const connection = yield* Relay.connect(laptop, { document: notes })
+        yield* synced(connection)
+        // Waits until the laptop shows a value `done` accepts, while it's connected.
+        const shows = (done: (doc: DesignDoc) => boolean) => Effect.raceFirst(until(laptop, done), connection.await)
+        const push = (change: InternalDocument.AnyChange) =>
+          relay.push({ format: Sync.FORMAT, document: notes, delta: InternalDelta.fromChanges([change]) })
+        const first: InternalDocument.AnyChange = {
+          replica: "ada",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 10,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }
+        // Made on top of `first`, but stamped earlier: it waits for `first`,
+        // then it's refused.
+        const early: InternalDocument.AnyChange = {
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [{ replica: "ada", seq: 0 }],
+          time: 5,
+          ops: [{ _tag: "Set", path: ["status"], value: "approved" }]
+        }
+        yield* push(early)
+        yield* push(first)
+        yield* shows((doc) => doc.status === "review")
+        yield* push({
+          ...first,
+          seq: 1,
+          parents: [{ replica: "ada", seq: 0 }],
+          time: 11,
+          ops: [{ _tag: "Increment", path: ["votes"], by: 1 }]
+        })
+        yield* shows((doc) => doc.votes === 1)
+      }).pipe(Effect.scoped, Effect.provide(RelayLive)))
+
     it.effect("stores documents it can't read, and replicas reload them intact", () =>
       Effect.gen(function*() {
         const laptop = yield* makeDoc("laptop")
