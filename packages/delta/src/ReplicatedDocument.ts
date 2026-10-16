@@ -560,18 +560,24 @@ export const set: {
 
 /**
  * A path through a value's fields, record keys and list item keys that ends
- * at a string: where a text field can be.
+ * at a string: where a text field can be. Paths are at most 16 steps long, so
+ * that a recursive value, such as a `Schema.Json` field, has paths too.
  *
  * @stability unstable
  * @category models
  * @since 0.1.0
  */
-export type TextPath<A> = A extends string ? readonly []
-  : A extends ReadonlyArray<infer Item> ? readonly [string, ...TextPath<Item>]
-  : A extends ((...args: ReadonlyArray<any>) => any) | Date ? never
-  : A extends object ? { readonly [K in keyof A & string]-?: readonly [K, ...TextPath<Exclude<A[K], undefined>>] }[
-      keyof A & string
-    ]
+export type TextPath<A> = TextPathWithin<A, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]>
+
+// The text paths of `A` with at most as many steps as `Steps` has elements.
+type TextPathWithin<A, Steps extends ReadonlyArray<0>> = A extends string ? readonly []
+  : Steps extends readonly [0, ...infer Rest extends ReadonlyArray<0>] ?
+    A extends ReadonlyArray<infer Item> ? readonly [string, ...TextPathWithin<Item, Rest>]
+    : A extends ((...args: ReadonlyArray<any>) => any) | Date ? never
+    : A extends object ? {
+        readonly [K in keyof A & string]-?: readonly [K, ...TextPathWithin<Exclude<A[K], undefined>, Rest>]
+      }[keyof A & string]
+    : never
   : never
 
 /**
