@@ -336,6 +336,30 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(totals, [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER])
       }))
 
+    it.effect("an update sets a counter to what it's given, whatever the total", () =>
+      Effect.gen(function*() {
+        const Poll = Schema.Struct({ yes: ReplicatedDocument.Counter })
+        const poll = (replica: string) =>
+          ReplicatedDocument.make(Poll, { initial: { yes: 0 }, replica: Replica.ReplicaId.make(replica) })
+        const ada = yield* poll("ada")
+        const ben = yield* poll("ben")
+        // Together past the largest safe integer, which it reads as.
+        yield* ReplicatedDocument.update(ada, () => ({ yes: Number.MAX_SAFE_INTEGER }))
+        yield* ReplicatedDocument.update(ben, () => ({ yes: 1 }))
+        yield* Replica.exchange(ada, ben)
+        yield* ReplicatedDocument.update(ada, () => ({ yes: 0 }))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ada), { yes: 0 })
+        // From one end of the safe integers to the other, further than one
+        // increment can go.
+        yield* ReplicatedDocument.update(ada, () => ({ yes: Number.MIN_SAFE_INTEGER }))
+        yield* ReplicatedDocument.update(ada, () => ({ yes: Number.MAX_SAFE_INTEGER - 1 }))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ada), { yes: Number.MAX_SAFE_INTEGER - 1 })
+        // Sent as JSON, as networks and stores send it.
+        const json = JSON.stringify(Schema.encodeSync(Delta.Delta)(yield* Replica.delta(ada, VersionVector.empty)))
+        yield* Replica.receive(ben, Schema.decodeUnknownSync(Delta.Delta)(JSON.parse(json)))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
+      }))
+
     it.effect("read as the nearest whole number the schema allows, so the document stays readable", () =>
       Effect.gen(function*() {
         class Poll extends Schema.Class<Poll>("Poll")({ yes: ReplicatedDocument.Counter, title: Schema.String }) {}
