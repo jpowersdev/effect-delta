@@ -357,12 +357,13 @@ const jsonAt = (document: Document, path: Path.Path): Schema.Json | undefined =>
     }
     return items
   }
-  const object: Record<string, Schema.Json> = {}
+  const entries: Array<[string, Schema.Json]> = []
   for (const name of childrenAt(document, path)) {
     const json = jsonAt(document, [...path, name])
-    if (json !== undefined) object[name] = json
+    if (json !== undefined) entries.push([name, json])
   }
-  return found.added || Object.keys(object).length > 0 ? object : undefined
+  // Defined rather than assigned, so a key such as `__proto__` is a key.
+  return found.added || entries.length > 0 ? Object.fromEntries(entries) : undefined
 }
 
 // Overlaps -------------------------------------------------------------------

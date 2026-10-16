@@ -505,16 +505,17 @@ const readAt = (
     }
     case "Entries": {
       const parts: Array<unknown> = []
-      const entries: Record<string, unknown> = {}
+      const entries: Array<[string, unknown]> = []
       for (const name of source.keys()) {
         const entry = source.at(name)
         if (!shape.isKey(name) || !entry.exists()) continue
         const value = readAt(shape.value, entry, undefined, memo)
         if (value === Missing) continue
         parts.push(name, value)
-        entries[name] = value
+        entries.push([name, value])
       }
-      return share(memo, source.path, parts, () => entries)
+      // Defined rather than assigned, so a key such as `__proto__` is a key.
+      return share(memo, source.path, parts, () => Object.fromEntries(entries))
     }
     case "List": {
       const items: Array<unknown> = []
