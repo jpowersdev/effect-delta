@@ -26,6 +26,27 @@ describe("ReplicatedText", () => {
         assert.strictEqual(yield* ReplicatedText.get(notes), "Hi")
       }))
 
+    it.effect("rejects negative indexes and lengths", () =>
+      Effect.gen(function*() {
+        for (const strategy of ["tree", "replay"] as const) {
+          const notes = yield* ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make("laptop") })
+          yield* ReplicatedText.insert(notes, 0, "Hello")
+          for (
+            const edit of [
+              ReplicatedText.insert(notes, -1, "!"),
+              ReplicatedText.remove(notes, -1, 1),
+              ReplicatedText.remove(notes, 2, -1),
+              ReplicatedText.applyPatch(notes, [{ _tag: "Retain", length: -1 }, { _tag: "Insert", text: "!" }])
+            ]
+          ) {
+            const error = yield* Effect.flip(edit)
+            assert.strictEqual(error.reason._tag, "OutOfBounds")
+          }
+          assert.strictEqual(yield* ReplicatedText.get(notes), "Hello")
+          assert.deepStrictEqual(yield* Replica.version(notes), { laptop: 5 })
+        }
+      }))
+
     it.effect("makes no change for an edit that inserts or removes nothing", () =>
       Effect.gen(function*() {
         for (const strategy of ["tree", "replay"] as const) {
