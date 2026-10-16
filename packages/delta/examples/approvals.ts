@@ -25,16 +25,18 @@ const initial: typeof DesignDoc.Type = { title: "", status: "draft", comments: {
 // The app's own records: who owns each doc.
 const owners = new Map([["sessions", "ada"]])
 
-// The rule: only a doc's owner approves it.
+// The rule: only a doc's owner approves it. Reading the change with the
+// schema also rejects one that doesn't fit it.
 const OwnerApproves = Authority.layer({
-  check: (proposal) => {
-    if (proposal._tag === "Text") return Effect.void
-    const { after, before } = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
-    const approving = after.status === "approved" && before.status !== "approved"
-    return approving && proposal.user !== owners.get(proposal.document)
-      ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
-      : Effect.void
-  }
+  check: (proposal) =>
+    Effect.gen(function*() {
+      if (proposal._tag === "Text") return yield* new Authority.Rejected({ message: "Design docs aren't texts" })
+      const { after, before } = yield* ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
+      const approving = after.status === "approved" && before.status !== "approved"
+      if (approving && proposal.user !== owners.get(proposal.document)) {
+        return yield* new Authority.Rejected({ message: "Only the owner can approve" })
+      }
+    })
 }).pipe(Layer.provide(HistoryStore.layerMemory))
 
 const sessions = Replica.DocumentId.make("sessions")

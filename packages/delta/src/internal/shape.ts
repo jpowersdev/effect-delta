@@ -7,8 +7,10 @@ import * as SchemaAST from "effect/SchemaAST"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaParser from "effect/SchemaParser"
 import * as TextPatch from "../TextPatch.ts"
+import { key as changeKey } from "./change.ts"
 import * as InternalDocument from "./document.ts"
 import * as Path from "./path.ts"
+import * as Text from "./text.ts"
 
 // A document's merge rules, worked out from its schema: which parts are
 // fields, entries, lists, texts, counters and values. With them a replica
@@ -240,32 +242,28 @@ const compileValue = (ast: SchemaAST.AST): Value => {
 
 /**
  * The shape at `path`, and how the part there comes and goes: always there, or
- * as an optional field, a record entry or a list item. Undefined for a path
- * the schema doesn't describe; `inside` names the text, counter or value the
- * path goes into.
+ * as an optional field, a record entry or a list item. For a path the schema
+ * has no part at, why not.
  *
  * @internal
  */
 export const at = (
   shape: Shape,
   path: Path.Path
-):
-  | { readonly _tag: "Part"; readonly shape: Shape; readonly presence: "always" | "optional" | "entry" | "item" }
-  | { readonly _tag: "Inside"; readonly shape: Shape }
-  | undefined =>
-{
+): { readonly shape: Shape; readonly presence: "always" | "optional" | "entry" | "item" } | string => {
   let current = shape
   let presence: "always" | "optional" | "entry" | "item" = "always"
   for (const segment of path) {
     switch (current._tag) {
       case "Fields": {
         const field = current.fields.find(({ name }) => name === segment)
-        if (field === undefined) return undefined
+        if (field === undefined) return `which the schema doesn't have`
         current = field.shape
         presence = field.optional ? "optional" : "always"
         break
       }
       case "Entries":
+        if (!current.isKey(segment)) return `whose key ${JSON.stringify(segment)} the schema doesn't take`
         current = current.value
         presence = "entry"
         break
@@ -274,10 +272,10 @@ export const at = (
         presence = "item"
         break
       default:
-        return { _tag: "Inside", shape: current }
+        return `inside a ${describe(current)}`
     }
   }
-  return { _tag: "Part", shape: current, presence }
+  return { shape: current, presence }
 }
 
 /**
@@ -289,7 +287,7 @@ export const at = (
  */
 export const shows = (shape: Shape, overlap: InternalDocument.Overlap): boolean => {
   const found = at(shape, overlap.path)
-  if (found?._tag !== "Part") return false
+  if (typeof found === "string") return false
   switch (overlap._tag) {
     case "Text":
       return found.shape._tag === "Text"
@@ -297,6 +295,58 @@ export const shows = (shape: Shape, overlap: InternalDocument.Overlap): boolean 
       return found.shape._tag === "Value" || found.presence !== "always"
     case "Removed":
       return found.presence !== "always"
+  }
+}
+
+/**
+ * What in a change doesn't fit the schema, if anything: an op at a path the
+ * schema doesn't have, or of a kind its rule there doesn't take, a value it
+ * can't read, or a record key that isn't one. Replicas keep such changes and
+ * don't show them; an authority rejects them, so its check reads the document
+ * as replicas show it.
+ *
+ * @internal
+ */
+export const misfit = (shape: Shape, change: InternalDocument.AnyChange): string | undefined => {
+  for (const op of change.ops) {
+    const path = InternalDocument.pathOf(op)
+    const where = `Change ${changeKey(change)} writes to ${Path.key(path)}`
+    const found = at(shape, path)
+    if (typeof found === "string") return `${where}, ${found}`
+    const { presence, shape: here } = found
+    const fits = Text.isOp(op)
+      ? here._tag === "Text"
+      : op._tag === "Increment"
+      ? here._tag === "Counter"
+      : op._tag === "Set"
+      ? here._tag === "Value"
+      : op._tag === "Add"
+      ? presence !== "always" && here._tag !== "Value"
+      : op._tag === "Unset"
+      ? presence !== "always"
+      : presence === "item"
+    if (!fits) return `${where} with a ${op._tag} op, where the schema has a ${describe(here)}`
+    if (op._tag === "Set" && here._tag === "Value" && Result.isFailure(here.decode(op.value))) {
+      return `${where} a value the schema can't read`
+    }
+  }
+  return undefined
+}
+
+const describe = (shape: Shape): string => {
+  switch (shape._tag) {
+    case "Fields":
+      return "struct"
+    case "Entries":
+      return "record"
+    case "List":
+      return "list"
+    case "Text":
+      return "text"
+    case "Counter":
+      return "counter"
+    case "Value":
+      return "value"
   }
 }
 

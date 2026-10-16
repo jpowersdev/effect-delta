@@ -235,7 +235,8 @@ export const make = Effect.fnUntraced(function*(options: {
                   user,
                   before,
                   after: InternalDocument.toJson(state),
-                  paths: pathsOf(change)
+                  paths: pathsOf(change),
+                  delta: InternalDelta.fromChanges([change])
                 }
             ))
             if (Result.isFailure(verdict)) {

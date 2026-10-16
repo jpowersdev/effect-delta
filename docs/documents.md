@@ -241,12 +241,12 @@ changes without the app's code. Values are JSON, texts are texts, counters are n
 it can (the envelope, write times, text ops against that path's text) and stores the rest as it is. One
 relay serves every app, and every version of each app's schema.
 
-**Nobody rejects a change for not fitting a schema.** Any one replica that did would refuse what the others
-accept, and a relay that did would cut off everyone it had passed the change to. Replicas keep such changes
-and don't show them, as they do for parts a newer schema adds. An authority also rejects ops that would make
-one path hold two kinds of thing (a text and a value, a value with parts under it, or a list and a struct), so
-the JSON its check reads has each part where replicas have it. What JSON can't say is under
-[Known limits](#known-limits).
+**Replicas and relays don't reject a change for not fitting a schema.** Any one replica that did would
+refuse what the others accept, and a relay that did would cut off everyone it had passed the change to.
+Replicas keep such changes and don't show them, as they do for parts a newer schema adds. An authority is
+where a change can be turned down, before anyone else has it: it rejects ops that would make one path hold
+two kinds of thing (a text and a value, a value with parts under it, or a list and a struct), and
+`readProposal` rejects anything else that doesn't fit the app's schema.
 
 **Texts and documents shouldn't share a document id.** If they do, each keeps the other's changes without
 showing them. A change with no text ops fits either strategy; servers learn a document's strategy from its
@@ -384,7 +384,7 @@ declare const readProposal: <A>(
   proposal: Authority.DocumentProposal,
   schema: Schema.Schema<A>,
   options: { readonly initial: A }
-) => Proposed<A>
+) => Effect<Proposed<A>, Authority.Rejected> // rejects a change that doesn't fit the schema
 interface Proposed<A> { readonly before: A; readonly after: A; readonly paths: ReadonlyArray<Replica.Path> }
 ```
 
@@ -436,19 +436,22 @@ because nothing is lost.
   are.
 - **Relays** need nothing new. They don't need the schema.
 - **Authorities** check each change, as now. `Authority.Proposal` becomes a union. A `DocumentProposal` has
-  the document before and after the change as JSON (only the parts that have been written), and the paths
-  the change touched. `ReplicatedDocument.readProposal` reads them with the app's schema and initial value.
-  The app picks the schema from the document id, as it already decides who may open which document:
+  the document before and after the change as JSON (only the parts that have been written), the paths the
+  change touched, and the change itself. `ReplicatedDocument.readProposal` reads them with the app's schema
+  and initial value, and rejects a change that doesn't fit the schema: replicas wouldn't show it, so the
+  JSON would show the check something they don't. The app picks the schema from the document id, as it
+  already decides who may open which document:
 
   ```ts
   const OwnerApproves = Authority.layer({
-    check: (proposal) => {
-      if (proposal._tag === "Text") return Effect.void
-      const { after, before } = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
-      return after.status === "approved" && before.status !== "approved" && proposal.user !== ownerOf(proposal.document)
-        ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
-        : Effect.void
-    }
+    check: (proposal) =>
+      Effect.gen(function*() {
+        if (proposal._tag === "Text") return yield* new Authority.Rejected({ message: "Design docs aren't texts" })
+        const { after, before } = yield* ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
+        if (after.status === "approved" && before.status !== "approved" && proposal.user !== ownerOf(proposal.document)) {
+          return yield* new Authority.Rejected({ message: "Only the owner can approve" })
+        }
+      })
   })
   ```
 
@@ -535,19 +538,13 @@ All built, each with tests and an example:
   [Latest write](#latest-write)).
 - **Removed entries and items keep their content** until pruning exists.
 - **Replicas on different schema versions** can show different values for the parts only one understands.
-- **An authority's first write to a path decides what it holds.** Without the schema, an authority can't
-  tell which of a value and a text, or of a list and a struct, belongs at a path no one has written yet, so
-  a client could claim a path with the wrong kind of write and leave later writes there rejected, or claim
-  a struct as a list and write under it where a check can't see. Editing a text field of an item that was
-  never added claims an empty list as a struct this way. An authority with the schema would check each op
-  against it.
+- **An authority whose check doesn't read proposals with the schema** keeps what the first write to a path
+  says it holds: a client could claim a path with the wrong kind of write and leave later writes there
+  rejected. `readProposal` rejects such writes, so a check that uses it has no such gap.
 - **Servers refuse a replica whose clock runs more than a day ahead,** until it's fixed.
-- **A check sees each value's latest write, as JSON.** A replica shows the latest write its schema can
-  decode, and still shows a required field someone removed; JSON can't say either. So an authority on an older
-  schema reads a value it can't decode as its initial value, not as an earlier write, and should have the
-  newest schema. And a client can hide a write from a check on purpose, by writing a value no schema decodes
-  over it, or by removing the field after writing it, so a check on a value doesn't hold against a hostile
-  client.
+- **An authority needs the newest schema.** `readProposal` rejects what its schema can't read, so an
+  authority on an older schema rejects the newer apps' changes to the parts it doesn't know. Upgrade the
+  authority first.
 - **A server forgets a strategy it only heard from a subscriber.** A document with no text ops yet takes the
   strategy of whoever subscribes first, and after the server reloads it, the next subscriber's.
 - **A replay text finds its own parents by walking the history back** to the last change that touched it.
@@ -573,7 +570,10 @@ All built, each with tests and an example:
 6. **A replay text's parents are found by walking the change graph,** not from version vectors. The
    Eg-walker conformance data has replica ids whose changes aren't in sequence order, which version vectors
    can't describe.
-7. **`readProposal` returns a `Proposed<A>`.**
+7. **`readProposal` is an `Effect` of a `Proposed<A>`,** and fails with `Authority.Rejected` when the change
+   doesn't fit the schema, so a check reads the document exactly as replicas will show it. Reading JSON
+   alone let a client hide a write from a check: writing over it with a value replicas can't read, or
+   removing a required field, which replicas ignore.
 8. **Changes that don't fit a schema are kept, not rejected,** by replicas and relays alike (see
    [How changes look](#how-changes-look)). Rejecting them let one bad change cut every replica off from a
    relay for good. Authorities still keep each path to one kind of thing.

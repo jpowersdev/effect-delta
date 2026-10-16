@@ -3,7 +3,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { Context, Deferred, Effect, Equal, Exit, Fiber, Layer, Option, Queue, Schedule, Schema, Stream } from "effect"
 import {
   Authority,
-  Delta,
+  type Delta,
   HistoryStore,
   Relay,
   Replica,
@@ -598,6 +598,22 @@ describe("Relay", () => {
   })
 })
 
+// Only the owner approves. Every proposal the check reads goes into `read`.
+const ownerApproves = (read: Array<ReplicatedDocument.Proposed<DesignDoc>> = []) =>
+  Authority.layer({
+    check: (proposal) =>
+      Effect.gen(function*() {
+        if (proposal._tag === "Text") return yield* new Authority.Rejected({ message: "Design docs aren't texts" })
+        const proposed = yield* ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
+        read.push(proposed)
+        if (
+          proposed.after.status === "approved" && proposed.before.status !== "approved" && proposal.user !== "owner"
+        ) {
+          return yield* new Authority.Rejected({ message: "Only the owner can approve" })
+        }
+      })
+  }).pipe(Layer.provide(HistoryStore.layerMemory))
+
 describe("Authority", () => {
   it.effect("shares what it accepts and rolls back what it rejects", () =>
     Effect.gen(function*() {
@@ -759,16 +775,6 @@ describe("Authority", () => {
   describe("documents", () => {
     it.effect("checks documents with their schema, and rolls back what it rejects", () => {
       const proposals: Array<ReplicatedDocument.Proposed<DesignDoc>> = []
-      const OwnerApproves = Authority.layer({
-        check: (proposal) => {
-          if (proposal._tag === "Text") return Effect.void
-          const read = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
-          proposals.push(read)
-          return read.after.status === "approved" && read.before.status !== "approved" && proposal.user !== "owner"
-            ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
-            : Effect.void
-        }
-      }).pipe(Layer.provide(HistoryStore.layerMemory))
       const open = (user: string) =>
         ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec }).pipe(asUser(user))
 
@@ -805,7 +811,7 @@ describe("Authority", () => {
         // The owner's approval is accepted, and reaches everyone.
         yield* ReplicatedDocument.update(owner, (doc) => ({ ...doc, status: "approved" }))
         yield* until(editor, (doc) => doc.status === "approved")
-      }).pipe(Effect.scoped, Effect.provide([OwnerApproves, CryptoTest]))
+      }).pipe(Effect.scoped, Effect.provide([ownerApproves(proposals), CryptoTest]))
     })
 
     it.effect("refuses a change that would make a path hold two kinds of thing", () =>
@@ -862,88 +868,45 @@ describe("Authority", () => {
         )
       }).pipe(Effect.provide(NoSecrets)))
 
-    it.effect("a change that doesn't fit the schema can't hide a list from the check", () => {
-      const OwnerAddsTasks = Authority.layer({
-        check: (proposal) => {
-          if (proposal._tag === "Text" || proposal.user === "owner") return Effect.void
-          const { after, before } = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
-          return after.tasks.some(({ id }) => !before.tasks.some((task) => task.id === id))
-            ? Effect.fail(new Authority.Rejected({ message: "Only the owner adds tasks" }))
-            : Effect.void
-        }
-      }).pipe(Layer.provide(HistoryStore.layerMemory))
-      return Effect.gen(function*() {
-        const authority = yield* Authority.Authority
-        const push = (delta: Delta.Delta) => authority.push({ format: Sync.FORMAT, document: spec, delta })
-        const owner = yield* makeDoc("owner")
-        yield* ReplicatedDocument.update(owner, (doc) => ({
-          ...doc,
-          tasks: [{ id: "t1", title: "Write it", done: false }]
-        }))
-        const fromOwner = yield* Replica.delta(owner, VersionVector.empty)
-        yield* push(fromOwner).pipe(asUser("owner"))
-
-        // An entry in the list that isn't one of its items.
-        const stray = InternalDelta.fromChanges([{
-          replica: "intruder",
-          seq: 0,
-          length: 1,
-          parents: [{ replica: "owner", seq: VersionVector.get(yield* Replica.version(owner), "owner") - 1 }],
-          time: 1,
-          ops: [{ _tag: "Set", path: ["tasks", "x"], value: 1 }]
-        }])
-        yield* push(stray).pipe(asUser("intruder"))
-
-        const editor = yield* makeDoc("editor")
-        yield* Replica.receive(editor, Delta.combine(fromOwner, stray))
-        const seen = yield* Replica.version(editor)
-        yield* ReplicatedDocument.update(editor, (doc) => ({
-          ...doc,
-          tasks: [...doc.tasks, { id: "t2", title: "Ship it", done: false }]
-        }))
-        const ack = yield* push(yield* Replica.delta(editor, seen)).pipe(asUser("editor"))
-        assert.strictEqual(ack._tag, "Rejected")
-      }).pipe(Effect.provide(OwnerAddsTasks))
-    })
-
-    it.effect("a check sees what replicas show, because changes that don't fit the schema are rejected", () => {
-      const OwnerApproves = Authority.layer({
-        check: (proposal) => {
-          if (proposal._tag === "Text") return Effect.void
-          const { after, before } = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
-          return after.status === "approved" && before.status !== "approved" && proposal.user !== "owner"
-            ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
-            : Effect.void
-        }
-      }).pipe(Layer.provide(HistoryStore.layerMemory))
-      return Effect.gen(function*() {
+    it.effect("rejects a change that doesn't fit the schema, so a check reads what replicas show", () =>
+      Effect.gen(function*() {
         const authority = yield* Authority.Authority
         const owner = yield* makeDoc("owner")
         yield* ReplicatedDocument.update(owner, (doc) => ({ ...doc, status: "review" }))
         const fromOwner = yield* Replica.delta(owner, VersionVector.empty)
         yield* authority.push({ format: Sync.FORMAT, document: spec, delta: fromOwner }).pipe(asUser("owner"))
-        const after = { replica: "owner", seq: VersionVector.get(yield* Replica.version(owner), "owner") - 1 }
-        // Each approves where replicas look, and hides it from JSON the check reads.
-        const hiding: ReadonlyArray<InternalDocument.AnyChange["ops"]> = [
-          // A value replicas can't read, written over the approval.
-          [{ _tag: "Set", path: ["status"], value: "approved" }, { _tag: "Set", path: ["status"], value: 42 }],
-          // A required field removed, which replicas ignore.
-          [{ _tag: "Set", path: ["status"], value: "approved" }, { _tag: "Unset", path: ["status"] }]
-        ]
-        for (const [i, ops] of hiding.entries()) {
+        const parent = { replica: "owner", seq: VersionVector.get(yield* Replica.version(owner), "owner") - 1 }
+        const rejects = Effect.fnUntraced(function*(ops: InternalDocument.AnyChange["ops"], message: string) {
+          const replica = Replica.ReplicaId.make(`intruder-${message.length}`)
           const delta = InternalDelta.fromChanges([{
-            replica: `intruder-${i}`,
+            replica,
             seq: 0,
             length: ops.length,
-            parents: [after],
+            parents: [parent],
             time: 1000,
             ops
           }])
           const ack = yield* authority.push({ format: Sync.FORMAT, document: spec, delta }).pipe(asUser("intruder"))
-          assert.strictEqual(ack._tag, "Rejected", `change ${i}`)
-        }
-      }).pipe(Effect.provide(OwnerApproves))
-    })
+          if (ack._tag !== "Rejected") return assert.fail(`expected Rejected for ${message}`)
+          assert.include(ack.message, message)
+        })
+        // Each would approve where replicas look, and hide it from the JSON the
+        // check reads: written over with a value replicas can't read, or with
+        // the required field removed, which replicas ignore.
+        yield* rejects(
+          [{ _tag: "Set", path: ["status"], value: "approved" }, { _tag: "Set", path: ["status"], value: 42 }],
+          "a value the schema can't read"
+        )
+        yield* rejects(
+          [{ _tag: "Set", path: ["status"], value: "approved" }, { _tag: "Unset", path: ["status"] }],
+          "with a Unset op, where the schema has a value"
+        )
+        yield* rejects(
+          [{ _tag: "Set", path: ["tasks", "x"], value: 1 }],
+          "with a Set op, where the schema has a struct"
+        )
+        yield* rejects([{ _tag: "Set", path: ["owner"], value: "intruder" }], "which the schema doesn't have")
+      }).pipe(Effect.provide(ownerApproves())))
 
     it.effect("a confirmed document syncs with nothing else", () =>
       Effect.gen(function*() {
@@ -955,12 +918,12 @@ describe("Authority", () => {
     it.effect("a proposal has every entry, whatever its key", () => {
       const proposed: Array<DesignDoc> = []
       const Recording = Authority.layer({
-        check: (proposal) => {
-          if (proposal._tag === "Document") {
-            proposed.push(ReplicatedDocument.readProposal(proposal, DesignDoc, { initial }).after)
-          }
-          return Effect.void
-        }
+        check: (proposal) =>
+          proposal._tag === "Text"
+            ? Effect.void
+            : Effect.map(ReplicatedDocument.readProposal(proposal, DesignDoc, { initial }), ({ after }) => {
+              proposed.push(after)
+            })
       }).pipe(Layer.provide(HistoryStore.layerMemory))
       return Effect.gen(function*() {
         const doc = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })

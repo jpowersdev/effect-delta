@@ -35,6 +35,7 @@ import * as Stream from "effect/Stream"
 import * as SubscriptionRef from "effect/SubscriptionRef"
 import * as Authority from "./Authority.ts"
 import * as InternalConnection from "./internal/connection.ts"
+import type * as InternalDelta from "./internal/delta.ts"
 import * as InternalEditable from "./internal/editable.ts"
 import * as InternalEngine from "./internal/engine.ts"
 import * as InternalReplica from "./internal/replica.ts"
@@ -597,7 +598,7 @@ export const text: {
   <A>(self: ReplicatedDocument<A>, path: TextPath<A>): ReplicatedText.Editable
 } = dual(2, (self: ReplicatedDocument<unknown>, path: Replica.Path): ReplicatedText.Editable => {
   const found = InternalShape.at(impl(self).shape, path)
-  if (found?._tag !== "Part" || found.shape._tag !== "Text") {
+  if (typeof found === "string" || found.shape._tag !== "Text") {
     throw new Error(`${JSON.stringify(path)} isn't a text field of the document`)
   }
   return InternalEditable.make(impl(self).engine, path)
@@ -619,18 +620,25 @@ export interface Proposed<A> {
 
 /**
  * Reads a document proposal with the app's schema and initial value, for an
- * authority's check. The app picks the schema from the document id, as it
- * already decides who may open which document.
+ * authority's check, and rejects a change that doesn't fit the schema. The app
+ * picks the schema from the document id, as it already decides who may open
+ * which document.
+ *
+ * **Details**
+ *
+ * Replicas keep changes that don't fit their schema and don't show them. An
+ * authority's check reads JSON, which would show them, so a client could hide
+ * a write from the check (by writing over it with a value the schema can't
+ * read, say) while every replica shows it. So `readProposal` fails with
+ * `Authority.Rejected` when the change writes where the schema has no part,
+ * writes a part with an op its rule doesn't take, or writes a value the schema
+ * can't read. A change that fits reads exactly as replicas will show it.
  *
  * **Gotchas**
  *
- * A proposal has only each value's latest write, so a value this schema
- * can't decode reads as its initial value, where a replica would show an
- * earlier write, and so does a required field that was removed, where a
- * replica would show its latest write. Read proposals with the newest version
- * of the schema, and upgrade the authority before the apps that write to it.
- * A client can do either on purpose to hide a write from a check, so a check
- * on a value doesn't hold against a hostile client.
+ * Read proposals with the newest version of the schema, and upgrade the
+ * authority before the apps that write to it: a change from a newer version
+ * doesn't fit an older one.
  *
  * **Example** (Only the owner approves)
  *
@@ -642,13 +650,14 @@ export interface Proposed<A> {
  * const initial = { body: "", status: "draft" } as const
  *
  * const OwnerApproves = Authority.layer({
- *   check: (proposal) => {
- *     if (proposal._tag === "Text") return Effect.void
- *     const { after, before } = ReplicatedDocument.readProposal(proposal, Spec, { initial })
- *     return after.status === "approved" && before.status !== "approved" && proposal.user !== "owner"
- *       ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
- *       : Effect.void
- *   }
+ *   check: (proposal) =>
+ *     Effect.gen(function*() {
+ *       if (proposal._tag === "Text") return yield* new Authority.Rejected({ message: "Specs aren't texts" })
+ *       const { after, before } = yield* ReplicatedDocument.readProposal(proposal, Spec, { initial })
+ *       if (after.status === "approved" && before.status !== "approved" && proposal.user !== "owner") {
+ *         return yield* new Authority.Rejected({ message: "Only the owner can approve" })
+ *       }
+ *     })
  * }).pipe(Layer.provide(HistoryStore.layerMemory))
  * ```
  *
@@ -660,14 +669,19 @@ export const readProposal = <A>(
   proposal: Authority.DocumentProposal,
   schema: Schema.Schema<A>,
   options: { readonly initial: NoInfer<A> }
-): Proposed<A> => {
-  const shape = shapeOf(schema)
-  return {
-    before: InternalShape.readJson(shape, proposal.before, options.initial) as A,
-    after: InternalShape.readJson(shape, proposal.after, options.initial) as A,
-    paths: proposal.paths
-  }
-}
+): Effect.Effect<Proposed<A>, Authority.Rejected> =>
+  Effect.suspend(() => {
+    const shape = shapeOf(schema)
+    for (const change of (proposal.delta as InternalDelta.DeltaImpl).changes.values()) {
+      const misfit = InternalShape.misfit(shape, change)
+      if (misfit !== undefined) return Effect.fail(new Authority.Rejected({ message: misfit }))
+    }
+    return Effect.succeed({
+      before: InternalShape.readJson(shape, proposal.before, options.initial) as A,
+      after: InternalShape.readJson(shape, proposal.after, options.initial) as A,
+      paths: proposal.paths
+    })
+  })
 
 /**
  * Returns `true` when a value is a replicated document.

@@ -24,6 +24,7 @@ import type * as Rpc from "effect/rpc/Rpc"
 import type * as RpcClient from "effect/rpc/RpcClient"
 import type * as RpcGroup from "effect/rpc/RpcGroup"
 import * as Schema from "effect/Schema"
+import type * as Delta from "./Delta.ts"
 import type * as HistoryStore from "./HistoryStore.ts"
 import * as InternalServer from "./internal/server.ts"
 import type * as Replica from "./Replica.ts"
@@ -79,7 +80,8 @@ export interface TextProposal {
 
 /**
  * A change to a document. An authority has no schema, so the document is
- * JSON; `ReplicatedDocument.readProposal` reads it with the app's.
+ * JSON; `ReplicatedDocument.readProposal` reads it with the app's, and rejects
+ * a change that doesn't fit.
  *
  * **Details**
  *
@@ -88,6 +90,7 @@ export interface TextProposal {
  *   aren't. Texts are strings, counters are the sum of their increments, and
  *   values are their latest write, encoded with their schema's JSON codec.
  * - `paths`: where the change wrote.
+ * - `delta`: the change itself.
  *
  * @stability unstable
  * @category models
@@ -100,6 +103,7 @@ export interface DocumentProposal {
   readonly before: Schema.Json
   readonly after: Schema.Json
   readonly paths: ReadonlyArray<Replica.Path>
+  readonly delta: Delta.Delta
 }
 
 /**

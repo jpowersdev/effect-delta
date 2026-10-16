@@ -92,9 +92,9 @@ describe("ReplicatedDocument", () => {
     expect(ReplicatedDocument.List).type.not.toBeCallableWith(Task, { key: "due" })
   })
 
-  it("readProposal reads typed values", () => {
+  it("readProposal reads typed values, or rejects the change", () => {
     expect(ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })).type.toBe<
-      ReplicatedDocument.Proposed<DesignDoc>
+      Effect.Effect<ReplicatedDocument.Proposed<DesignDoc>, Authority.Rejected>
     >()
   })
 })
