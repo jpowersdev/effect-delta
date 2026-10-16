@@ -374,7 +374,8 @@ type Overlap =
     readonly anchors: ReplicatedText.AnchorRange  // follows it from here on
     readonly replicas: ReadonlyArray<ReplicaId>
   }
-  // Documents only (documents.md): both wrote here, or one removed it; `kept` is whose write shows.
+  // Documents only (documents.md): both wrote here, both moved this list item, or one removed it;
+  // `kept` is whose write shows.
   | { readonly _tag: "Value"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId>; readonly kept: ReplicaId }
   // One removed this entry or item while the other changed something inside it.
   | { readonly _tag: "Removed"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId> }
@@ -515,6 +516,8 @@ interface DocumentProposal {
   readonly user: string
   readonly before: Schema.Json
   readonly after: Schema.Json
+  // The entries, list items and optional fields that exist in each, which JSON alone can't say
+  readonly exists: { readonly before: ReadonlyArray<Replica.Path>; readonly after: ReadonlyArray<Replica.Path> }
   readonly paths: ReadonlyArray<Replica.Path> // where the change wrote
   readonly delta: Delta                       // the change itself
 }
