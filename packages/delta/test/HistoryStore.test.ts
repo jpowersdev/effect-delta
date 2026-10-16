@@ -361,6 +361,36 @@ describe("HistoryStore", () => {
         assert.deepStrictEqual(snapshot.texts, [{ path: ["title"], text: "Sessions" }])
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+    it.effect("a change that can never be applied doesn't keep reopening from replaying everything", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        // Forged inside the sequence numbers of a change that arrives after
+        // it: it waits, then can never be applied, and it's saved.
+        const forged: InternalDocument.AnyChange = {
+          replica: "other",
+          seq: 1,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "InsertAt", index: 0, text: "x" }]
+        }
+        const other = yield* makeReplay("other")
+        yield* ReplicatedText.insert(other, 0, "Chapter")
+        yield* Effect.scoped(Effect.gen(function*() {
+          const first = yield* openReplay("session-1")
+          yield* Replica.receive(first, InternalDelta.fromChanges([forged]))
+          yield* Replica.receive(first, yield* Replica.delta(other, VersionVector.empty))
+          yield* ReplicatedText.insert(first, 7, " one")
+        }))
+        const snapshot = Option.getOrThrow(Option.getOrThrow(yield* store.load(notes)).snapshot)
+        assert.deepStrictEqual(snapshot.texts, [{ path: [], text: "Chapter one" }])
+
+        // A snapshot whose text the history wouldn't give shows it wasn't replayed.
+        yield* store.setSnapshot(notes, { ...snapshot, texts: [{ path: [], text: "Chapter ONE" }] })
+        const reopened = yield* Effect.scoped(Effect.flatMap(openReplay("session-2"), ReplicatedText.get))
+        assert.strictEqual(reopened, "Chapter ONE")
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
     it.effect("a snapshot that doesn't match the history is ignored", () =>
       Effect.gen(function*() {
         const store = yield* HistoryStore.HistoryStore
