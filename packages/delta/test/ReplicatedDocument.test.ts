@@ -1301,13 +1301,17 @@ describe("ReplicatedDocument", () => {
 
     it.effect("an optional field whose union has undefined among other members can't read what's undefined", () =>
       Effect.gen(function*() {
-        // Undefined beside others, and inside a union of its own.
+        // Undefined beside others, inside a union of its own, and as void.
         const versions = [
           [
             Schema.optionalKey(Schema.Union([Schema.String, Schema.Number, Schema.Undefined])),
             Schema.optionalKey(Schema.Union([Schema.String, Schema.Number, Schema.Null]))
           ],
-          [Schema.optional(Schema.UndefinedOr(Schema.String)), Schema.optional(Schema.NullOr(Schema.String))]
+          [Schema.optional(Schema.UndefinedOr(Schema.String)), Schema.optional(Schema.NullOr(Schema.String))],
+          [
+            Schema.optionalKey(Schema.Union([Schema.String, Schema.Void])),
+            Schema.optionalKey(Schema.NullOr(Schema.String))
+          ]
         ] as const
         for (const [due, dueV2] of versions) {
           const old = yield* ReplicatedDocument.make(Schema.Struct({ votes: ReplicatedDocument.Counter, due }), {
@@ -1331,25 +1335,28 @@ describe("ReplicatedDocument", () => {
 
     it.effect("an optional field keeps the checks of the union its undefined is left out of", () =>
       Effect.gen(function*() {
-        const Ticket = Schema.Struct({
-          due: Schema.optionalKey(
-            Schema.UndefinedOr(Schema.String).check(Schema.makeFilter((due) => due === undefined || due.length > 1))
+        // A member of its own, or one a suspend gives.
+        for (const member of [Schema.String, Schema.suspend(() => Schema.String)]) {
+          const Ticket = Schema.Struct({
+            due: Schema.optionalKey(
+              Schema.UndefinedOr(member).check(Schema.makeFilter((due) => due === undefined || due.length > 1))
+            )
+          })
+          const ticket = yield* ReplicatedDocument.make(Ticket, { initial: {}, replica: Replica.ReplicaId.make("r") })
+          // A value the check doesn't take can't be read.
+          yield* Replica.receive(
+            ticket,
+            InternalDelta.fromChanges([{
+              replica: "mallory",
+              seq: 0,
+              length: 1,
+              parents: [],
+              time: 1,
+              ops: [{ _tag: "Set", path: ["due"], value: "a" }]
+            }])
           )
-        })
-        const ticket = yield* ReplicatedDocument.make(Ticket, { initial: {}, replica: Replica.ReplicaId.make("r") })
-        // A value the check doesn't take can't be read.
-        yield* Replica.receive(
-          ticket,
-          InternalDelta.fromChanges([{
-            replica: "mallory",
-            seq: 0,
-            length: 1,
-            parents: [],
-            time: 1,
-            ops: [{ _tag: "Set", path: ["due"], value: "a" }]
-          }])
-        )
-        assert.deepStrictEqual(yield* ReplicatedDocument.get(ticket), {})
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(ticket), {})
+        }
       }))
 
     it.effect("an older schema is told only of overlaps between writes it can read", () =>
