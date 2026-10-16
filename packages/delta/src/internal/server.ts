@@ -148,7 +148,8 @@ export const make = Effect.fnUntraced(function*(options: {
       return yield* Effect.gen(function*() {
         // It may have failed while this push waited.
         yield* ensureServing(document)
-        const incoming = [...(request.delta as InternalDelta.DeltaImpl).changes.values()]
+        const delta = request.delta as InternalDelta.DeltaImpl
+        const incoming = [...delta.changes.values()]
         for (const change of incoming) {
           const owner = document.owners.get(change.replica)
           if (owner !== undefined && owner !== user) {
@@ -215,9 +216,9 @@ export const make = Effect.fnUntraced(function*(options: {
         let malformed = refused
         if (check === undefined) {
           // A relay drops a bad change and carries on. If the bad change came
-          // with an earlier push, that push has already been answered.
+          // only with an earlier push, that push has already been answered.
           for (const problem of InternalDocument.integrateReady(state, { overlaps: false }).problems) {
-            if (pushed.has(problem.key)) malformed ??= problem.message
+            if (delta.changes.has(problem.key)) malformed ??= problem.message
           }
         } else {
           for (const change of History.takeReady(state.history)) {

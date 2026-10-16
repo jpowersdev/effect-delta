@@ -339,8 +339,8 @@ const receive = (
   const published = integrated.applied === 0
     ? Effect.void
     : publish(engine, { _tag: "Remote", texts: integrated.texts, overlaps, message: "" })
-  // A bad change that waited on these came with an earlier delta, which was
-  // answered then: these are fine, as a relay would say.
+  // A bad change that waited on these, if it came only with an earlier delta,
+  // was answered then: these are fine, as a relay would say.
   const problem = integrated.problems.find(({ key }) => delta.changes.has(key))?.message ?? refused
   if (problem === undefined) return Effect.as(published, overlaps)
   return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem }))))
