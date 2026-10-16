@@ -750,6 +750,24 @@ describe("ReplicatedDocument", () => {
   })
 
   describe("reading", () => {
+    it.effect("a value read can't be changed in place, which would change history", () =>
+      Effect.gen(function*() {
+        const Notes = Schema.Struct({ extra: Schema.Unknown })
+        const notes = yield* ReplicatedDocument.make(Notes, {
+          initial: { extra: null },
+          replica: Replica.ReplicaId.make("r")
+        })
+        yield* ReplicatedDocument.set(notes, { extra: { tags: ["a"] } })
+        const { extra } = yield* ReplicatedDocument.get(notes)
+        assert.throws(() => (extra as { tags: Array<string> }).tags.push("b"))
+        const copy = yield* ReplicatedDocument.make(Notes, {
+          initial: { extra: null },
+          replica: Replica.ReplicaId.make("c")
+        })
+        yield* Replica.exchange(notes, copy)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(copy), { extra: { tags: ["a"] } })
+      }))
+
     it.effect("unchanged parts keep their identity", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")

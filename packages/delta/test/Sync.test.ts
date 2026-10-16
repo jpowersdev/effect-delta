@@ -1722,6 +1722,24 @@ describe("Authority", () => {
       }).pipe(Effect.provide(Recording))
     })
 
+    it.effect("reading a proposal with an initial value that doesn't fit the schema is a defect, as making a document is", () =>
+      Effect.gen(function*() {
+        const proposal: Authority.DocumentProposal = {
+          _tag: "Document",
+          document: spec,
+          user: "ada",
+          before: {},
+          after: {},
+          exists: { before: [], after: [] },
+          paths: [],
+          delta: Delta.empty
+        }
+        const exit = yield* Effect.exit(
+          ReplicatedDocument.readProposal(proposal, DesignDoc, { initial: { ...initial, status: "done" as never } })
+        )
+        assert.isTrue(Exit.hasDies(exit))
+      }))
+
     it.effect("a proposal is plain data: a copy reads the same", () => {
       const reads: Array<readonly [DesignDoc, DesignDoc]> = []
       const Copying = Authority.layer({
