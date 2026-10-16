@@ -1030,6 +1030,34 @@ describe("Authority", () => {
       }).pipe(Effect.provide(Recording))
     })
 
+    it.effect("a proposal is plain data: a copy reads the same", () => {
+      const reads: Array<readonly [DesignDoc, DesignDoc]> = []
+      const Copying = Authority.layer({
+        check: (proposal) =>
+          proposal._tag === "Text" ? Effect.void : Effect.gen(function*() {
+            const original = yield* ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
+            const copy = yield* ReplicatedDocument.readProposal({ ...proposal }, DesignDoc, { initial })
+            reads.push([original.after, copy.after])
+          })
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        // Written inside a comment that was never added, so the copy has to
+        // know what exists to leave it out.
+        const delta = InternalDelta.fromChanges([{
+          replica: "intruder",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "Set", path: ["comments", "c9", "author"], value: "ada" }]
+        }])
+        yield* authority.push({ format: Sync.FORMAT, document: spec, delta })
+        const [original, copy] = reads.at(-1)!
+        assert.deepStrictEqual(copy, original)
+      }).pipe(Effect.provide(Copying))
+    })
+
     it.effect("a confirmed document syncs with nothing else", () =>
       Effect.gen(function*() {
         const confirmed = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
