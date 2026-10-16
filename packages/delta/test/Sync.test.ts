@@ -3,7 +3,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { Context, Deferred, Effect, Equal, Exit, Fiber, Layer, Option, Queue, Schedule, Schema, Stream } from "effect"
 import {
   Authority,
-  type Delta,
+  Delta,
   HistoryStore,
   Relay,
   Replica,
@@ -349,6 +349,38 @@ describe("Relay", () => {
         })
         yield* shows((doc) => doc.votes === 1)
       }).pipe(Effect.scoped, Effect.provide(RelayLive)))
+
+    it.effect("keeps a change that waits though its push brought a bad one, as replicas do", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const push = (delta: Delta.Delta) => relay.push({ format: Sync.FORMAT, document: notes, delta })
+        const ada = yield* makeDoc("ada")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes: 1 }))
+        const fromAda = yield* Replica.delta(ada, VersionVector.empty)
+        // Ben's change waits for Ada's, which Ada hasn't pushed yet.
+        const ben = yield* makeDoc("ben")
+        yield* Replica.receive(ben, fromAda)
+        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, status: "review" }))
+        const fromBen = yield* Replica.delta(ben, yield* Replica.version(ada))
+        const bad = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "Set", path: ["title"], value: "x" }]
+        }])
+        const error = yield* Effect.flip(push(Delta.combine(fromBen, bad)))
+        assert.strictEqual(error.reason._tag, "DeltaError")
+        yield* push(fromAda)
+        // Whoever subscribes gets Ben's change.
+        const carol = yield* makeDoc("carol")
+        const first = yield* Stream.runHead(
+          relay.subscribe({ format: Sync.FORMAT, document: notes, strategy: "tree", version: {}, authority: false })
+        )
+        yield* Replica.receive(carol, Option.getOrThrow(first).delta)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(carol), yield* ReplicatedDocument.get(ben))
+      }).pipe(Effect.provide(RelayLive)))
 
     it.effect("stores documents it can't read, and replicas reload them intact", () =>
       Effect.gen(function*() {
