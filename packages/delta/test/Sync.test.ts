@@ -437,6 +437,51 @@ describe("Relay", () => {
         assert.deepStrictEqual(pushed, received)
       }).pipe(Effect.provide(RelayLive)))
 
+    it.effect("refuses a whole push with a change under another's key, though it's malformed too, as replicas do", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const first: InternalDocument.AnyChange = {
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }
+        // Under the key of `first`, and refused as it arrives: it takes no
+        // sequence numbers.
+        const reused: InternalDocument.AnyChange = { ...first, length: 0 }
+        const vote: InternalDocument.AnyChange = {
+          replica: "ben",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "Increment", path: ["votes"], by: 1 }]
+        }
+        const reason = (exit: Exit.Exit<unknown, Replica.DeltaError | Sync.SyncError>) => {
+          const error = Exit.isFailure(exit) ? Option.getOrUndefined(Cause.findErrorOption(exit.cause)) : undefined
+          const delta = error?._tag === "SyncError" ? error.reason : error
+          return delta?._tag === "DeltaError" ? delta.reason._tag : undefined
+        }
+        const ada = yield* makeDoc("ada")
+        yield* Replica.receive(ada, InternalDelta.fromChanges([first]))
+        const received = yield* Effect.exit(Replica.receive(ada, InternalDelta.fromChanges([reused, vote])))
+        const push = (changes: ReadonlyArray<InternalDocument.AnyChange>) =>
+          Effect.exit(relay.push({ format: Sync.FORMAT, document: notes, delta: InternalDelta.fromChanges(changes) }))
+        yield* push([first])
+        const pushed = yield* push([reused, vote])
+        assert.strictEqual(reason(received), "ReplicaIdReused")
+        assert.strictEqual(reason(pushed), reason(received))
+        // Neither took Ben's vote.
+        const subscriber = yield* makeDoc("subscriber")
+        const sent = yield* Stream.runHead(
+          relay.subscribe({ format: Sync.FORMAT, document: notes, strategy: "tree", version: {}, authority: false })
+        )
+        yield* Replica.receive(subscriber, Option.getOrThrow(sent).delta)
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(subscriber), yield* ReplicatedDocument.get(ada))
+      }).pipe(Effect.provide(RelayLive)))
+
     it.effect("keeps what it sent when a change reuses the key of one that turned out bad", () =>
       Effect.gen(function*() {
         const review: InternalDocument.AnyChange = {
