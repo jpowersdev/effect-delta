@@ -325,6 +325,30 @@ describe("HistoryStore", () => {
         })
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+    it.effect("reopening reports no overlaps with what came after the snapshot, as loading never does", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        // Concurrent edits: one saved with a snapshot, the other saved after it.
+        const ada = yield* makeDoc("ada", "replay")
+        const ben = yield* makeDoc("ben", "replay")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "review", body: "hello" }))
+        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, status: "approved", body: "world" }))
+        yield* Effect.scoped(Effect.gen(function*() {
+          const first = yield* openDoc("session-1", "replay")
+          yield* Replica.receive(first, yield* Replica.delta(ada, VersionVector.empty))
+        }))
+        yield* store.append(notes, yield* Replica.delta(ben, VersionVector.empty))
+
+        yield* Effect.scoped(Effect.gen(function*() {
+          const reopened = yield* makeDoc("session-2", "replay")
+          const { edits } = yield* ReplicatedDocument.subscribe(reopened)
+          yield* HistoryStore.persist(reopened, notes)
+          // The snapshot, then what came after it.
+          const loaded = yield* edits.pipe(Stream.take(2), Stream.runCollect)
+          assert.deepStrictEqual(loaded.flatMap((edit) => edit._tag === "Remote" ? edit.overlaps : []), [])
+        }))
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
     it.effect("an edit that changes nothing leaves no text in the snapshot", () =>
       Effect.gen(function*() {
         const store = yield* HistoryStore.HistoryStore
