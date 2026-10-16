@@ -16,6 +16,15 @@ import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
+import {
+  Board,
+  documentRuns,
+  DocumentSession,
+  initialBoard,
+  makeBoards,
+  stepBoards,
+  syncAll
+} from "./utils/sessions.ts"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
 const notes = Replica.DocumentId.make("notes")
@@ -918,6 +927,44 @@ describe("Authority", () => {
         )
       }).pipe(Effect.provide(ownerApproves())))
 
+    it.effect.prop(
+      "accepts every honest change, and its check reads each one as replicas show it",
+      { session: DocumentSession },
+      Effect.fnUntraced(function*({ session }) {
+        const proposals: Array<
+          { readonly proposed: ReplicatedDocument.Proposed<typeof Board.Type>; readonly delta: Delta.Delta }
+        > = []
+        const Reading = Authority.layer({
+          check: (proposal) =>
+            proposal._tag === "Text"
+              ? Effect.fail(new Authority.Rejected({ message: "Boards aren't texts" }))
+              : Effect.map(ReplicatedDocument.readProposal(proposal, Board, { initial: initialBoard }), (proposed) => {
+                proposals.push({ proposed, delta: proposal.delta })
+              })
+        }).pipe(Layer.provide(HistoryStore.layerMemory))
+        yield* Effect.gen(function*() {
+          const authority = yield* Authority.Authority
+          const boards = yield* makeBoards("tree")
+          for (const command of session) yield* stepBoards(boards, command)
+          yield* syncAll(boards)
+          const delta = yield* Replica.delta(boards[0]!, VersionVector.empty)
+          assert.strictEqual((yield* authority.push({ format: Sync.FORMAT, document: spec, delta }))._tag, "Accepted")
+
+          // A replica that receives the changes in the order they were checked.
+          const replica = yield* ReplicatedDocument.make(Board, {
+            initial: initialBoard,
+            replica: Replica.ReplicaId.make("replica")
+          })
+          for (const { delta, proposed } of proposals) {
+            assert.deepStrictEqual(proposed.before, yield* ReplicatedDocument.get(replica))
+            yield* Replica.receive(replica, delta)
+            assert.deepStrictEqual(proposed.after, yield* ReplicatedDocument.get(replica))
+          }
+        }).pipe(Effect.provide(Reading))
+      }),
+      { arbitrary: documentRuns }
+    )
+
     it.effect("accepts a list's first item after text was typed into an item nobody added", () =>
       Effect.gen(function*() {
         const authority = yield* Authority.Authority
@@ -995,7 +1042,10 @@ describe("Authority", () => {
           ]
         }])
         yield* authority.push({ format: Sync.FORMAT, document: spec, delta })
-        const laptop = yield* ReplicatedDocument.make(List, { initial: empty, replica: Replica.ReplicaId.make("laptop") })
+        const laptop = yield* ReplicatedDocument.make(List, {
+          initial: empty,
+          replica: Replica.ReplicaId.make("laptop")
+        })
         yield* Replica.receive(laptop, delta)
         assert.deepStrictEqual(read, [yield* ReplicatedDocument.get(laptop)])
       }).pipe(Effect.provide(Recording))
