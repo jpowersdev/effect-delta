@@ -41,7 +41,10 @@ export interface Part {
   readonly ops: ReadonlyArray<Op>
   /** What the change's author had seen, across the whole document. */
   readonly past: VersionVector.VersionVector
-  /** The last ids of the latest parts of this text the change was made on top of. */
+  /**
+   * The last ids of the latest parts of this text the change was made on top
+   * of, for the replay strategy, which merges by them; empty for tree.
+   */
   readonly parents: ReadonlyArray<Id>
 }
 

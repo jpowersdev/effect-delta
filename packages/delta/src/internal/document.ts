@@ -679,7 +679,7 @@ const applyChanges = (
   readonly bad: ReadonlyArray<{ readonly change: AnyChange; readonly message: string }>
   readonly waiting: ReadonlyArray<AnyChange>
 } => {
-  const contexts = contextsOf(document.history, changes)
+  const contexts = contextsOf(document, changes)
   // Every text's parts of the batch, in order, for its merge.
   const incoming = new Map<string, Array<TextPart>>()
   for (const { parts } of contexts) {
@@ -779,11 +779,14 @@ interface Context {
 
 // What each change was made on top of, for changes whose parents are applied
 // or come earlier in the batch.
-const contextsOf = (history: History.History<Op>, changes: ReadonlyArray<AnyChange>): Array<Context> => {
+const contextsOf = (document: Document, changes: ReadonlyArray<AnyChange>): Array<Context> => {
+  const { history } = document
   type Entry = { readonly change: AnyChange; readonly past: VersionVector.VersionVector }
   const batch = new Map<string, Array<Entry>>()
   // By last id, which is what parents name.
   const ends = new Map<string, Entry>()
+  // The texts earlier changes in the batch have parts of.
+  const touched = new Set<string>()
   const owner = (id: Id) => {
     const applied = History.find(history, id)
     if (applied !== undefined) return { change: applied, past: history.pasts.get(key(applied))! }
@@ -808,12 +811,24 @@ const contextsOf = (history: History.History<Op>, changes: ReadonlyArray<AnyChan
     ofReplica.push(entry)
     batch.set(change.replica, ofReplica)
     ends.set(idKey(lastId(change)), entry)
-    const parts = textParts(change, past, (path) => textParents(change, path, (id) => owner(id)?.change))
+    // A text nothing applied or earlier in the batch has touched has no
+    // parts to be made on top of.
+    const parts = textParts(
+      change,
+      past,
+      (path) =>
+        touched.has(Path.key(path)) || slot(document, path)?.text !== undefined
+          ? textParents(change, path, (id) => owner(id)?.change)
+          : []
+    )
+    for (const part of parts) touched.add(Path.key(part.path))
     return { past, parentTime, parentsAreChanges, parts }
   })
 }
 
 // A change's text ops, grouped into one part per run of ops on the same text.
+// Only a replay text merges by its parts' parents, which can take a walk
+// through the history to find.
 const textParts = (
   change: AnyChange,
   past: VersionVector.VersionVector,
@@ -823,7 +838,8 @@ const textParts = (
   let current: { path: Path.Path; seq: number; length: number; ops: Array<Text.Op> } | undefined
   const close = () => {
     if (current !== undefined) {
-      parts.push({ replica: change.replica, past, parents: parentsOf(current.path), ...current })
+      const parents = current.ops.some(ReplayText.isOp) ? parentsOf(current.path) : []
+      parts.push({ replica: change.replica, past, parents, ...current })
     }
     current = undefined
   }
@@ -1372,7 +1388,8 @@ export const load = (
       seq += opLength(op)
     }
     const owner = (id: Id) => History.find(history, id)
-    for (const part of textParts(change, past, (path) => textParents(change, path, owner))) {
+    const parentsOf = (path: Path.Path) => parts.has(Path.key(path)) ? textParents(change, path, owner) : []
+    for (const part of textParts(change, past, parentsOf)) {
       const k = Path.key(part.path)
       const entry = parts.get(k) ?? { path: part.path, parts: [] }
       entry.parts.push(part)
