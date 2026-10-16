@@ -205,7 +205,10 @@ older version of the schema) is left out, unless the field has a constructor def
 must be a constant: one that reads the clock or makes a random id would show differently on each replica.
 A field that shows its default is compared with it, so an `update` that leaves it as it shows doesn't write it,
 nor write over a value only a newer schema can read.
-An optional field can't have one, because it would show while the field is absent; `make` refuses it.
+An optional field can't have one, because it would show while the field is absent; `make` refuses it. Nor can
+a struct field: filled in whole as soon as one value in it can't be read, the default would hide the rest, and
+an edit would write the default over them. Give the values in it defaults instead, which fill in only what's
+missing.
 
 The alternatives:
 - **Defaults in the schema** (`Schema.withDecodingDefaultTypeKey` on every field): pure Schema, but verbose

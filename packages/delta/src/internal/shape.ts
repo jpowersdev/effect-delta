@@ -52,8 +52,6 @@ export interface Field {
   readonly optional: boolean
   /** Whether the schema fills the field in when it's missing. */
   readonly hasDefault: boolean
-  /** For a field the schema fills in, whether two of its values are the same. */
-  readonly equivalence: Equivalence.Equivalence<unknown> | undefined
 }
 
 /** @internal */
@@ -149,9 +147,7 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
         return refuse(path, `a list's items must be structs or classes with a required "${rule.key}" field`)
       }
       // An item's key is never made up: one without it can't be read.
-      const fields = item.fields.map((other) =>
-        other === field ? { ...field, hasDefault: false, equivalence: undefined } : other
-      )
+      const fields = item.fields.map((other) => other === field ? { ...field, hasDefault: false } : other)
       return { _tag: "List", item: { ...item, fields }, key: rule.key }
     }
   }
@@ -202,13 +198,16 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
         "an optional field can't have a constructor default: it would show while absent"
       )
     }
-    return {
-      name: signature.name,
-      shape: compileAst(optional ? withoutUndefined(signature.type) : signature.type, [...path, signature.name]),
-      optional,
-      hasDefault,
-      equivalence: hasDefault ? Schema.toEquivalence(Schema.make(signature.type)) : undefined
+    const shape = compileAst(optional ? withoutUndefined(signature.type) : signature.type, [...path, signature.name])
+    // Filled in whole when one value in it can't be read, it would hide the
+    // rest, and an edit would write the default over them.
+    if (hasDefault && shape._tag === "Fields") {
+      refuse(
+        [...path, signature.name],
+        "a struct field can't have a constructor default: give the fields in it defaults instead"
+      )
     }
+    return { name: signature.name, shape, optional, hasDefault }
   })
 
 // An optional field's `undefined` counts as absent.
@@ -726,13 +725,13 @@ const planAt = (
         // unwritten, so it doesn't write over what a newer schema wrote there,
         // or over a concurrent write.
         if (
-          initial === undefined && field.equivalence !== undefined &&
+          initial === undefined && field.hasDefault && field.shape._tag === "Value" &&
           readAt(field.shape, documentAt(document, fieldPath), undefined, memo) === Missing
         ) {
           shownValue ??= readAt(shape, documentAt(document, path), undefined, memo)
           if (
             shownValue !== Missing &&
-            field.equivalence((shownValue as Record<string, unknown>)[field.name], fieldAfter)
+            field.shape.equivalence((shownValue as Record<string, unknown>)[field.name], fieldAfter)
           ) continue
         }
         if (!field.optional) {
