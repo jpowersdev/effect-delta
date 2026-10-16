@@ -335,6 +335,30 @@ export const shows = (shape: Shape, overlap: InternalDocument.Overlap): boolean 
 }
 
 /**
+ * How a value read with `shape` reads the values written at each path, for
+ * overlaps: as the value there decodes them, and not at all where there's no
+ * value or one doesn't decode.
+ *
+ * @internal
+ */
+export const values = (shape: Shape): InternalDocument.Values => {
+  const valueAt = (path: Path.Path): Value | undefined => {
+    const found = at(shape, path)
+    return typeof found !== "string" && found.shape._tag === "Value" ? found.shape : undefined
+  }
+  return {
+    reads: (path, json) => {
+      const value = valueAt(path)
+      return value !== undefined && Result.isSuccess(value.decode(json))
+    },
+    differ: (path, a, b) => {
+      const value = valueAt(path)!
+      return !value.equivalence(Result.getOrThrow(value.decode(a)), Result.getOrThrow(value.decode(b)))
+    }
+  }
+}
+
+/**
  * What in a change doesn't fit the schema, if anything: an op at a path the
  * schema doesn't have, or of a kind its rule there doesn't take, a value it
  * can't read, a record key that isn't one, an item key field that names

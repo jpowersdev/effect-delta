@@ -65,7 +65,9 @@ const Proto = {
 // A replicated text is a document whose only part is a text at the root.
 const model: InternalEngine.Model = {
   read: (document) => InternalDocument.textAt(document, InternalPath.root),
-  shows: (overlap) => overlap._tag === "Text" && InternalPath.isRoot(overlap.path)
+  shows: (overlap) => overlap._tag === "Text" && InternalPath.isRoot(overlap.path),
+  // It reads no values.
+  values: { reads: () => false, differ: () => false }
 }
 
 const makeWith = Effect.fnUntraced(function*(options: {

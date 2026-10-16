@@ -156,7 +156,9 @@ export const Overlap: Schema.Codec<Overlap, OverlapEncoded> = Schema.Union([
  * - `Value`: both wrote different values at `path`, both moved the list item
  *   at `path`, or one removed it while the other wrote it. `kept` is the
  *   replica whose write shows, which can be a third replica whose later write
- *   arrived in the same merge.
+ *   arrived in the same merge. Values are compared as this replica's schema
+ *   reads them, and one it can't read, written by a newer version of the
+ *   schema, meets nothing.
  * - `Removed`: one removed the entry, list item or optional field at `path`
  *   while the other changed something inside it (its text or counter, if
  *   it's one), or moved it. It stays removed, and its content is kept.

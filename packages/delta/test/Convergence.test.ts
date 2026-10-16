@@ -320,7 +320,11 @@ const checkOverlaps = Effect.fnUntraced(function*<A>(
     overlaps.filter(({ _tag }) => _tag !== "Text").map((overlap) => JSON.stringify(overlap)).sort()
   assert.deepStrictEqual(
     sorted(edit.overlaps),
-    sorted(expectedOverlaps(changes, before, after).filter((overlap) => InternalShape.shows(shape, overlap))),
+    sorted(
+      expectedOverlaps(changes, before, after, InternalShape.values(shape)).filter((overlap) =>
+        InternalShape.shows(shape, overlap)
+      )
+    ),
     receiving
   )
 

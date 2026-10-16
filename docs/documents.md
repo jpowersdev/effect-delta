@@ -86,7 +86,9 @@ was made on top of, even when the device's clock is behind. Only writes made wit
 ordered by the clock, and then the one made later wins, which is what people expect. Writes in the same
 millisecond go to the larger replica id: arbitrary, but the same everywhere. When concurrent writes put
 different values, the merge reports a `Value` overlap that says whose write it kept. As with text, an
-overlap is between a write the replica had and one it received, so loading a document reports none.
+overlap is between a write the replica had and one it received, so loading a document reports none. Values
+are compared as the replica reads them, with `Schema.toEquivalence`, so a set written in another order is
+the same value.
 
 The alternatives:
 - **Lamport order** (Automerge, Loro): the write with more history behind it wins. It needs no clock, but a
@@ -220,10 +222,12 @@ The alternatives:
 
 Apps upgrade one device at a time, so replicas on different versions of a schema sync with each other.
 - **Adding a field:** documents that never wrote it show its initial value. Add it to `initial`. A field
-  added to an entry's or item's schema should be optional or have a constant constructor default.
+  added to an entry's or item's schema should be optional or have a constant constructor default (for a
+  struct, the values in it should).
 - **Parts an older schema doesn't describe** (a new field, a value it can't decode, such as a new literal)
-  are kept, stored and sent on, but don't show in its value, and merges don't report overlaps in them. A
-  value whose latest write it can't decode shows the latest write it can. After the upgrade, they show.
+  are kept, stored and sent on, but don't show in its value, and merges don't report overlaps in them: a
+  value it can't decode meets nothing. A value whose latest write it can't decode shows the latest write it
+  can, and an overlap between writes it can decode names that one as kept. After the upgrade, they show.
 - **Renaming or removing a field, or changing its rule** (a value becoming text) isn't supported, because
   paths are field names. Lenses (Cambria) are later. A replica keeps changes its schema has another rule
   for, and passes them on, but they don't show: a path keeps a text, values and a counter apart, and each

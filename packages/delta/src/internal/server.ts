@@ -204,7 +204,7 @@ export const make = Effect.fnUntraced(function*(options: {
         if (check === undefined) {
           // A relay drops a bad change and carries on. If the bad change came
           // only with an earlier push, that push has already been answered.
-          for (const problem of InternalDocument.integrateReady(state, { overlaps: false }).problems) {
+          for (const problem of InternalDocument.integrateReady(state, { overlaps: undefined }).problems) {
             if (delta.changes.has(problem.key)) malformed ??= problem.message
           }
         } else {
@@ -334,7 +334,7 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
     for (const change of changes) state.history.pending.set(key(change), change)
     // Applied changes were checked before they were stored. One that was
     // stored while it waited, and turns out to be bad, is dropped.
-    InternalDocument.integrateReady(state, { overlaps: false })
+    InternalDocument.integrateReady(state, { overlaps: undefined })
   }
   return document
 })

@@ -30,6 +30,8 @@ export interface Model {
   readonly read: (document: InternalDocument.Document) => unknown
   /** Whether the value shows the part an overlap is at. */
   readonly shows: (overlap: InternalDocument.Overlap) => boolean
+  /** How the value reads the values written at each path, for overlaps. */
+  readonly values: InternalDocument.Values
 }
 
 /**
@@ -362,7 +364,9 @@ const receive = (
   if (arrived.reused !== undefined) return reused(arrived.reused)
 
   // A bad change is dropped, and the rest are applied without it.
-  const integrated = InternalDocument.integrateReady(state.document, options)
+  const integrated = InternalDocument.integrateReady(state.document, {
+    overlaps: options.overlaps ? engine.model.values : undefined
+  })
   const overlaps = integrated.overlaps.filter(engine.model.shows).map(toOverlap)
   const published = integrated.applied === 0
     ? Effect.void

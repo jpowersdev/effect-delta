@@ -1,5 +1,5 @@
 import { assert } from "@effect/vitest"
-import { Effect, Equal, Option, Random, Schema, Stream, Struct } from "effect"
+import { Effect, Option, Random, Schema, Stream, Struct } from "effect"
 import { Delta, Replica, ReplicatedDocument, ReplicatedText, Sync, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import * as InternalDocument from "effect-delta/internal/document"
@@ -892,20 +892,25 @@ const byPath = (writes: ReadonlyArray<Written>): Map<string, Array<Written>> => 
 /**
  * The value and removal overlaps a merge reports, by their rule: a write the
  * replica had meets one it received that hadn't seen it. `Value` where they
- * wrote different values, said differently whether the part exists, or both
- * moved its item; `Removed` where one removed the part and the other edited
- * inside it or moved it, if it ends removed. `changes` are every change the
- * replica has, and `before` and `after` its versions around the merge.
+ * wrote values it reads as different, said differently whether the part
+ * exists, or both moved its item; `Removed` where one removed the part and
+ * the other edited inside it or moved it, if it ends removed. A value it
+ * can't read meets nothing. `changes` are every change the replica has,
+ * `before` and `after` its versions around the merge, and `values` how it
+ * reads values.
  */
 export const expectedOverlaps = (
   changes: ReadonlyArray<InternalDocument.AnyChange>,
   before: VersionVector.VersionVector,
-  after: VersionVector.VersionVector
+  after: VersionVector.VersionVector,
+  values: InternalDocument.Values
 ): Array<Overlap> => {
   const applied = appliedBy(changes, after)
   const earlier = new Set(appliedBy(changes, before))
   const writes = (changes: ReadonlyArray<InternalDocument.AnyChange>) =>
-    changes.flatMap((change) => writesOf(change, applied))
+    changes.flatMap((change) => writesOf(change, applied)).filter((write) =>
+      write.kind !== "value" || values.reads(write.path, write.value!)
+    )
   const had = byPath(writes([...earlier]))
   const received = writes(applied.filter((change) => !earlier.has(change)))
   const all = byPath([...[...had.values()].flat(), ...received])
@@ -928,7 +933,7 @@ export const expectedOverlaps = (
       if (saw(write, other)) continue
       if (write.kind === other.kind) {
         const differ = write.kind === "value"
-          ? !Equal.equals(write.value, other.value)
+          ? values.differ(write.path, write.value!, other.value!)
           : write.kind === "presence"
           ? write.exists !== other.exists
           : write.kind === "place"
