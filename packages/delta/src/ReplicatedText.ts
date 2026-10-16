@@ -474,8 +474,9 @@ export const changes: (self: Editable) => Stream.Stream<string> = changesImpl
  *
  * **Details**
  *
- * - `Local`: an edit made on this replica. Editor bindings skip these, because
- *   the editor made them.
+ * - `Local`: an edit made on this replica. An editor binding skips the ones it
+ *   made itself, and applies the rest, such as a `ReplicatedDocument.update`
+ *   that changed a text field.
  * - `Remote`: changes from another replica merged in, with any overlaps the
  *   merge found.
  * - `Rejected`: an authority rejected this replica's edit; `patch` rolls it
@@ -510,7 +511,8 @@ export interface Subscription {
 /**
  * Subscribes to the text's edits for the life of the scope. No edit is missed
  * between reading `text` and the first of `edits`, which is what an editor
- * binding needs: load `text`, then apply each `Remote` and `Rejected` patch.
+ * binding needs: load `text`, then apply each patch except the `Local` ones it
+ * made itself.
  *
  * **Example** (Watching edits)
  *

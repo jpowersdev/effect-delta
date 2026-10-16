@@ -277,7 +277,7 @@ interface Subscription {
 }
 
 type Edit =
-  | { readonly _tag: "Local"; readonly patch: TextPatch }  // bindings skip these: the editor made them
+  | { readonly _tag: "Local"; readonly patch: TextPatch }  // bindings skip the ones they made
   | { readonly _tag: "Remote"; readonly patch: TextPatch; readonly overlaps: ReadonlyArray<Replica.Overlap> }
   | { readonly _tag: "Rejected"; readonly patch: TextPatch; readonly message: string } // rolls back my edit
 
@@ -318,8 +318,9 @@ how concurrent edits merge (it's why the example gives "812 hours"). `TextPatch.
 Editors should use `insert`, `remove` and `applyPatch`. Those say exactly what the user did, while a diff
 has to guess: in `"aa"` → `"aaa"`, which `a` was typed?
 
-**Editor bindings** call `subscribe`, load `text` into the editor, then apply `Remote` and `Rejected`
-patches and skip `Local` ones, which is what prevents echo loops. If the editor has keystrokes it hasn't
+**Editor bindings** call `subscribe`, load `text` into the editor, then apply every patch except the
+`Local` ones they made, which is what prevents echo loops. Other `Local` patches, such as a document
+`update` that changed a text field, are applied like the rest. If the editor has keystrokes it hasn't
 handed to the replica yet, the binding moves the remote patch past them with `TextPatch.transform`.
 
 **`make` needs `Crypto`** for random replica ids. Platform layers (`NodeServices.layer` and the browser

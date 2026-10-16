@@ -571,8 +571,9 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * one replacement each (as `ReplicatedText.set` does), counters by the
  * difference, records by which keys appear and disappear (leaving out keys
  * the record doesn't take, as decoding does), and lists by which keys appear,
- * disappear and move. Fails with `Schema.SchemaError` if the new
- * value doesn't fit the schema, if two items of a list have the same key, or
+ * disappear and move. Fails with `Schema.SchemaError` if the new value doesn't
+ * fit the schema (a class's parts must be its instances, as for its schema),
+ * if two items of a list have the same key, or
  * if a value encodes to something JSON can't carry, or to JSON that reads
  * back as another value (as a union's members can).
  *
@@ -618,6 +619,11 @@ export const update: {
  * Replaces the value with `value`, as one change, writing only what changed
  * (see `update`).
  *
+ * **Gotchas**
+ *
+ * As with `update`, give it a new value, not the one the document shows
+ * changed in place: that change shows on this replica without being written.
+ *
  * @stability unstable
  * @category editing
  * @since 0.1.0
@@ -658,7 +664,9 @@ type TextPathWithin<A, Steps extends ReadonlyArray<0>> = A extends string ? read
  *
  * Each edit through it is one change to the document. A text field in a
  * record entry or list item that doesn't exist, or was removed, still works:
- * its text is kept, and shows once the entry exists. The path's type allows
+ * its text is kept, and shows once the entry exists. An `update` that adds the
+ * entry writes the text it's given over the kept text, so to keep it, give
+ * the entry the handle's text (`ReplicatedText.get`). The path's type allows
  * any string in the value, but only a `Text` is a text field: a path to
  * another string throws, as a defect.
  *

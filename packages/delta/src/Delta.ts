@@ -2,7 +2,7 @@
  * A delta is what replicas send each other: a set of changes, usually
  * everything one replica has that another lacks. Deltas combine by union, so
  * combining is commutative, associative and idempotent: deltas can arrive in
- * any order, any number of times, and a replica ends up with the same text.
+ * any order, any number of times, and a replica ends up with the same value.
  *
  * A delta is opaque. Get one from `Replica.delta`, send it (it has a JSON
  * codec), and give it to `Replica.receive`. A replica's whole history is just
