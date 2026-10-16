@@ -11,6 +11,7 @@ import {
   Sync,
   VersionVector
 } from "effect-delta"
+import * as InternalDelta from "effect-delta/internal/delta"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 
@@ -407,6 +408,34 @@ describe("Relay", () => {
           }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
         )
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
+    it.effect("keeps nothing of a change it rejects", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        // A replay text inside `status`, edited where it has no text.
+        const bad = InternalDelta.fromChanges([{
+          replica: "bad",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "InsertAt", path: ["status", "note"], index: 5, text: "a" }]
+        }])
+        const error = yield* Effect.flip(relay.push({ format: Sync.FORMAT, document: notes, delta: bad }))
+        assert.strictEqual(error.reason._tag === "DeltaError" && error.reason.reason._tag, "Malformed")
+
+        // Neither its text nor its strategy is left behind, so a value can go
+        // where the text would have been, and a tree replica can subscribe.
+        const laptop = yield* makeDoc("laptop")
+        yield* ReplicatedDocument.update(laptop, (doc) => ({ ...doc, status: "review" }))
+        const ack = yield* relay.push({
+          format: Sync.FORMAT,
+          document: notes,
+          delta: yield* Replica.delta(laptop, VersionVector.empty)
+        })
+        assert.strictEqual(ack._tag, "Accepted")
+        yield* synced(yield* Relay.connect(yield* makeDoc("phone"), { document: notes }))
+      }).pipe(Effect.scoped, Effect.provide(RelayLive)))
   })
 })
 

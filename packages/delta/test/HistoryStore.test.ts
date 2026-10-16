@@ -212,6 +212,18 @@ describe("HistoryStore", () => {
         })
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+    it.effect("an edit that changes nothing leaves no text in the snapshot", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        yield* Effect.scoped(Effect.gen(function*() {
+          const first = yield* openDoc("session-1", "replay")
+          yield* ReplicatedText.set(ReplicatedDocument.text(first, ["body"]), "")
+          yield* ReplicatedText.insert(ReplicatedDocument.text(first, ["title"]), 0, "Sessions")
+        }))
+        const snapshot = Option.getOrThrow(Option.getOrThrow(yield* store.load(notes)).snapshot)
+        assert.deepStrictEqual(snapshot.texts, [{ path: ["title"], text: "Sessions" }])
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
     it.effect("a snapshot that doesn't match the history is ignored", () =>
       Effect.gen(function*() {
         const store = yield* HistoryStore.HistoryStore
