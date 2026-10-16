@@ -9,6 +9,7 @@ import type { Path } from "./path.ts"
 // A text that can be edited: a replicated text's own, at the root, or a text
 // field of a document. Both are a path into a replica's engine.
 
+// Must match the EditableTypeId in ReplicatedText.ts.
 /** @internal */
 export const TypeId = "~effect-delta/ReplicatedText/Editable"
 

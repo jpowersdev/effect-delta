@@ -295,7 +295,8 @@ export interface ReplicatedText extends Replica.Replica<string>, Editable {
   readonly [TypeId]: typeof TypeId
 }
 
-const EditableTypeId: typeof InternalEditable.TypeId = InternalEditable.TypeId
+// Must match the TypeId in internal/editable.ts.
+const EditableTypeId = "~effect-delta/ReplicatedText/Editable"
 
 /**
  * A text that can be edited, watched and anchored: a replicated text, or a
