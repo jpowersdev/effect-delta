@@ -94,6 +94,10 @@ export interface Merge {
 /** @internal */
 export const make = (strategy: Replica.Strategy): Text => strategy === "tree" ? makeTree() : makeReplay()
 
+// Inserting or removing nothing makes no op: every op takes sequence numbers.
+const withoutNoOps = (patch: TextPatch.TextPatch): TextPatch.TextPatch =>
+  patch.filter((operation) => operation._tag === "Insert" ? operation.text !== "" : operation.length !== 0)
+
 // Tree -----------------------------------------------------------------------
 
 const makeTree = (): Text => {
@@ -108,7 +112,7 @@ const makeTree = (): Text => {
       const ops: Array<TreeText.Op> = []
       let applied = TextPatch.empty
       let position = 0
-      for (const operation of patch) {
+      for (const operation of withoutNoOps(patch)) {
         switch (operation._tag) {
           case "Retain":
             position += operation.length
@@ -246,7 +250,7 @@ const makeReplay = (): Text => {
     edit: (patch, first, past) => {
       const ops: Array<ReplayText.Op> = []
       let position = 0
-      for (const operation of patch) {
+      for (const operation of withoutNoOps(patch)) {
         switch (operation._tag) {
           case "Retain":
             position += operation.length
