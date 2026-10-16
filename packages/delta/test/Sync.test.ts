@@ -40,6 +40,7 @@ import {
   EditSession,
   forgedRuns,
   ForgedSession,
+  forgedTimeout,
   forgeSession,
   initialProject,
   overJson,
@@ -1748,7 +1749,7 @@ describe("Authority", () => {
           ])
         )
       }),
-      { arbitrary: forgedRuns }
+      { arbitrary: forgedRuns, timeout: forgedTimeout }
     )
 
     it.effect("a change that fits the schema can't stop a list from starting", () =>

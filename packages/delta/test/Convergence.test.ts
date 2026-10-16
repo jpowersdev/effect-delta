@@ -24,6 +24,7 @@ import {
   expectedOverlaps,
   forgedRuns,
   ForgedSession,
+  forgedTimeout,
   forgeSession,
   hop,
   initialProject,
@@ -537,7 +538,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         ),
         Effect.provideService(Sync.CurrentUser, "forger")
       )),
-    { arbitrary: forgedRuns }
+    { arbitrary: forgedRuns, timeout: forgedTimeout }
   )
 
   it.effect.prop(
@@ -624,7 +625,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
         }
       }).pipe(Random.withSeed(seed))
     }),
-    { arbitrary: { ...forgedRuns, runs: 50 } }
+    { arbitrary: { ...forgedRuns, runs: 50 }, timeout: forgedTimeout }
   )
 })
 

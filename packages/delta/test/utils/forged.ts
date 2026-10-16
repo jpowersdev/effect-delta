@@ -261,6 +261,9 @@ const ChangeCommand = Schema.Struct({
 
 export const ForgedSession = Schema.Array(ChangeCommand).check(Schema.isMaxLength(30))
 export const forgedRuns = { runs: 100, size: 100 }
+// Sessions of forged changes take a few seconds, longer while other tests run
+// alongside, past vitest's default timeout.
+export const forgedTimeout = 30_000
 
 // Write times far ahead of the test clock: a few days, the latest a clock
 // reads (a `Date`'s last millisecond), and the last safe integers, after which
