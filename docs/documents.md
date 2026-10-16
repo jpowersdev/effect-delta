@@ -561,6 +561,9 @@ All built, each with tests and an example:
 - **`update` can't always tell which item moved.** When one item moves past a single neighbour, moving
   either gives the new order, and `update` picks one. Every replica still agrees; only a concurrent move of
   one of them shows the difference. An explicit move, like the text handles, comes with path-scoped writes.
+- **An authority that loses changes it accepted** (a store restored from a backup, say) leaves confirmed
+  replicas to recover one change at a time: a change it has lost is rolled back when it's pushed again,
+  and one built on another replica's lost change is refused as malformed until that replica pushes first.
 - **Counters are exact only within the safe integers.** A counter's increments add up exactly, but it reads
   as a JavaScript number, so a total (with its initial value) beyond 2^53 reads as the nearest safe
   integer.

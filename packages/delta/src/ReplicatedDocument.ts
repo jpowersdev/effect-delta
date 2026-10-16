@@ -510,6 +510,12 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * Editors should edit text fields through `text`, which says exactly what the
  * user did; `update` has to work it out.
  *
+ * **Gotchas**
+ *
+ * `f` must return a new value rather than change the one it's given: the
+ * value it's given is the one the document shows, so a change made in place
+ * shows on this replica without being written, and no other replica gets it.
+ *
  * **Example** (Changing one field)
  *
  * ```ts import.meta.vitest
