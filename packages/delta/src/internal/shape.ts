@@ -450,7 +450,10 @@ export const checkInitial = (shape: Shape, initial: unknown, path: Path.Path = P
       return
     case "Fields":
       for (const field of shape.fields) {
-        const value = (initial as Record<string, unknown>)[field.name]
+        // Own, so a field such as `__proto__` is a field.
+        const value = Object.hasOwn(initial as object, field.name)
+          ? (initial as Record<string, unknown>)[field.name]
+          : undefined
         if (field.optional) {
           if (value !== undefined) refuse([...path, field.name], "an optional field starts absent in the initial value")
         } else {
