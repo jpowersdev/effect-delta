@@ -778,9 +778,11 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
     case "Set": {
       const value: ValueWrite = { ...write, value: op.value }
       insertSorted(at.values, value)
-      const differing = unseenBy(value, at.values).filter((other) => !Equal.equals(other.value, value.value))
-      if (found !== undefined && differing.length > 0) {
-        found.add("Value", op.path, [value.replica, ...differing.map((other) => other.replica)], "value")
+      if (found !== undefined) {
+        const differing = unseenBy(value, at.values).filter((other) => !Equal.equals(other.value, value.value))
+        if (differing.length > 0) {
+          found.add("Value", op.path, [value.replica, ...differing.map((other) => other.replica)], "value")
+        }
       }
       setPresence(document, at, { ...write, exists: true }, found)
       break
@@ -806,13 +808,15 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       })
       const place: PlaceWrite = { ...write, node }
       insertSorted(at.places, place)
-      const moved = unseenBy(place, at.places)
-      if (found !== undefined && moved.length > 0) {
-        found.add("Value", op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
-      }
-      // A move that a removal it hadn't seen wins over.
-      if (found !== undefined && at.presence?.exists === false && !seen(place, at.presence)) {
-        found.add("Removed", op.path, [at.presence.replica, place.replica], "presence")
+      if (found !== undefined) {
+        const moved = unseenBy(place, at.places)
+        if (moved.length > 0) {
+          found.add("Value", op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
+        }
+        // A move that a removal it hadn't seen wins over.
+        if (at.presence?.exists === false && !seen(place, at.presence)) {
+          found.add("Removed", op.path, [at.presence.replica, place.replica], "presence")
+        }
       }
       refreshPosition(at)
       break
@@ -823,21 +827,23 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
 const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: Found | undefined): void => {
   insertSorted(at.presences, write)
   at.presence = at.presences.at(-1)
-  const differing = unseenBy(write, at.presences).filter((other) => other.exists !== write.exists)
-  if (found !== undefined && differing.length > 0) {
-    found.add("Value", at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
-  }
-  // A removal that wins over edits under the entry, or moves of the item, it
-  // hadn't seen.
-  if (found !== undefined && !write.exists && at.presence === write) {
-    const editors = [
-      ...Object.entries(at.below).filter(([replica, next]) =>
-        replica !== write.replica && next > (write.past[replica] ?? 0)
-      ),
-      ...unseenBy(write, at.places).map((other) => [other.replica] as const)
-    ]
-    if (editors.length > 0) {
-      found.add("Removed", at.path, [write.replica, ...editors.map(([replica]) => replica)], "presence")
+  if (found !== undefined) {
+    const differing = unseenBy(write, at.presences).filter((other) => other.exists !== write.exists)
+    if (differing.length > 0) {
+      found.add("Value", at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
+    }
+    // A removal that wins over edits under the entry, or moves of the item, it
+    // hadn't seen.
+    if (!write.exists && at.presence === write) {
+      const editors = [
+        ...Object.entries(at.below).filter(([replica, next]) =>
+          replica !== write.replica && next > (write.past[replica] ?? 0)
+        ),
+        ...unseenBy(write, at.places).map((other) => [other.replica] as const)
+      ]
+      if (editors.length > 0) {
+        found.add("Removed", at.path, [write.replica, ...editors.map(([replica]) => replica)], "presence")
+      }
     }
   }
   if (!Path.isRoot(at.path) && slot(document, Path.parent(at.path))?.list !== undefined) refreshPosition(at)
