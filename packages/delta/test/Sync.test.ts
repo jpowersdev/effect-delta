@@ -906,6 +906,45 @@ describe("Authority", () => {
       }).pipe(Effect.provide(OwnerAddsTasks))
     })
 
+    it.effect("a check sees what replicas show, because changes that don't fit the schema are rejected", () => {
+      const OwnerApproves = Authority.layer({
+        check: (proposal) => {
+          if (proposal._tag === "Text") return Effect.void
+          const { after, before } = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
+          return after.status === "approved" && before.status !== "approved" && proposal.user !== "owner"
+            ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
+            : Effect.void
+        }
+      }).pipe(Layer.provide(HistoryStore.layerMemory))
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const owner = yield* makeDoc("owner")
+        yield* ReplicatedDocument.update(owner, (doc) => ({ ...doc, status: "review" }))
+        const fromOwner = yield* Replica.delta(owner, VersionVector.empty)
+        yield* authority.push({ format: Sync.FORMAT, document: spec, delta: fromOwner }).pipe(asUser("owner"))
+        const after = { replica: "owner", seq: VersionVector.get(yield* Replica.version(owner), "owner") - 1 }
+        // Each approves where replicas look, and hides it from JSON the check reads.
+        const hiding: ReadonlyArray<InternalDocument.AnyChange["ops"]> = [
+          // A value replicas can't read, written over the approval.
+          [{ _tag: "Set", path: ["status"], value: "approved" }, { _tag: "Set", path: ["status"], value: 42 }],
+          // A required field removed, which replicas ignore.
+          [{ _tag: "Set", path: ["status"], value: "approved" }, { _tag: "Unset", path: ["status"] }]
+        ]
+        for (const [i, ops] of hiding.entries()) {
+          const delta = InternalDelta.fromChanges([{
+            replica: `intruder-${i}`,
+            seq: 0,
+            length: ops.length,
+            parents: [after],
+            time: 1000,
+            ops
+          }])
+          const ack = yield* authority.push({ format: Sync.FORMAT, document: spec, delta }).pipe(asUser("intruder"))
+          assert.strictEqual(ack._tag, "Rejected", `change ${i}`)
+        }
+      }).pipe(Effect.provide(OwnerApproves))
+    })
+
     it.effect("a confirmed document syncs with nothing else", () =>
       Effect.gen(function*() {
         const confirmed = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
