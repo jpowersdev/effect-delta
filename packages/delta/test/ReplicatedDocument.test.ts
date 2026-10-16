@@ -1586,25 +1586,33 @@ describe("ReplicatedDocument", () => {
             { _tag: "Place", path: ["labels", "k"], parent: null, side: "R", rightOrigin: null }
           ]
         })
-        yield* Replica.receive(
-          ada,
-          InternalDelta.fromChanges([
-            {
-              replica: "a",
-              seq: 0,
-              length: 1,
-              parents: [],
-              time: 1,
-              ops: [{ _tag: "Set", path: ["labels", "k"], value: 1 }]
-            },
-            placed("h1", 2)
-          ])
-        )
+        const written: InternalDocument.AnyChange = {
+          replica: "a",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "Set", path: ["labels", "k"], value: 1 }]
+        }
+        yield* Replica.receive(ada, InternalDelta.fromChanges([written, placed("h1", 2)]))
         // Neither moved an item, nor does one moving a removed entry.
         assert.deepStrictEqual(yield* Replica.receive(ada, InternalDelta.fromChanges([placed("h2", 3)])), [])
         yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, labels: {} }))
         assert.deepStrictEqual(yield* Replica.receive(ada, InternalDelta.fromChanges([placed("h3", 4)])), [])
         assert.deepStrictEqual(yield* ReplicatedDocument.get(ada), initial)
+
+        // Nor does a removal that arrives after one.
+        const ben = yield* make("ben")
+        yield* Replica.receive(ben, InternalDelta.fromChanges([written, placed("h1", 2)]))
+        const removal: InternalDocument.AnyChange = {
+          replica: "r",
+          seq: 0,
+          length: 1,
+          parents: [{ replica: "a", seq: 0 }],
+          time: 5,
+          ops: [{ _tag: "Unset", path: ["labels", "k"] }]
+        }
+        assert.deepStrictEqual(yield* Replica.receive(ben, InternalDelta.fromChanges([removal])), [])
       }))
 
     it.effect("a change must be later than what it was made on top of", () =>
