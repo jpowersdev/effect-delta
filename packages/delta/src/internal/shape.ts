@@ -619,11 +619,18 @@ const readAt = (
         // Defined rather than assigned, so a field such as `__proto__` is a field.
         const value = Object.fromEntries(fields)
         if (shape.make === undefined) return value
+        let made: object
         try {
-          return shape.make(value)
+          made = shape.make(value) as object
         } catch {
           return Missing
         }
+        // Making copies the parts it's given. The ones read go back in, so
+        // those that didn't change keep their identity.
+        for (const [name, part] of fields) {
+          if (Object.getOwnPropertyDescriptor(made, name)?.writable) (made as Record<string, unknown>)[name] = part
+        }
+        return made
       })
     }
     case "Entries": {
