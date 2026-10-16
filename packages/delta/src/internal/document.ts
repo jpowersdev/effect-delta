@@ -746,11 +746,15 @@ export const checkPaths = (document: Document, change: AnyChange): string | unde
     } else if (op._tag === "Place") {
       if (here === "text" || here === "counter") return `${name} places a ${here} in a list`
       // A path is a list from its first position on, so a struct or record
-      // with parts never becomes one.
+      // with parts never becomes one. Text typed into an item nobody has
+      // added yet is under the list too, but nothing is written at the item.
       const listPath = Path.parent(path)
       if (Path.isRoot(listPath)) return `${name} places a list item in the root`
       const list = slot(document, listPath)
-      if (list !== undefined && list.list === undefined && list.children.size > 0) {
+      if (
+        list !== undefined && list.list === undefined &&
+        [...list.children].some((child) => isWritten(slot(document, [...listPath, child])!))
+      ) {
         return `${name} places a list item among parts that aren't items`
       }
       placed.add(k)
@@ -759,6 +763,9 @@ export const checkPaths = (document: Document, change: AnyChange): string | unde
   }
   return undefined
 }
+
+// Whether anything was written at a path itself, rather than only under it.
+const isWritten = (found: Slot): boolean => found.presences.length > 0 || kindOf(found) !== undefined
 
 // A position goes next to positions already in its list, or placed in the same
 // list earlier in the change.
