@@ -249,6 +249,7 @@ const holdsStrings = (item: SchemaAST.AST, key: string): boolean => {
 const isStringKey = (ast: SchemaAST.AST): boolean =>
   SchemaAST.isString(ast) || SchemaAST.isTemplateLiteral(ast) ||
   (SchemaAST.isLiteral(ast) && Predicate.isString(ast.literal)) ||
+  (SchemaAST.isEnum(ast) && ast.enums.every(([, value]) => Predicate.isString(value))) ||
   (SchemaAST.isUnion(ast) && ast.types.every(isStringKey))
 
 const hasRule = (ast: SchemaAST.AST, visited: Set<SchemaAST.AST>): boolean => {

@@ -28,6 +28,11 @@ type Doc = typeof Doc.Type
 
 const initial: Doc = { title: "", status: "draft", votes: 0, comments: {}, labels: {} }
 
+enum Day {
+  Mon = "mon",
+  Fri = "fri"
+}
+
 const make = (replica: string, strategy: Replica.Strategy = "tree") =>
   ReplicatedDocument.make(Doc, { initial, strategy, replica: Replica.ReplicaId.make(replica) })
 
@@ -1908,6 +1913,22 @@ describe("ReplicatedDocument", () => {
         const other = yield* makeBoard("ben")
         yield* Replica.exchange(board, other)
         yield* same(board, other)
+      }))
+
+    it.effect("items can be keyed by a field of a string enum", () =>
+      Effect.gen(function*() {
+        const Week = Schema.Struct({
+          days: ReplicatedDocument.List(Schema.Struct({ day: Schema.Enum(Day), plan: ReplicatedDocument.Text }), {
+            key: "day"
+          })
+        })
+        const week = yield* ReplicatedDocument.make(Week, {
+          initial: { days: [] },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        const days = [{ day: Day.Fri, plan: "Ship" }, { day: Day.Mon, plan: "Plan" }]
+        yield* ReplicatedDocument.update(week, () => ({ days }))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(week), { days })
       }))
 
     it.effect("an item's text fields are edited through text, and merge character by character", () =>
