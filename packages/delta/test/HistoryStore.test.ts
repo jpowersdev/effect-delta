@@ -109,6 +109,44 @@ describe("HistoryStore", () => {
     }).pipe(Effect.provide(Counting))
   })
 
+  it.effect("persist saves only what the store doesn't have, for a confirmed replica too", () => {
+    const appended: Array<number> = []
+    const Counting = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*() {
+      const store = yield* HistoryStore.HistoryStore
+      return {
+        ...store,
+        append: (document, delta) => {
+          appended.push((delta as InternalDelta.DeltaImpl).changes.size)
+          return store.append(document, delta)
+        }
+      }
+    })).pipe(
+      Layer.provide(HistoryStore.layerKeyValueStore({ prefix: "client" })),
+      Layer.provide(KeyValueStore.layerMemory)
+    )
+    const spec = Replica.DocumentId.make("spec")
+    const session = (text: string) =>
+      Effect.scoped(Effect.gen(function*() {
+        const confirmed = yield* ReplicatedText.makeConfirmed({ document: spec })
+        yield* HistoryStore.persist(confirmed, spec)
+        yield* ReplicatedText.insert(confirmed, (yield* ReplicatedText.get(confirmed)).length, text)
+        yield* Stream.runHead(Stream.filter(confirmed.connection.unconfirmed, (count) => count === 0))
+      }))
+    return Effect.gen(function*() {
+      yield* session("Hello")
+      appended.length = 0
+      // Reopened, it saves its new change, and none of what it saved before.
+      yield* session(", world")
+      assert.deepStrictEqual(appended, [1])
+    }).pipe(
+      Effect.provide([
+        Counting,
+        Authority.layer({ check: () => Effect.void }).pipe(Layer.provide(HistoryStore.layerMemory)),
+        TestCrypto.layer("store").pipe(Layer.provide(NodeCrypto.layer))
+      ])
+    )
+  })
+
   it.effect("persist keeps a document across restarts, in either store", () =>
     Effect.forEach([
       HistoryStore.layerMemory,
