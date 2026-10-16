@@ -725,6 +725,27 @@ describe("ReplicatedDocument", () => {
         yield* Replica.exchange(old, updated)
         assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), { votes: 1, priority: "urgent" })
       }))
+
+    it.effect("an older schema isn't told of overlaps in parts it doesn't describe", () =>
+      Effect.gen(function*() {
+        const V3 = Schema.Struct({ ...V2.fields, notes: ReplicatedDocument.Text })
+        const newer = (replica: string) =>
+          ReplicatedDocument.make(V3, {
+            initial: { ...initial, owner: "nobody", notes: "" },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* newer("ada")
+        const ben = yield* newer("ben")
+        // Both write the new parts at once.
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["notes"]), 0, "Ada's")
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ben, ["notes"]), 0, "Ben's")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, owner: "ada" }))
+        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, owner: "ben" }))
+
+        const old = yield* make("old")
+        yield* Replica.receive(old, yield* Replica.delta(ada, VersionVector.empty))
+        assert.deepStrictEqual(yield* Replica.receive(old, yield* Replica.delta(ben, VersionVector.empty)), [])
+      }))
   })
 
   describe("changes that don't fit", () => {
