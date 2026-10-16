@@ -906,6 +906,16 @@ describe("Authority", () => {
           "with a Set op, where the schema has a struct"
         )
         yield* rejects([{ _tag: "Set", path: ["owner"], value: "intruder" }], "which the schema doesn't have")
+        // A task that says it's another one, which replicas leave out.
+        yield* rejects(
+          [
+            { _tag: "Add", path: ["tasks", "t1"] },
+            { _tag: "Set", path: ["tasks", "t1", "id"], value: "t2" },
+            { _tag: "Set", path: ["tasks", "t1", "done"], value: false },
+            { _tag: "Place", path: ["tasks", "t1"], parent: null, side: "L" }
+          ],
+          "a value other than its item's key"
+        )
       }).pipe(Effect.provide(ownerApproves())))
 
     it.effect("accepts a list's first item after text was typed into an item nobody added", () =>

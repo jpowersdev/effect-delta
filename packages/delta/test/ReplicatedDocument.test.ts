@@ -1046,6 +1046,24 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(board), { ...empty, tasks: [task("a")] })
       }))
 
+    it.effect("an item whose id isn't its key is left out, so updates still work", () =>
+      Effect.gen(function*() {
+        const board = yield* makeBoard("ada")
+        // Items a and b, which both say they're "same".
+        const item = (key: string): InternalDocument.AnyChange["ops"] => [
+          { _tag: "Add", path: ["tasks", key] },
+          { _tag: "Set", path: ["tasks", key, "id"], value: "same" },
+          { _tag: "Set", path: ["tasks", key, "status"], value: "todo" },
+          { _tag: "Place", path: ["tasks", key], parent: null, side: "L" }
+        ]
+        const change = { replica: "other", seq: 0, length: 8, parents: [], time: 0, ops: [...item("a"), ...item("b")] }
+        yield* Replica.receive(board, InternalDelta.fromChanges([change]))
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(board), empty)
+
+        yield* ReplicatedDocument.update(board, withTasks(task("c")))
+        assert.deepStrictEqual(ids(yield* ReplicatedDocument.get(board)), ["c"])
+      }))
+
     it.effect("a change that places an item next to a position in another list is malformed", () =>
       Effect.gen(function*() {
         const board = yield* makeBoard("ada")
