@@ -146,12 +146,12 @@ const editsOf = (self: Editable, events: Stream.Stream<InternalEngine.Event>): S
   )
 }
 
+// Each edit's patch turns the text before it into the text after it.
 const changesImpl = (self: Editable): Stream.Stream<string> =>
-  Stream.unwrap(Effect.map(subscribeImpl(self), ({ edits, text }) =>
-    Stream.concat(
-      Stream.succeed(text),
-      Stream.mapEffect(edits, () => getImpl(self))
-    )))
+  Stream.unwrap(
+    Effect.map(subscribeImpl(self), ({ edits, text }) =>
+      Stream.scan(edits, () => text, (current, edit) => TextPatch.apply(edit.patch, current)))
+  )
 
 const subscribeImpl = (self: Editable): Effect.Effect<Subscription, never, Scope.Scope> =>
   locked(
