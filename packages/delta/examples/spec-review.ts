@@ -33,10 +33,13 @@ const SignedIn = Layer.succeed(Sync.Authorization)({
   authorize: () => Effect.void
 })
 
-// The rule: only editors edit.
+// The rule: only editors edit. Specs are texts, so a change to a document
+// with fields is rejected too.
 const EditorsOnly = Authority.layer({
-  check: ({ user }) =>
-    roles.get(user) === "editor"
+  check: ({ _tag, user }) =>
+    _tag !== "Text"
+      ? Effect.fail(new Authority.Rejected({ message: "Specs are texts" }))
+      : roles.get(user) === "editor"
       ? Effect.void
       : Effect.fail(new Authority.Rejected({ message: "Reviewers can comment but not edit" }))
 }).pipe(Layer.provide(HistoryStore.layerMemory))

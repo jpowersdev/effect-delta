@@ -142,6 +142,14 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  * where replicas have it. `ReplicatedDocument.readProposal` rejects whatever
  * else doesn't fit the app's schema.
  *
+ * **Gotchas**
+ *
+ * A check should reject the kind of proposal it doesn't expect, such as a
+ * `Document` one for an app of texts. The first change to a new document
+ * decides which kind of thing its root holds, so a client could otherwise
+ * make a text's document hold fields, and every text change would be
+ * rejected.
+ *
  * **Example** (Only editors may edit)
  *
  * ```ts import.meta.vitest
@@ -149,8 +157,10 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  * import { Authority, HistoryStore } from "effect-delta"
  *
  * const EditorsOnly = Authority.layer({
- *   check: ({ user }) =>
- *     user.startsWith("editor:")
+ *   check: ({ _tag, user }) =>
+ *     _tag !== "Text"
+ *       ? Effect.fail(new Authority.Rejected({ message: "Specs are texts" }))
+ *       : user.startsWith("editor:")
  *       ? Effect.void
  *       : Effect.fail(new Authority.Rejected({ message: "Reviewers can comment but not edit" }))
  * }).pipe(Layer.provide(HistoryStore.layerMemory))

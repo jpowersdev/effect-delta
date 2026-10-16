@@ -271,9 +271,9 @@ export const Counter: Schema.Int = Schema.Int.annotate({ [InternalShape.RuleKey]
 export type KeyOf<A> = { readonly [K in keyof A]-?: A[K] extends string ? K : never }[keyof A] & string
 
 /**
- * Creates a schema for an array that merges item by item: items inserted,
- * removed, moved and edited concurrently all survive, and an item moved by two
- * replicas at once ends up in one place.
+ * Creates a schema for an array that merges item by item: concurrent inserts,
+ * removals, moves and edits all apply, and an item moved by two replicas at
+ * once ends up in one place.
  *
  * **Details**
  *
@@ -585,9 +585,10 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  *
  * **Gotchas**
  *
- * `f` must return a new value rather than change the one it's given: the
- * value it's given is the one the document shows, so a change made in place
- * shows on this replica without being written, and no other replica gets it.
+ * `f` must return a new value rather than change the one it's given, which
+ * is the one the document shows. A value written whole that's changed in
+ * place (an array that isn't a `List`, pushed to, say) reads as unchanged,
+ * so it isn't written, and only this replica shows the change.
  *
  * **Example** (Changing one field)
  *
@@ -625,7 +626,8 @@ export const update: {
  * **Gotchas**
  *
  * As with `update`, give it a new value, not the one the document shows
- * changed in place: that change shows on this replica without being written.
+ * changed in place: a value written whole that's changed in place isn't
+ * written, and only this replica shows the change.
  *
  * @stability unstable
  * @category editing

@@ -900,9 +900,9 @@ const byPath = (writes: ReadonlyArray<Written>): Map<string, Array<Written>> => 
  * wrote values it reads as different, said differently whether the part
  * exists, or both moved its item; `Removed` where one removed the part and
  * the other edited inside it or moved it, if it ends removed by a removal
- * made concurrently with the edit. A value it
- * can't read meets nothing, nor does whether a part exists where it's always
- * there. `changes` are every change the replica has, `before` and `after` its
+ * made concurrently with the edit. A value it can't read meets no other
+ * value, and whether a part exists meets nothing where it's always there.
+ * `changes` are every change the replica has, `before` and `after` its
  * versions around the merge, and `reading` how it reads what's written.
  */
 export const expectedOverlaps = (

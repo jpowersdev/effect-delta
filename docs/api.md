@@ -121,10 +121,13 @@ const SignedIn = Layer.succeed(Sync.Authorization)({
   authorize: () => Effect.void // anyone signed in may open specs
 })
 
-// The authority: the rule lives here. `roles` is the app's own.
+// The authority: the rule lives here. `roles` is the app's own. Specs are texts, so a change to a
+// document with fields is rejected too.
 const EditorsOnly = Authority.layer({
-  check: ({ user }) =>
-    roles.get(user) === "editor"
+  check: ({ _tag, user }) =>
+    _tag !== "Text"
+      ? Effect.fail(new Authority.Rejected({ message: "Specs are texts" }))
+      : roles.get(user) === "editor"
       ? Effect.void
       : Effect.fail(new Authority.Rejected({ message: "Reviewers can comment but not edit" }))
 }).pipe(Layer.provide(HistoryStore.layerMemory))
@@ -642,7 +645,8 @@ All accepted 2026-10-15.
 11. **`make` needs `Crypto`**, and a failure to get random bytes is a defect. Tests use
     `TestCrypto.layer(seed)`.
 12. **Errors are one `TaggedError` per module with a tagged `reason`.** Errors carrying a human-readable
-    string call the field `message`. We say "rejected", never "refused". Bad indexes are typed errors, not
+    string call the field `message`. We say "rejected", never "refused", for what an authority turns down;
+    what's malformed, or a schema `make` can't take, is refused. Bad indexes are typed errors, not
     defects.
 13. **After a rejection, a confirmed replica continues under a new replica id.**
 14. **`set`/`update` make one replacement** (common prefix and suffix, aligned to code points), as a stated

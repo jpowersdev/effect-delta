@@ -122,8 +122,9 @@ That gives two behaviours:
   same way.
 - **Content is kept when an entry is removed**, everyone's edits included, even ones that arrive after the
   removal. So undoing a removal (later) can bring it all back. Adding the key again with `update` writes
-  the content it's given over what was kept, as an edit to it: texts are compared with the kept text, and
-  values are written again. Likewise, a key that two replicas add concurrently is one entry whose contents
+  the content it's given over what was kept, as an edit to it: its texts, counters and values are compared
+  with what was kept, and only what differs is written. An entry that's a value is written again, since
+  writing it says it exists. Likewise, a key that two replicas add concurrently is one entry whose contents
   merge. Two entries would leave one hidden behind the other, the problem Loro fixed with mergeable
   containers.
 
@@ -231,8 +232,9 @@ Apps upgrade one device at a time, so replicas on different versions of a schema
   struct, the values in it should).
 - **Parts an older schema doesn't describe** (a new field, a value it can't decode, such as a new literal)
   are kept, stored and sent on, but don't show in its value, and merges don't report overlaps in them: a
-  value it can't decode meets nothing. A value whose latest write it can't decode shows the latest write it
-  can, and an overlap between writes it can decode names that one as kept. After the upgrade, they show.
+  value it can't decode meets no other value, though writing it still says an entry, item or optional field
+  exists, which can meet a removal there. A value whose latest write it can't decode shows the latest write
+  it can, and an overlap between writes it can decode names that one as kept. After the upgrade, they show.
 - **Renaming or removing a field, or changing its rule** (a value becoming text) isn't supported, because
   paths are field names. Lenses (Cambria) are later. A replica keeps changes its schema has another rule
   for, and passes them on, but they don't show: a path keeps a text, values and a counter apart, and each
@@ -456,7 +458,8 @@ type Path = ReadonlyArray<string>
 
 type Overlap =
   | { readonly _tag: "Text"; readonly path: Path; readonly range: Range; readonly anchors: AnchorRange; readonly replicas: ReadonlyArray<ReplicaId> }
-  // Both wrote different values here, both moved this list item, or one removed it; `kept` is whose write shows.
+  // Both wrote different values here, both moved this list item, or one removed it while the other wrote it;
+  // `kept` is whose write shows.
   | { readonly _tag: "Value"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId>; readonly kept: ReplicaId }
   // One removed this entry, item or optional field while the other changed something inside it, or moved
   // it. It stays removed, by a removal made concurrently with that change.
@@ -504,8 +507,9 @@ Nothing has been released, so the format stays 1. None of these changes how a te
 3. **`Replica.Overlap` is a union, and `Text` overlaps have a `path`.**
 4. **`ReplicatedText` functions take `ReplicatedText.Editable`:** a `ReplicatedText` or a document's text
    field. It's a wider parameter, so existing calls compile as they are.
-5. **`Authority.Proposal` is a union** tagged `"Text"` or `"Document"`. Checks that only read `user`, like
-   the spec-review example's, compile as they are.
+5. **`Authority.Proposal` is a union** tagged `"Text"` or `"Document"`. Checks that only read `user`
+   compile as they are, but should reject the other kind of proposal, as the spec-review example's does (see
+   [Known limits](#known-limits)).
 6. **`HistoryStore.Snapshot` holds texts by path.**
 
 ## Decisions
@@ -554,7 +558,7 @@ All built, each with tests and an example:
 - **A text field is a `ReplicatedText`.** The same edits on a field and on a standalone text give the same
   text, anchors and overlaps, step by step.
 - **Latest write against a model.** Each value is its largest write, and a `Value` overlap is reported exactly
-  when concurrent writes differ.
+  when concurrent writes differ as the replica reads them.
 - **Entries.** A removal against concurrent edits, adding a removed entry back, and concurrent adds of one key.
 - **Two versions of a schema.** Replicas on each sync through a relay. Both keep everything, the newer one
   shows its new field, and their histories are equal.
@@ -596,7 +600,8 @@ All built, each with tests and an example:
 - **Replicas on different schema versions** can show different values for the parts only one understands.
 - **An authority whose check doesn't read proposals with the schema** keeps what the first write to a path
   says it holds: a client could claim a path with the wrong kind of write and leave later writes there
-  rejected. `readProposal` rejects such writes, so a check that uses it has no such gap.
+  rejected. `readProposal` rejects such writes, so a check that uses it has no such gap. For texts, which
+  have no schema, a check that rejects `Document` proposals has none either.
 - **A replica whose clock ran more than a day ahead can't sync with servers** until their clocks reach the
   times it stamped. Fixing its clock doesn't help: each later change is stamped after the ones it made. The
   same goes for peers that took its changes in a direct exchange.

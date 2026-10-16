@@ -463,9 +463,9 @@ export type Overlap =
 
 /**
  * How a replica reads what's written at each path, so that the overlaps it's
- * told of are ones its value shows: a value it can't read meets nothing, two
- * it reads as the same don't differ, and whether a part exists meets nothing
- * where the part is always there.
+ * told of are ones its value shows: a value it can't read meets no other
+ * value, two it reads as the same don't differ, and whether a part exists
+ * meets nothing where the part is always there.
  *
  * @internal
  */
