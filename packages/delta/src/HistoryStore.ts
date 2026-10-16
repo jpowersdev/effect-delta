@@ -323,8 +323,11 @@ export const persist = Effect.fnUntraced(function*(
     })
   }
 
-  // What the store has, so a save adds only what it doesn't.
+  // What the store has, so a save adds only what it doesn't: everything up to
+  // `saved`, and the changes past it that wait for others, which every save
+  // has again.
   let saved = Option.match(stored, { onNone: () => VersionVector.empty, onSome: (s) => InternalDelta.held(s.history) })
+  let savedWaiting = Option.match(stored, { onNone: () => new Set<string>(), onSome: (s) => past(s.history, saved) })
   let savedWriters = new Set(Option.match(stored, { onNone: () => [], onSome: (s) => Object.keys(s.writers) }))
   // How much history the last snapshot covers, in characters.
   let snapshotAt = Option.match(Option.flatMap(stored, (s) => s.snapshot), {
@@ -334,13 +337,17 @@ export const persist = Effect.fnUntraced(function*(
   const save = (final: boolean) =>
     Effect.gen(function*() {
       const next = yield* core.toStore(saved)
-      if (!Delta.isEmpty(next.history)) yield* store.append(document, next.history)
+      const unsaved = [...(next.history as InternalDelta.DeltaImpl).changes].flatMap(([key, change]) =>
+        savedWaiting.has(key) ? [] : [change]
+      )
+      if (unsaved.length > 0) yield* store.append(document, InternalDelta.fromChanges(unsaved))
       if (core.confirmed !== undefined) yield* store.setUnconfirmed(document, next.unconfirmed)
       for (const writer of next.writers) {
         if (!savedWriters.has(writer)) yield* store.addWriter(document, writer, "")
       }
       savedWriters = new Set([...savedWriters, ...next.writers])
       saved = next.version
+      savedWaiting = past(next.history, next.version)
       // For the replay strategy: when the scope closes, and every so often in
       // between, so a reload has little to replay.
       const covered = size(next.version)
@@ -359,6 +366,14 @@ export const persist = Effect.fnUntraced(function*(
   const fiber = yield* Effect.forkScoped(Stream.runForEach(changes, () => save(false)))
   return { await: Fiber.join(fiber).pipe(Effect.flatMap(() => Effect.never)) }
 })
+
+// The keys of the changes in a delta past `version`: ones that wait.
+const past = (delta: Delta.Delta, version: VersionVector.VersionVector): Set<string> =>
+  new Set(
+    [...(delta as InternalDelta.DeltaImpl).changes].flatMap(([key, change]) =>
+      change.seq + change.length > VersionVector.get(version, change.replica) ? [key] : []
+    )
+  )
 
 // Characters of history between snapshots.
 const snapshotEvery = 4096
