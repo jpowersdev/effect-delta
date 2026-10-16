@@ -383,30 +383,84 @@ export const read = (
   document: InternalDocument.Document,
   initial: unknown,
   memo: Memo
-): unknown => {
-  const value = readAt(shape, document, Path.root, { value: initial }, memo)
+): unknown => readRoot(shape, documentAt(document, Path.root), initial, memo)
+
+/**
+ * Reads a document's value from the JSON a server shows it as, by the same
+ * rules.
+ *
+ * @internal
+ */
+export const readJson = (shape: Shape, json: Schema.Json, initial: unknown): unknown =>
+  readRoot(shape, jsonAt(json, Path.root), initial, new Map())
+
+// What reading needs from one part of a document: a replica's state, or the
+// JSON a server shows it as.
+interface Source {
+  readonly path: Path.Path
+  readonly text: () => string
+  readonly counter: () => number
+  /** The values written here, latest first. */
+  readonly values: () => Iterable<Schema.Json>
+  /** Whether the optional field or record entry here exists. */
+  readonly exists: () => boolean
+  readonly at: (name: string) => Source
+  /** The keys of the record entries here, in order. */
+  readonly keys: () => ReadonlyArray<string>
+  /** The list items here that show, in order. */
+  readonly items: () => ReadonlyArray<Source>
+}
+
+const documentAt = (document: InternalDocument.Document, path: Path.Path): Source => ({
+  path,
+  text: () => InternalDocument.textAt(document, path),
+  counter: () => InternalDocument.counterAt(document, path),
+  *values() {
+    const writes = InternalDocument.valuesAt(document, path)
+    for (let i = writes.length - 1; i >= 0; i--) yield writes[i]!.value
+  },
+  exists: () => InternalDocument.exists(document, path),
+  at: (name) => documentAt(document, [...path, name]),
+  keys: () => InternalDocument.childrenAt(document, path),
+  items: () => InternalDocument.itemsAt(document, path).map((name) => documentAt(document, [...path, name]))
+})
+
+// A server's JSON has only what exists, and only each value's latest write.
+const jsonAt = (json: Schema.Json | undefined, path: Path.Path): Source => ({
+  path,
+  text: () => Predicate.isString(json) ? json : "",
+  counter: () => Predicate.isNumber(json) ? json : 0,
+  values: () => json === undefined ? [] : [json],
+  exists: () => json !== undefined,
+  at: (name) => jsonAt(isJsonObject(json) && Object.hasOwn(json, name) ? json[name] : undefined, [...path, name]),
+  keys: () => isJsonObject(json) ? Object.keys(json) : [],
+  items: () => Array.isArray(json) ? json.map((item, i) => jsonAt(item, [...path, String(i)])) : []
+})
+
+const isJsonObject = (json: Schema.Json | undefined): json is Schema.JsonObject =>
+  Predicate.isObject(json) && !Array.isArray(json)
+
+const readRoot = (shape: Shape, source: Source, initial: unknown, memo: Memo): unknown => {
+  const value = readAt(shape, source, { value: initial }, memo)
   if (value === Missing) throw new Error("A document's value couldn't be read")
   return value
 }
 
 const readAt = (
   shape: Shape,
-  document: InternalDocument.Document,
-  path: Path.Path,
+  source: Source,
   initial: { readonly value: unknown } | undefined,
   memo: Memo
 ): unknown => {
   switch (shape._tag) {
     case "Text":
-      return InternalDocument.textAt(document, path)
+      return source.text()
     case "Counter":
-      return ((initial?.value as number | undefined) ?? 0) + InternalDocument.counterAt(document, path)
+      return ((initial?.value as number | undefined) ?? 0) + source.counter()
     case "Value": {
-      const writes = InternalDocument.valuesAt(document, path)
-      const k = Path.key(path)
+      const k = Path.key(source.path)
       // The latest write this schema can read.
-      for (let i = writes.length - 1; i >= 0; i--) {
-        const json = writes[i]!.value
+      for (const json of source.values()) {
         const previous = memo.get(k)
         if (previous !== undefined && previous.parts[0] === json) return previous.value
         const decoded = shape.decode(json)
@@ -421,20 +475,20 @@ const readAt = (
       const parts: Array<unknown> = []
       const fields: Record<string, unknown> = {}
       for (const field of shape.fields) {
-        const fieldPath = [...path, field.name]
-        if (field.optional && !InternalDocument.exists(document, fieldPath)) {
+        const part = source.at(field.name)
+        if (field.optional && !part.exists()) {
           parts.push(Missing)
           continue
         }
         const fieldInitial = initial === undefined || field.optional
           ? undefined
           : { value: (initial.value as Record<string, unknown>)[field.name] }
-        const value = readAt(field.shape, document, fieldPath, fieldInitial, memo)
+        const value = readAt(field.shape, part, fieldInitial, memo)
         if (value === Missing && !field.hasDefault) return Missing
         parts.push(value)
         if (value !== Missing && !(field.optional && value === undefined)) fields[field.name] = value
       }
-      return share(memo, path, parts, () => {
+      return share(memo, source.path, parts, () => {
         if (shape.make === undefined) return fields
         try {
           return shape.make(fields)
@@ -446,23 +500,23 @@ const readAt = (
     case "Entries": {
       const parts: Array<unknown> = []
       const entries: Record<string, unknown> = {}
-      for (const name of InternalDocument.childrenAt(document, path)) {
-        const entryPath = [...path, name]
-        if (!shape.isKey(name) || !InternalDocument.exists(document, entryPath)) continue
-        const value = readAt(shape.value, document, entryPath, undefined, memo)
+      for (const name of source.keys()) {
+        const entry = source.at(name)
+        if (!shape.isKey(name) || !entry.exists()) continue
+        const value = readAt(shape.value, entry, undefined, memo)
         if (value === Missing) continue
         parts.push(name, value)
         entries[name] = value
       }
-      return share(memo, path, parts, () => entries)
+      return share(memo, source.path, parts, () => entries)
     }
     case "List": {
       const items: Array<unknown> = []
-      for (const name of InternalDocument.itemsAt(document, path)) {
-        const value = readAt(shape.item, document, [...path, name], undefined, memo)
+      for (const item of source.items()) {
+        const value = readAt(shape.item, item, undefined, memo)
         if (value !== Missing) items.push(value)
       }
-      return share(memo, path, items, () => items)
+      return share(memo, source.path, items, () => items)
     }
   }
 }
@@ -478,77 +532,6 @@ const share = (memo: Memo, path: Path.Path, parts: ReadonlyArray<unknown>, build
   if (value !== Missing) memo.set(k, { parts, value })
   return value
 }
-
-/**
- * Reads a document's value from the JSON a server shows it as.
- *
- * @internal
- */
-export const readJson = (shape: Shape, json: Schema.Json, initial: unknown): unknown => {
-  const value = readJsonAt(shape, json, { value: initial })
-  if (value === Missing) throw new Error("A document's value couldn't be read")
-  return value
-}
-
-const readJsonAt = (
-  shape: Shape,
-  json: Schema.Json | undefined,
-  initial: { readonly value: unknown } | undefined
-): unknown => {
-  switch (shape._tag) {
-    case "Text":
-      return Predicate.isString(json) ? json : ""
-    case "Counter":
-      return ((initial?.value as number | undefined) ?? 0) + (Predicate.isNumber(json) ? json : 0)
-    case "Value": {
-      const decoded = json === undefined ? undefined : shape.decode(json)
-      if (decoded !== undefined && Result.isSuccess(decoded)) return decoded.success
-      return initial === undefined ? Missing : initial.value
-    }
-    case "Fields": {
-      const object = isJsonObject(json) ? json : {}
-      const fields: Record<string, unknown> = {}
-      for (const field of shape.fields) {
-        if (field.optional && !Object.hasOwn(object, field.name)) continue
-        const fieldInitial = initial === undefined || field.optional
-          ? undefined
-          : { value: (initial.value as Record<string, unknown>)[field.name] }
-        const value = readJsonAt(field.shape, object[field.name], fieldInitial)
-        if (value === Missing) {
-          if (field.hasDefault) continue
-          return Missing
-        }
-        if (!(field.optional && value === undefined)) fields[field.name] = value
-      }
-      if (shape.make === undefined) return fields
-      try {
-        return shape.make(fields)
-      } catch {
-        return Missing
-      }
-    }
-    case "Entries": {
-      const entries: Record<string, unknown> = {}
-      for (const [name, entry] of Object.entries(isJsonObject(json) ? json : {})) {
-        if (!shape.isKey(name)) continue
-        const value = readJsonAt(shape.value, entry, undefined)
-        if (value !== Missing) entries[name] = value
-      }
-      return entries
-    }
-    case "List": {
-      const items: Array<unknown> = []
-      for (const item of Array.isArray(json) ? json : []) {
-        const value = readJsonAt(shape.item, item, undefined)
-        if (value !== Missing) items.push(value)
-      }
-      return items
-    }
-  }
-}
-
-const isJsonObject = (json: Schema.Json | undefined): json is Schema.JsonObject =>
-  Predicate.isObject(json) && !Array.isArray(json)
 
 // Writing --------------------------------------------------------------------
 
@@ -594,13 +577,13 @@ const planAt = (
       return
     }
     case "Counter": {
-      const by = (after as number) - (readAt(shape, document, path, initial, memo) as number)
+      const by = (after as number) - (readAt(shape, documentAt(document, path), initial, memo) as number)
       if (by !== 0) intents.push({ _tag: "Increment", path, by })
       return
     }
     case "Value": {
       if (!force) {
-        const before = readAt(shape, document, path, initial, memo)
+        const before = readAt(shape, documentAt(document, path), initial, memo)
         if (before !== Missing && shape.equivalence(before, after)) return
       }
       intents.push({ _tag: "Set", path, value: Result.getOrThrow(shape.encode(after)) })
@@ -645,7 +628,8 @@ const planAt = (
 
 // Whether the part at `path` exists and this schema can read it.
 const shown = (shape: Shape, document: InternalDocument.Document, path: Path.Path, memo: Memo, isKey = true) =>
-  isKey && InternalDocument.exists(document, path) && readAt(shape, document, path, undefined, memo) !== Missing
+  isKey && InternalDocument.exists(document, path) &&
+  readAt(shape, documentAt(document, path), undefined, memo) !== Missing
 
 // An optional field, record entry or list item: whether it exists, then its
 // content. A removed part's content is kept, so adding it back compares with
@@ -686,7 +670,7 @@ const planItems = (
   }
   // Items this schema can't read aren't in `after`, but they stay.
   const before = InternalDocument.itemsAt(document, path).filter((name) =>
-    readAt(shape.item, document, [...path, name], undefined, memo) !== Missing
+    readAt(shape.item, documentAt(document, [...path, name]), undefined, memo) !== Missing
   )
   for (const name of before) if (!wanted.has(name)) intents.push({ _tag: "Unset", path: [...path, name] })
   const showing = new Set(before)
@@ -718,7 +702,7 @@ const planValues = (
   const item = shape.item as Value
   const before: Array<{ readonly name: string; readonly value: unknown }> = []
   for (const name of InternalDocument.itemsAt(document, path)) {
-    const value = readAt(item, document, [...path, name], undefined, memo)
+    const value = readAt(item, documentAt(document, [...path, name]), undefined, memo)
     if (value !== Missing) before.push({ name, value })
   }
   // Values that stay are matched in order; a changed value is a removal and an
