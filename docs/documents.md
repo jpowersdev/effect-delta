@@ -227,7 +227,8 @@ but can show different values for the parts only one of them understands.
 
 The change envelope gains a write time, on every change, texts included:
 `{ replica, seq, length, parents, time, ops }`. Receivers check that it's later than each parent's, and
-no later than any clock reads: a `Date`'s last millisecond (`Malformed` otherwise).
+no later than any clock reads (a `Date`'s last millisecond) unless it's a millisecond after its parents'
+(`Malformed` otherwise).
 
 Every op names a path. An absent path means the root, so a `ReplicatedText`'s changes look exactly as
 they do now, plus `time`.
@@ -595,9 +596,10 @@ All built, each with tests and an example:
    relay for good. Authorities still keep each path to one kind of thing.
 9. **Servers reject write times more than a day ahead of their clock.** A change stamped far in the future
    would leave everyone who saw it unable to write anything later.
-10. **Every receiver refuses a write time later than any clock reads** (a `Date`'s last millisecond). A
-    change stamped at the last whole numbers a change can carry left peers that took it directly unable to
-    stamp a change after it, so nobody accepted their changes.
+10. **Every receiver refuses a write time later than any clock reads** (a `Date`'s last millisecond),
+    unless it's a millisecond after its parents', as the changes of a replica that saw one are. A change
+    stamped at the last whole numbers a change can carry left peers that took it directly unable to stamp a
+    change after it, so nobody accepted their changes.
 
 ## Later
 
