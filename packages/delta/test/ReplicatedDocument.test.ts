@@ -196,8 +196,8 @@ describe("ReplicatedDocument", () => {
     }
 
     // A merge reports a Value overlap exactly when a write it receives is
-    // concurrent with another write, received or not, that has a different value.
-    // The overlap names every replica in such a pair, and whose write shows.
+    // concurrent with a write the replica had, with a different value. The
+    // overlap names every replica in such a pair, and whose write shows.
     const assertValueOverlaps = (
       overlaps: ReadonlyArray<Replica.Overlap>,
       had: ReadonlyArray<Write>,
@@ -205,7 +205,7 @@ describe("ReplicatedDocument", () => {
     ) => {
       const all = [...had, ...received]
       const met = received.flatMap((write) =>
-        all.filter((other) => other.theme !== write.theme && concurrent(other, write)).map((other) => [write, other])
+        had.filter((other) => other.theme !== write.theme && concurrent(other, write)).map((other) => [write, other])
       )
       if (met.length === 0) return assert.deepStrictEqual(overlaps, [])
       assert.deepStrictEqual(overlaps, [{

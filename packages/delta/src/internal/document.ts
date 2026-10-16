@@ -445,6 +445,26 @@ class Found {
     string,
     { tag: "Value" | "Removed"; path: Path.Path; replicas: Set<string>; over: Set<Over> }
   >()
+  // Writes meet only what was here before the merge, as text edits do: two
+  // that both arrive in it, as when a document loads, don't count.
+  private readonly fresh = new Set<Write>()
+  private readonly belowBefore = new Map<Slot, Record<string, number>>()
+  /** Notes a write the merge made. */
+  wrote(write: Write): void {
+    this.fresh.add(write)
+  }
+  /** Whether a write was here before the merge. */
+  had(write: Write): boolean {
+    return !this.fresh.has(write)
+  }
+  /** What had been written under a path before the merge. */
+  below(at: Slot): Record<string, number> {
+    return this.belowBefore.get(at) ?? at.below
+  }
+  /** Notes what's under a path, before the merge first writes under it. */
+  writingBelow(at: Slot): void {
+    if (!this.belowBefore.has(at)) this.belowBefore.set(at, { ...at.below })
+  }
   add(tag: "Value" | "Removed", path: Path.Path, replicas: Iterable<string>, over: Over): void {
     const k = `${tag}${Path.key(path)}`
     let entry = this.found.get(k)
@@ -932,7 +952,10 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       const value: ValueWrite = { ...write, value: op.value }
       addWrite(at, at.values, value)
       if (found !== undefined) {
-        const differing = unseenBy(at, value, at.values).filter((other) => !Equal.equals(other.value, value.value))
+        found.wrote(value)
+        const differing = unseenBy(at, value, at.values).filter((other) =>
+          found.had(other) && !Equal.equals(other.value, value.value)
+        )
         if (differing.length > 0) {
           found.add("Value", op.path, [value.replica, ...differing.map((other) => other.replica)], "value")
         }
@@ -962,12 +985,13 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       const place: PlaceWrite = { ...write, node }
       addWrite(at, at.places, place)
       if (found !== undefined) {
-        const moved = unseenBy(at, place, at.places)
+        found.wrote(place)
+        const moved = unseenBy(at, place, at.places).filter((other) => found.had(other))
         if (moved.length > 0) {
           found.add("Value", op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
         }
         // A move that a removal it hadn't seen wins over.
-        if (at.presence?.exists === false && !seen(place, at.presence)) {
+        if (at.presence?.exists === false && found.had(at.presence) && !seen(place, at.presence)) {
           found.add("Removed", op.path, [at.presence.replica, place.replica], "presence")
         }
       }
@@ -981,7 +1005,10 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
   addWrite(at, at.presences, write)
   at.presence = at.presences.at(-1)
   if (found !== undefined) {
-    const differing = unseenBy(at, write, at.presences).filter((other) => other.exists !== write.exists)
+    found.wrote(write)
+    const differing = unseenBy(at, write, at.presences).filter((other) =>
+      found.had(other) && other.exists !== write.exists
+    )
     if (differing.length > 0) {
       found.add("Value", at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
     }
@@ -989,10 +1016,10 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
     // hadn't seen.
     if (!write.exists && at.presence === write) {
       const editors = [
-        ...Object.entries(at.below).filter(([replica, next]) =>
+        ...Object.entries(found.below(at)).filter(([replica, next]) =>
           replica !== write.replica && next > (write.past[replica] ?? 0)
         ),
-        ...unseenBy(at, write, at.places).map((other) => [other.replica] as const)
+        ...unseenBy(at, write, at.places).filter((other) => found.had(other)).map((other) => [other.replica] as const)
       ]
       if (editors.length > 0) {
         found.add("Removed", at.path, [write.replica, ...editors.map(([replica]) => replica)], "presence")
@@ -1013,9 +1040,12 @@ const noteBelow = (
 ): void => {
   for (const prefix of Path.prefixes(path)) {
     const above = ensureSlot(document, prefix)
+    found?.writingBelow(above)
     above.below[write.replica] = Math.max(above.below[write.replica] ?? 0, write.seq + length)
     const presence = above.presence
-    if (found !== undefined && presence !== undefined && !presence.exists && !seen(write, presence)) {
+    if (
+      found !== undefined && presence !== undefined && !presence.exists && found.had(presence) && !seen(write, presence)
+    ) {
       found.add("Removed", prefix, [presence.replica, write.replica], "presence")
     }
   }

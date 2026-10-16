@@ -257,13 +257,11 @@ const partAt = (value: unknown, path: ReadonlyArray<string>): unknown => {
   return current
 }
 
-// The replicas in the value overlaps that edits reported, by path. A merge
-// reports two writes that hadn't seen each other when the later arrives, so
-// these are the same however the changes arrived. Checks the other overlaps
-// against the value they came with: a text overlap's range is in its text, and
-// a removal's entry or item doesn't show.
-const valueOverlaps = (edits: Iterable<ReplicatedDocument.Edit<Project>>): Record<string, ReadonlyArray<string>> => {
-  const found: Record<string, Set<string>> = {}
+// Checks the overlaps edits reported against the value they came with: a text
+// overlap's range is in its text, and a removal's entry or item doesn't show.
+// Which overlaps a merge reports depends on what the replica had before it,
+// so they aren't the same however the changes arrive.
+const checkOverlaps = (edits: Iterable<ReplicatedDocument.Edit<Project>>): void => {
   for (const edit of edits) {
     if (edit._tag !== "Remote") continue
     for (const overlap of edit.overlaps) {
@@ -280,12 +278,9 @@ const valueOverlaps = (edits: Iterable<ReplicatedDocument.Edit<Project>>): Recor
         case "Removed":
           assert.isUndefined(part, JSON.stringify(overlap))
           break
-        case "Value":
-          for (const replica of overlap.replicas) (found[JSON.stringify(overlap.path)] ??= new Set()).add(replica)
       }
     }
   }
-  return Object.fromEntries(Object.entries(found).map(([path, replicas]) => [path, [...replicas].sort()]))
 }
 
 describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => {
@@ -368,13 +363,13 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
             return (change: InternalDocument.AnyChange) => kept.changes.has(key(change))
           }))
         const expected = yield* view(doc.doc)
-        const overlaps = valueOverlaps(yield* doc.edits)
+        checkOverlaps(yield* doc.edits)
         assert.deepStrictEqual(yield* fromRelay(relay, inOrder), expected)
 
         const atOnce = yield* watched("at-once")
         yield* atOnce.receive(changes)
         assert.deepStrictEqual(yield* view(atOnce.doc), expected)
-        assert.deepStrictEqual(valueOverlaps(yield* atOnce.edits), overlaps)
+        checkOverlaps(yield* atOnce.edits)
 
         // One at a time, shuffled and repeated, to a replica that saves them,
         // and to a relay whose subscriber takes what it sends. Behind the
@@ -403,7 +398,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
             }
           }
           assert.deepStrictEqual(yield* view(oneByOne.doc), expected)
-          assert.deepStrictEqual(valueOverlaps(yield* oneByOne.edits), overlaps)
+          checkOverlaps(yield* oneByOne.edits)
           yield* Scope.close(back.scope, Exit.void)
         })).pipe(Random.withSeed(seed))
         const fromShuffled = yield* fromRelay(relay, shuffled)

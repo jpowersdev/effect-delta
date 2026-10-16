@@ -85,7 +85,8 @@ A change's write time is later than every change its replica had seen. So a writ
 was made on top of, even when the device's clock is behind. Only writes made without seeing each other are
 ordered by the clock, and then the one made later wins, which is what people expect. Writes in the same
 millisecond go to the larger replica id: arbitrary, but the same everywhere. When concurrent writes put
-different values, the merge reports a `Value` overlap that says whose write it kept.
+different values, the merge reports a `Value` overlap that says whose write it kept. As with text, an
+overlap is between a write the replica had and one it received, so loading a document reports none.
 
 The alternatives:
 - **Lamport order** (Automerge, Loro): the write with more history behind it wins. It needs no clock, but a
