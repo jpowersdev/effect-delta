@@ -131,10 +131,13 @@ export const make = Effect.fnUntraced(function*(options: {
     Effect.gen(function*() {
       const user = yield* Sync.CurrentUser
       const document = yield* open(request.document)
-      // From the first change to the document until its changes are saved and
-      // sent: interrupted in between, the document holds changes the store
-      // doesn't, so it starts over from the store.
-      let changing = false
+      // Until its changes are saved and sent, the document holds changes the
+      // store doesn't. Interrupted before saving them, it drops them, which
+      // nobody else has seen. Interrupted while saving or sending them, the
+      // store may have them and subscribers don't, so the document starts over
+      // from the store.
+      let unsaved: ReadonlySet<string> | undefined
+      let saving = false
       return yield* Effect.gen(function*() {
         // It may have failed while this push waited.
         yield* ensureServing(document)
@@ -188,7 +191,7 @@ export const make = Effect.fnUntraced(function*(options: {
           if (existing === undefined && !History.has(state.history, change)) fresh.push(change)
         }
         const pushed = new Set(fresh.map(key))
-        changing = true
+        unsaved = pushed
         for (const change of fresh) state.history.pending.set(key(change), change)
 
         let rejected: string | undefined
@@ -233,12 +236,7 @@ export const make = Effect.fnUntraced(function*(options: {
                 }
             ))
             if (Result.isFailure(verdict)) {
-              // Start over without it. An authority keeps nothing pending, so
-              // nothing else is lost.
-              document.state = InternalDocument.rebuild(
-                state.strategy,
-                [...state.history.changes.values()].filter((c) => c !== change)
-              )
+              document.state = without(state, (c) => c === change)
               rejected = verdict.failure.message
               break
             }
@@ -262,13 +260,15 @@ export const make = Effect.fnUntraced(function*(options: {
         // the store has them, so a reload would learn it from them.
         document.state.strategy ??= InternalDocument.strategyOf(kept)
         if (kept.length > 0) {
+          saving = true
           yield* save(store, document, kept, user).pipe(Effect.tapError((error) => reload(document, error)))
           yield* PubSub.publish(
             document.updates,
             new Sync.Update({ delta: InternalDelta.fromChanges(kept), version: held(history) })
           )
         }
-        changing = false
+        unsaved = undefined
+        saving = false
 
         if (malformed !== undefined) {
           return yield* syncError(new Replica.DeltaError({ reason: new Replica.Malformed({ message: malformed }) }))
@@ -278,15 +278,21 @@ export const make = Effect.fnUntraced(function*(options: {
           ? new Sync.Accepted({ confirmed })
           : new Sync.PushRejected({ confirmed, message: rejected })
       }).pipe(
-        // Under the lock, so no other push sees what this one left.
-        Effect.onInterrupt(() =>
-          changing
-            ? reload(
+        // Under the lock, so no other push sees what this one left. Only an
+        // authority's check can stop it before it saves.
+        Effect.onInterrupt(() => {
+          if (saving) {
+            return reload(
               document,
               new Sync.SyncError({ reason: new Sync.Unavailable({ message: "A push was interrupted" }) })
             )
-            : Effect.void
-        ),
+          }
+          if (unsaved !== undefined) {
+            const dropped = unsaved
+            document.state = without(document.state, (change) => dropped.has(key(change)))
+          }
+          return Effect.void
+        }),
         document.lock.withPermit
       )
     }).pipe(Effect.scoped)
@@ -336,6 +342,14 @@ const integrateAll = (
   }
   return problems
 }
+
+// An authority's document without some of its changes, started over from the
+// rest. An authority keeps nothing pending, so nothing else is lost.
+const without = (
+  state: InternalDocument.Document,
+  dropped: (change: InternalDocument.AnyChange) => boolean
+): InternalDocument.Document =>
+  InternalDocument.rebuild(state.strategy, [...state.history.changes.values()].filter((change) => !dropped(change)))
 
 // The paths a change wrote to, in order.
 const pathsOf = (change: InternalDocument.AnyChange): ReadonlyArray<Replica.Path> => {
