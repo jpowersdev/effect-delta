@@ -180,7 +180,8 @@ export interface Slot {
   /** The names of the paths just under this one. */
   readonly children: Set<string>
   text: Text.Text | undefined
-  counter: number
+  /** Exact, so increments add up to the same total in any order. */
+  counter: bigint
   /** Every value written, earliest write first. */
   readonly values: Array<ValueWrite>
   /** Every write of whether this path exists, earliest first. */
@@ -238,7 +239,7 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
       added: false,
       children: new Set(),
       text: undefined,
-      counter: 0,
+      counter: BigInt("0"),
       values: [],
       presences: [],
       presence: undefined,
@@ -292,7 +293,8 @@ export const valuesAt = (document: Document, path: Path.Path): ReadonlyArray<Val
 export const exists = (document: Document, path: Path.Path): boolean => slot(document, path)?.presence?.exists ?? false
 
 /** @internal */
-export const counterAt = (document: Document, path: Path.Path): number => slot(document, path)?.counter ?? 0
+export const counterAt = (document: Document, path: Path.Path): number =>
+  Number(slot(document, path)?.counter ?? BigInt("0"))
 
 /**
  * The names of the paths written under `path`, in order.
@@ -343,7 +345,7 @@ const jsonAt = (document: Document, path: Path.Path): Schema.Json | undefined =>
     case "text":
       return found.text?.value ?? ""
     case "counter":
-      return found.counter
+      return Number(found.counter)
     case "value":
       return found.values.length === 0 ? undefined : found.values[found.values.length - 1]!.value
   }
@@ -759,7 +761,7 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
       break
     case "Increment":
       at.kind = "counter"
-      at.counter += op.by
+      at.counter += BigInt(op.by)
       break
     case "Place": {
       const placement: Fugue.Placement = op.side === "R"
