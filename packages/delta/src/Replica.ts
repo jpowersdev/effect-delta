@@ -156,9 +156,9 @@ export const Overlap: Schema.Codec<Overlap, OverlapEncoded> = Schema.Union([
  * - `Value`: both wrote different values at `path`, both moved the list item
  *   at `path`, or one removed it while the other wrote it. `kept` is the
  *   replica whose write shows.
- * - `Removed`: one removed the entry or list item at `path` while the other
- *   changed something inside it, or moved it. It stays removed, and its
- *   content is kept.
+ * - `Removed`: one removed the entry, list item or optional field at `path`
+ *   while the other changed something inside it (its text or counter, if
+ *   it's one), or moved it. It stays removed, and its content is kept.
  *
  * Concurrent increments of a counter aren't overlaps, because nothing is
  * lost.

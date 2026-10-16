@@ -88,7 +88,9 @@ export interface TextProposal {
  * - `before` and `after`: the document without and with the change, as JSON.
  *   Only the parts that have been written are there, and removed parts
  *   aren't. Texts are strings, counters are the sum of their increments, and
- *   values are their latest write, encoded with their schema's JSON codec.
+ *   values are their latest write, encoded with their schema's JSON codec. A
+ *   part added with nothing in it yet, such as an empty text in a record, is
+ *   `{}`.
  * - `exists`: the record entries, list items and optional fields that exist
  *   before and after the change. JSON can't say this alone: an entry nobody
  *   added, but that something was written inside, has JSON without existing.

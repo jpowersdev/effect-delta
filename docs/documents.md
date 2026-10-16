@@ -112,9 +112,10 @@ An entry has two parts, merged separately:
 - **Its content**, merged by the entry's schema.
 
 That gives two behaviours:
-- **A removal wins over edits made inside the entry without seeing it.** An edit inside an entry says
-  nothing about whether the entry exists, so a removal still removes it. The merge reports a `Removed`
-  overlap. Most apps treat a deleted card or comment the same way.
+- **A removal wins over edits made inside the entry without seeing it**, edits to an entry that's a text
+  or a counter included. An edit inside an entry says nothing about whether the entry exists, so a removal
+  still removes it. The merge reports a `Removed` overlap. Most apps treat a deleted card or comment the
+  same way.
 - **Content is kept when an entry is removed.** Adding the key again brings the entry back with everyone's
   edits, including ones that arrived after the removal. So undoing a removal (later) loses nothing.
   Likewise, a key that two replicas add concurrently is one entry whose contents merge. Two entries would
@@ -436,7 +437,8 @@ type Overlap =
   | { readonly _tag: "Text"; readonly path: Path; readonly range: Range; readonly anchors: AnchorRange; readonly replicas: ReadonlyArray<ReplicaId> }
   // Both wrote different values here (or one removed it); `kept` is whose write shows.
   | { readonly _tag: "Value"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId>; readonly kept: ReplicaId }
-  // One removed this entry while the other changed something inside it. It stays removed.
+  // One removed this entry, item or optional field while the other changed something inside it, or moved
+  // it. It stays removed.
   | { readonly _tag: "Removed"; readonly path: Path; readonly replicas: ReadonlyArray<ReplicaId> }
 ```
 
