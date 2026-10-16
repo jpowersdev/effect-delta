@@ -1155,8 +1155,9 @@ describe("Authority", () => {
           // An editor making its own edits among the forged changes, some
           // rejected, and some made on top of ones that will be. It saves what
           // it has, and now and then it's closed and opened again from that.
+          const outer = yield* Effect.scope
           const open = Effect.gen(function*() {
-            const scope = yield* Scope.make()
+            const scope = yield* Scope.fork(outer)
             const editor = yield* Effect.gen(function*() {
               const editor = yield* ReplicatedDocument.makeConfirmed(Project, {
                 initial: initialProject,
@@ -1232,8 +1233,8 @@ describe("Authority", () => {
           yield* reopen
           yield* settled
           assert.deepStrictEqual(yield* ReplicatedDocument.get(current.editor), yield* ReplicatedDocument.get(replica))
-          yield* Scope.close(current.scope, Exit.void)
         }).pipe(
+          Effect.scoped,
           Effect.provide([
             Reading,
             CryptoTest,
