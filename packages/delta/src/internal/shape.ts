@@ -227,14 +227,22 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
     return { name: signature.name, shape, optional, hasDefault }
   })
 
-// An optional field's `undefined` counts as absent, so it's no value the
-// field can read, however deep in its unions. The union's checks still hold.
+// An optional field's `undefined` (or `void`) counts as absent, so it's no
+// value the field can read, however deep in its unions. The union's checks
+// still hold: on its one other member, so a part with a rule refuses them,
+// or for a suspend, which can't take checks, in a union of its own.
 const withoutUndefined = (ast: SchemaAST.AST): SchemaAST.AST => {
   if (!SchemaAST.isUnion(ast)) return ast
-  const defined = ast.types.flatMap((type) => SchemaAST.isUndefined(type) ? [] : [withoutUndefined(type)])
+  const defined = ast.types.flatMap((type) =>
+    SchemaAST.isUndefined(type) || SchemaAST.isVoid(type) ? [] : [withoutUndefined(type)]
+  )
   if (defined.length === 1) {
     const [only] = defined
-    return ast.checks === undefined ? only! : Schema.make<Schema.Codec<unknown>>(only!).check(...ast.checks).ast
+    return ast.checks === undefined
+      ? only!
+      : SchemaAST.isSuspend(only!)
+      ? new SchemaAST.Union([only!], ast.options, ast.annotations, ast.checks)
+      : Schema.make<Schema.Codec<unknown>>(only!).check(...ast.checks).ast
   }
   return defined.length === ast.types.length && defined.every((type, i) => type === ast.types[i])
     ? ast
