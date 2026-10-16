@@ -329,7 +329,7 @@ export const persist = Effect.fnUntraced(function*(
   let saved = Option.match(stored, { onNone: () => VersionVector.empty, onSome: (s) => InternalDelta.held(s.history) })
   let savedWaiting = Option.match(stored, { onNone: () => new Set<string>(), onSome: (s) => past(s.history, saved) })
   let savedWriters = new Set(Option.match(stored, { onNone: () => [], onSome: (s) => Object.keys(s.writers) }))
-  // How much history the last snapshot covers, in characters.
+  // How much history the last snapshot covers, in sequence numbers.
   let snapshotAt = Option.match(Option.flatMap(stored, (s) => s.snapshot), {
     onNone: () => 0,
     onSome: (snapshot) => size(snapshot.version)
@@ -375,7 +375,7 @@ const past = (delta: Delta.Delta, version: VersionVector.VersionVector): Set<str
     )
   )
 
-// Characters of history between snapshots.
+// Sequence numbers of history between snapshots.
 const snapshotEvery = 4096
 
 const size = (version: VersionVector.VersionVector): number =>

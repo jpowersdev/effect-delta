@@ -24,7 +24,7 @@
  */
 import * as Crypto from "effect/Crypto"
 import * as Effect from "effect/Effect"
-import { dual } from "effect/Function"
+import { dual, identity } from "effect/Function"
 import { hasProperty } from "effect/Predicate"
 import * as PubSub from "effect/PubSub"
 import * as Result from "effect/Result"
@@ -61,7 +61,7 @@ interface ReplicatedDocumentImpl extends ReplicatedDocument<unknown> {
 
 const Proto = {
   ...InternalReplica.Proto,
-  [TypeId]: TypeId,
+  [TypeId]: { _A: identity },
   toJSON(this: ReplicatedDocumentImpl) {
     return {
       _id: "ReplicatedDocument",
