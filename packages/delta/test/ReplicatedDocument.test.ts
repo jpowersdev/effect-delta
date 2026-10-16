@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, Stream } from "effect"
-import { Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
+import { Delta, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { TestClock } from "effect/testing"
@@ -827,6 +827,46 @@ describe("ReplicatedDocument", () => {
         )
         assert.strictEqual((yield* ReplicatedDocument.get(ben)).votes, 1)
       }))
+
+    it.effect("a bad change is dropped, and the changes ready behind it still apply", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* pair
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["title"]), 0, "A")
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ben, ["title"]), 0, "B")
+        // Dee types in front of both, having seen them.
+        const dee = yield* make("dee")
+        yield* Replica.exchange(dee, ada)
+        yield* Replica.exchange(dee, ben)
+        yield* ReplicatedText.insert(ReplicatedDocument.text(dee, ["title"]), 0, "D")
+
+        const carol = yield* make("carol")
+        yield* Replica.exchange(carol, ada)
+        const title = ReplicatedDocument.text(carol, ["title"])
+        const { edits } = yield* ReplicatedText.subscribe(title)
+        // Ready in this order: Ben's, which meets Ada's, the bad one, and Dee's.
+        const bad: InternalDocument.AnyChange = {
+          replica: "cy",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: 0,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }
+        const fromDee = yield* Replica.delta(dee, yield* Replica.version(carol))
+        malformed(
+          yield* Effect.flip(Replica.receive(carol, Delta.combine(fromDee, InternalDelta.fromChanges([bad])))),
+          "says it has 2 sequence numbers"
+        )
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(carol), yield* ReplicatedDocument.get(dee))
+        // Where Ben's met Ada's is where its anchors are, after Dee's.
+        const edit = Option.getOrThrow(yield* Stream.runHead(edits))
+        if (edit._tag !== "Remote") return assert.fail(`expected Remote, got ${edit._tag}`)
+        assert.strictEqual(edit.overlaps.length, 1)
+        for (const overlap of edit.overlaps) {
+          if (overlap._tag !== "Text") return assert.fail(`expected Text, got ${overlap._tag}`)
+          assert.deepStrictEqual(yield* ReplicatedText.locateRange(title, overlap.anchors), Option.some(overlap.range))
+        }
+      }).pipe(Effect.scoped))
 
     it.effect("says which change a bad text op is in", () =>
       Effect.gen(function*() {
