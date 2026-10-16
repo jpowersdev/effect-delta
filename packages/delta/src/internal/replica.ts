@@ -85,7 +85,8 @@ export interface Confirmed {
   readonly acknowledge: (version: VersionVector.VersionVector) => Effect.Effect<void>
   /**
    * The authority accepted up to `version` and rejected the next change: drop
-   * every own change it doesn't have, and continue under a new replica id.
+   * every own change it doesn't have, and anything made on top of them, and
+   * continue under a new replica id.
    */
   readonly reject: (version: VersionVector.VersionVector, message: string) => Effect.Effect<void>
 }

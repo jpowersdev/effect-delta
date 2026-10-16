@@ -284,7 +284,9 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
           engine,
           Effect.gen(function*() {
             const confirmed = state.confirmed!
-            confirmed.version = VersionVector.combine(confirmed.version, version)
+            // What the authority has, even if it once acknowledged more and
+            // lost it: what it lacks is rolled back, not pushed again.
+            confirmed.version = version
             const before = state.document
             // Everything the authority doesn't have was made on top of the
             // rejected change, so it all goes. That includes others' changes
