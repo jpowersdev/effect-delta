@@ -51,10 +51,11 @@ export class Relay extends Context.Service<Relay, Sync.Server>()("effect-delta/R
  * **Details**
  *
  * It refuses changes it can tell are malformed without the app's schema, and
- * changes stamped more than a day ahead of its clock. A change that builds on
- * one it doesn't have yet is stored, and sent to subscribers once that arrives
- * and it's checked. Changes that don't fit a replica's schema pass through;
- * replicas keep them without showing them.
+ * refuses a push whole if a change in it is stamped more than a day ahead of
+ * its clock. A change that builds on one it doesn't have yet is stored, and
+ * sent to subscribers once that arrives and it's checked. Changes that don't
+ * fit a replica's schema pass through; replicas keep them without showing
+ * them.
  *
  * @stability unstable
  * @category layers
