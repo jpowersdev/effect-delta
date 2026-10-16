@@ -3,7 +3,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { Context, Deferred, Effect, Equal, Fiber, Layer, Option, Queue, Schedule, Schema, Stream } from "effect"
 import {
   Authority,
-  type Delta,
+  Delta,
   HistoryStore,
   Relay,
   Replica,
@@ -789,55 +789,99 @@ describe("Authority", () => {
     it.effect("refuses a change that would make a path hold two kinds of thing", () =>
       Effect.gen(function*() {
         const authority = yield* Authority.Authority
-        const change: InternalDocument.AnyChange = {
-          replica: "r",
-          seq: 0,
-          length: 2,
-          parents: [],
-          time: 0,
-          ops: [{ _tag: "Set", path: ["votes"], value: 1 }, { _tag: "Increment", path: ["votes"], by: 1 }]
-        }
-        const error = yield* Effect.flip(
-          authority.push({ format: Sync.FORMAT, document: spec, delta: InternalDelta.fromChanges([change]) })
+        // Pushes `changes` one at a time to a new document; the last is refused.
+        const refuses = Effect.fnUntraced(
+          function*(changes: ReadonlyArray<InternalDocument.AnyChange>, message: string) {
+            const document = Replica.DocumentId.make(message)
+            const push = (change: InternalDocument.AnyChange) =>
+              authority.push({ format: Sync.FORMAT, document, delta: InternalDelta.fromChanges([change]) })
+            for (const change of changes.slice(0, -1)) yield* push(change)
+            const error = yield* Effect.flip(push(changes.at(-1)!))
+            if (error.reason._tag !== "DeltaError" || error.reason.reason._tag !== "Malformed") {
+              return assert.fail(`expected Malformed, got ${error.reason._tag}`)
+            }
+            assert.include(error.reason.reason.message, message)
+          }
         )
-        if (error.reason._tag !== "DeltaError" || error.reason.reason._tag !== "Malformed") {
-          return assert.fail(`expected Malformed, got ${error.reason._tag}`)
-        }
-        assert.include(error.reason.reason.message, "writes a counter where there's a value")
+        // Each change is made on top of the one before.
+        const change = (seq: number, ops: InternalDocument.AnyChange["ops"]): InternalDocument.AnyChange => ({
+          replica: "r",
+          seq,
+          length: ops.length,
+          parents: seq === 0 ? [] : [{ replica: "r", seq: seq - 1 }],
+          time: seq,
+          ops
+        })
+        const place = (path: ReadonlyArray<string>): InternalDocument.Op => ({
+          _tag: "Place",
+          path,
+          parent: null,
+          side: "L"
+        })
+
+        yield* refuses(
+          [change(0, [{ _tag: "Set", path: ["votes"], value: 1 }, { _tag: "Increment", path: ["votes"], by: 1 }])],
+          "writes a counter where there's a value"
+        )
+        // The root is a struct or a record, never a list.
+        yield* refuses(
+          [change(0, [{ _tag: "Set", path: ["status"], value: "approved" }, place(["status"])])],
+          "places a list item in the root"
+        )
+        // Nor is a record or struct that has parts.
+        yield* refuses(
+          [change(0, [{ _tag: "Add", path: ["comments", "c1"] }]), change(1, [place(["comments", "c2"])])],
+          "places a list item among parts that aren't items"
+        )
+        // A list item is never a text or a counter.
+        yield* refuses(
+          [change(0, [place(["tasks", "t1"]), { _tag: "Increment", path: ["tasks", "t1"], by: 1 }])],
+          "writes a counter where there's a list item"
+        )
       }).pipe(Effect.provide(NoSecrets)))
 
-    it.effect("a change that doesn't fit the schema can't hide the document from the check", () => {
-      const OwnerApproves = Authority.layer({
+    it.effect("a change that doesn't fit the schema can't hide a list from the check", () => {
+      const OwnerAddsTasks = Authority.layer({
         check: (proposal) => {
-          if (proposal._tag === "Text") return Effect.void
+          if (proposal._tag === "Text" || proposal.user === "owner") return Effect.void
           const { after, before } = ReplicatedDocument.readProposal(proposal, DesignDoc, { initial })
-          return after.status === "approved" && before.status !== "approved" && proposal.user !== "owner"
-            ? Effect.fail(new Authority.Rejected({ message: "Only the owner can approve" }))
+          return after.tasks.some(({ id }) => !before.tasks.some((task) => task.id === id))
+            ? Effect.fail(new Authority.Rejected({ message: "Only the owner adds tasks" }))
             : Effect.void
         }
       }).pipe(Layer.provide(HistoryStore.layerMemory))
       return Effect.gen(function*() {
         const authority = yield* Authority.Authority
-        // A list position under the root, which is a struct.
-        const intruder: InternalDocument.AnyChange = {
+        const push = (delta: Delta.Delta) => authority.push({ format: Sync.FORMAT, document: spec, delta })
+        const owner = yield* makeDoc("owner")
+        yield* ReplicatedDocument.update(owner, (doc) => ({
+          ...doc,
+          tasks: [{ id: "t1", title: "Write it", done: false }]
+        }))
+        const fromOwner = yield* Replica.delta(owner, VersionVector.empty)
+        yield* push(fromOwner).pipe(asUser("owner"))
+
+        // An entry in the list that isn't one of its items.
+        const stray = InternalDelta.fromChanges([{
           replica: "intruder",
           seq: 0,
-          length: 2,
-          parents: [],
-          time: 0,
-          ops: [{ _tag: "Add", path: ["x"] }, { _tag: "Place", path: ["x"], parent: null, side: "L" }]
-        }
-        yield* authority.push({ format: Sync.FORMAT, document: spec, delta: InternalDelta.fromChanges([intruder]) })
+          length: 1,
+          parents: [{ replica: "owner", seq: VersionVector.get(yield* Replica.version(owner), "owner") - 1 }],
+          time: 1,
+          ops: [{ _tag: "Set", path: ["tasks", "x"], value: 1 }]
+        }])
+        yield* push(stray).pipe(asUser("intruder"))
+
         const editor = yield* makeDoc("editor")
-        yield* Replica.receive(editor, InternalDelta.fromChanges([intruder]))
-        yield* ReplicatedDocument.update(editor, (doc) => ({ ...doc, status: "approved" }))
-        const ack = yield* authority.push({
-          format: Sync.FORMAT,
-          document: spec,
-          delta: yield* Replica.delta(editor, { intruder: 2 })
-        }).pipe(asUser("editor"))
+        yield* Replica.receive(editor, Delta.combine(fromOwner, stray))
+        const seen = yield* Replica.version(editor)
+        yield* ReplicatedDocument.update(editor, (doc) => ({
+          ...doc,
+          tasks: [...doc.tasks, { id: "t2", title: "Ship it", done: false }]
+        }))
+        const ack = yield* push(yield* Replica.delta(editor, seen)).pipe(asUser("editor"))
         assert.strictEqual(ack._tag, "Rejected")
-      }).pipe(Effect.provide(OwnerApproves))
+      }).pipe(Effect.provide(OwnerAddsTasks))
     })
 
     it.effect("a confirmed document syncs with nothing else", () =>
