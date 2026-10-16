@@ -108,9 +108,16 @@ export const make = Effect.fnUntraced(function*(options: {
   return Object.assign(engine, { core: makeCore(engine) })
 })
 
-/** @internal */
+/**
+ * Runs `effect` holding the lock, and without interruption once it has it.
+ * Everything under the lock is short, and an edit or merge stopped between
+ * changing the state and publishing it would leave the replica sending a
+ * change it doesn't show.
+ *
+ * @internal
+ */
 export const locked = <A, E, R>(engine: Engine, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-  engine.lock.withPermit(effect)
+  engine.lock.withPermit(Effect.uninterruptible(effect))
 
 // Tells subscribers about a change, with the value it leads to.
 const publish = (engine: Engine, event: Omit<Event, "value">): Effect.Effect<void> =>
