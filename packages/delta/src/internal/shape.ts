@@ -188,11 +188,19 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
   ast.propertySignatures.map((signature) => {
     if (!Predicate.isString(signature.name)) return refuse(path, "a struct's fields must have string names")
     const optional = SchemaAST.isOptional(signature.type)
+    const hasDefault = signature.type.context?.constructorDefault !== undefined
+    // Filled in whenever it's absent, it could never be absent.
+    if (optional && hasDefault) {
+      refuse(
+        [...path, signature.name],
+        "an optional field can't have a constructor default: it would show while absent"
+      )
+    }
     return {
       name: signature.name,
       shape: compileAst(optional ? withoutUndefined(signature.type) : signature.type, [...path, signature.name]),
       optional,
-      hasDefault: signature.type.context?.constructorDefault !== undefined
+      hasDefault
     }
   })
 
