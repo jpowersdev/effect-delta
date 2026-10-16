@@ -101,6 +101,9 @@ export const make = Effect.fnUntraced(function*(options: {
       }
       const document = yield* open(request.document)
       return yield* document.lock.withPermit(Effect.gen(function*() {
+        // A push may have failed while saving as this waited: the document
+        // holds changes the store doesn't, and is loaded again.
+        yield* ensureServing(document)
         const { history, strategy } = document.state
         if (strategy !== undefined && strategy !== request.strategy) {
           return yield* syncError(
