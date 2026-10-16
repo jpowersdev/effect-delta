@@ -242,7 +242,7 @@ export const make = (strategy: Replica.Strategy | undefined): Document => ({
  */
 export const rebuild = (strategy: Replica.Strategy | undefined, changes: Iterable<AnyChange>): Document => {
   const document = make(strategy)
-  integrate(document, [...changes], { overlaps: false })
+  integrate(document, [...changes])
   return document
 }
 
@@ -509,47 +509,40 @@ export interface Integrated {
   /** How each text changed, by path key. */
   readonly texts: ReadonlyMap<string, TextPatch.TextPatch>
   readonly overlaps: ReadonlyArray<Overlap>
-  /** What's wrong with the first change that wasn't applied, if any. */
-  readonly problem: string | undefined
+  /** What was wrong with each bad change, by its key. */
+  readonly problems: ReadonlyArray<{ readonly key: string; readonly message: string }>
 }
 
 /**
  * Applies changes whose parents are all applied (or come earlier in
- * `changes`), in order, checking each one first. Stops at the first bad one,
- * keeping the ones before it.
+ * `changes`), in order, checking each one first. A bad one isn't applied, nor
+ * is anything made on top of it. Says what's wrong with the first bad one.
  *
  * @internal
  */
 export const integrate = (
   document: Document,
-  changes: ReadonlyArray<AnyChange>,
-  options: { readonly overlaps: boolean }
-): Integrated => {
-  const found = options.overlaps ? new Found() : undefined
-  const { applied, bad, textOverlaps, texts } = applyChanges(document, changes, found, false)
-  return { applied, texts, overlaps: [...(found?.list(document) ?? []), ...textOverlaps], problem: bad[0]?.message }
+  changes: ReadonlyArray<AnyChange>
+): { readonly texts: Integrated["texts"]; readonly problem: string | undefined } => {
+  const { bad, texts } = applyChanges(document, changes, undefined)
+  return { texts, problem: bad[0]?.message }
 }
 
 /**
- * Applies every pending change that's ready, as `integrate` does, but carries
- * on past a bad change: it's dropped, the changes ready behind it are applied,
+ * Applies every pending change that's ready, as `integrate` does, in one
+ * merge: a bad change is dropped, the changes ready behind it are applied,
  * and the ones made on top of it keep waiting. So what a document shows
  * doesn't depend on how its changes arrived, and replicas and relays drop the
- * same changes. Says what was wrong with each bad one.
+ * same changes.
  *
  * @internal
  */
-export const integrateReady = (
-  document: Document,
-  options: { readonly overlaps: boolean }
-): Omit<Integrated, "problem"> & {
-  readonly problems: ReadonlyArray<{ readonly key: string; readonly message: string }>
-} => {
+export const integrateReady = (document: Document, options: { readonly overlaps: boolean }): Integrated => {
   const { history } = document
   // All in one merge, so changes that arrive together never meet, whatever
   // bad change is among them.
   const found = options.overlaps ? new Found() : undefined
-  const { applied, bad, textOverlaps, texts, waiting } = applyChanges(document, History.takeReady(history), found, true)
+  const { applied, bad, textOverlaps, texts, waiting } = applyChanges(document, History.takeReady(history), found)
   for (const { change } of bad) history.dropped.set(key(change), change)
   for (const change of waiting) history.pending.set(key(change), change)
   return {
@@ -562,15 +555,13 @@ export const integrateReady = (
 
 type TextOverlap = Extract<Overlap, { readonly _tag: "Text" }>
 
-// Applies changes as `integrate` says, or with `carryOn`, as `integrateReady`
-// does, returning the bad ones and the ones that wait behind them. With
-// `found`, it collects value and removal overlaps there, and returns the text
-// overlaps.
+// Applies changes as `integrate` says, returning the bad ones and the ones
+// that wait behind them. With `found`, it collects value and removal overlaps
+// there, and returns the text overlaps.
 const applyChanges = (
   document: Document,
   changes: ReadonlyArray<AnyChange>,
-  found: Found | undefined,
-  carryOn: boolean
+  found: Found | undefined
 ): {
   readonly applied: number
   readonly texts: Map<string, TextPatch.TextPatch>
@@ -624,7 +615,6 @@ const applyChanges = (
     const problem = check(document, change, context, (path, strategy) => mergeOf(path, strategy).merge)
     if (problem !== undefined) {
       bad.push({ change, message: problem })
-      if (!carryOn) break
       skip(change)
       continue
     }

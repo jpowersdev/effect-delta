@@ -233,7 +233,7 @@ export const make = Effect.fnUntraced(function*(options: {
               rejected = unkept
               break
             }
-            const { problem, texts } = InternalDocument.integrate(state, [change], { overlaps: false })
+            const { problem, texts } = InternalDocument.integrate(state, [change])
             if (problem !== undefined) {
               malformed = problem
               break
