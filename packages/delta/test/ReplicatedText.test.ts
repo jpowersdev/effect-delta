@@ -26,6 +26,22 @@ describe("ReplicatedText", () => {
         assert.strictEqual(yield* ReplicatedText.get(notes), "Hi")
       }))
 
+    it.effect("makes no change for an edit that inserts or removes nothing", () =>
+      Effect.gen(function*() {
+        for (const strategy of ["tree", "replay"] as const) {
+          const laptop = yield* ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make("laptop") })
+          yield* ReplicatedText.insert(laptop, 0, "")
+          yield* ReplicatedText.remove(laptop, 0, 0)
+          yield* ReplicatedText.applyPatch(laptop, [{ _tag: "Insert", text: "" }, { _tag: "Remove", length: 0 }])
+          assert.deepStrictEqual(yield* Replica.version(laptop), {})
+          // What's made after them syncs as usual.
+          yield* ReplicatedText.insert(laptop, 0, "Hi")
+          const phone = yield* ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make("phone") })
+          yield* Replica.exchange(laptop, phone)
+          assert.strictEqual(yield* ReplicatedText.get(phone), "Hi")
+        }
+      }))
+
     it.effect("rejects edits that would split an emoji", () =>
       Effect.gen(function*() {
         const notes = yield* make("laptop")
