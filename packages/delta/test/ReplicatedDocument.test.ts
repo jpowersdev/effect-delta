@@ -309,6 +309,32 @@ describe("ReplicatedDocument", () => {
         yield* ReplicatedDocument.update(poll, ({ yes }) => ({ yes: yes - 1 }))
         assert.deepStrictEqual(yield* ReplicatedDocument.get(poll), { yes: 9 })
       }))
+
+    it.effect("add up to the same total in any order, however large", () =>
+      Effect.gen(function*() {
+        const Poll = Schema.Struct({ yes: ReplicatedDocument.Counter })
+        const poll = (replica: string) =>
+          ReplicatedDocument.make(Poll, { initial: { yes: 0 }, replica: Replica.ReplicaId.make(replica) })
+        // Three replicas' increments. Added up in the first order, the total
+        // passes 2^53 on the way, where a float can't hold every whole number.
+        const deltas = yield* Effect.forEach([[Number.MAX_SAFE_INTEGER], [1, 1], [-2]], (increments, i) =>
+          Effect.gen(function*() {
+            const voter = yield* poll(`r${i}`)
+            for (const by of increments) {
+              yield* ReplicatedDocument.update(voter, ({ yes }) => ({ yes: yes + by }))
+            }
+            return yield* Replica.delta(voter, VersionVector.empty)
+          }))
+        const totals = yield* Effect.forEach([[0, 1, 2], [2, 0, 1]], (order) =>
+          Effect.gen(function*() {
+            const counted = yield* poll("counted")
+            for (const i of order) {
+              yield* Replica.receive(counted, deltas[i]!)
+            }
+            return (yield* ReplicatedDocument.get(counted)).yes
+          }))
+        assert.deepStrictEqual(totals, [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER])
+      }))
   })
 
   describe("entries", () => {
