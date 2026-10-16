@@ -381,8 +381,8 @@ export interface ConfirmedOptions<A> {
  * Edits apply immediately and are unconfirmed until the authority
  * acknowledges them. When the authority rejects a change, the replica drops
  * it and every unconfirmed change made after it, emits a `Rejected` edit with
- * the value rolled back, and continues under a new replica id. The authority
- * checks it through `ReplicatedDocument.readProposal`.
+ * the value rolled back, and continues under a new replica id. The
+ * authority's check reads its changes with `ReplicatedDocument.readProposal`.
  *
  * @stability unstable
  * @category constructors
@@ -494,10 +494,11 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * The new value is compared with the old part by part, and only what changed
  * is written: values that aren't equal (by `Schema.toEquivalence`), texts as
  * one replacement each (as `ReplicatedText.set` does), counters by the
- * difference, and records and lists by which keys appear and disappear. Fails
- * with `Schema.SchemaError` if the new value doesn't fit the schema, or a
- * value encodes to something JSON can't carry, or to JSON that reads back as
- * another value (as a union's members can).
+ * difference, records by which keys appear and disappear, and lists by which
+ * keys appear, disappear and move. Fails with `Schema.SchemaError` if the new
+ * value doesn't fit the schema, if two items of a list have the same key, or
+ * if a value encodes to something JSON can't carry, or to JSON that reads
+ * back as another value (as a union's members can).
  *
  * Editors should edit text fields through `text`, which says exactly what the
  * user did; `update` has to work it out.
@@ -570,7 +571,7 @@ export type TextPath<A> = A extends string ? readonly []
  * Each edit through it is one change to the document. A text field in a
  * record entry or list item that doesn't exist, or was removed, still works:
  * its text is kept, and shows once the entry exists. A path that isn't a
- * `Text` in the schema is a defect.
+ * `Text` in the schema throws, as a defect.
  *
  * **Example** (Editing a text field)
  *

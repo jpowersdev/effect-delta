@@ -339,8 +339,9 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
   return document
 })
 
-// An authority's document without some of its changes, started over from the
-// rest. An authority keeps nothing pending, so nothing else is lost.
+// A document without some of its changes, started over from the rest. An
+// authority keeps nothing pending, and a relay never stops between taking
+// changes in and saving them, so nothing else is lost.
 const without = (
   state: InternalDocument.Document,
   dropped: (change: InternalDocument.AnyChange) => boolean
