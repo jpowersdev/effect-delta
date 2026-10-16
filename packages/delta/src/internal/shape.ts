@@ -687,29 +687,43 @@ const planValues = (
 const longestCommon = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): Array<string> =>
   longestCommonBy(a, b, (x, y) => x === y).map(([i]) => a[i]!)
 
-// The longest common subsequence of `a` and `b`, as pairs of indexes.
+// The longest common subsequence of `a` and `b`, as pairs of indexes. What
+// they start and end with in common is matched as it is, so comparing lists
+// that differ in a few places costs about their length, not its square.
 const longestCommonBy = <A, B>(
   a: ReadonlyArray<A>,
   b: ReadonlyArray<B>,
   equals: (a: A, b: B) => boolean
 ): Array<readonly [number, number]> => {
-  const lengths = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0))
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      lengths[i]![j] = equals(a[i]!, b[j]!)
-        ? lengths[i + 1]![j + 1]! + 1
-        : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!)
-    }
+  let start = 0
+  while (start < a.length && start < b.length && equals(a[start]!, b[start]!)) start++
+  let endA = a.length
+  let endB = b.length
+  while (endA > start && endB > start && equals(a[endA - 1]!, b[endB - 1]!)) {
+    endA--
+    endB--
   }
   const pairs: Array<readonly [number, number]> = []
-  for (let i = 0, j = 0; i < a.length && j < b.length;) {
+  for (let i = 0; i < start; i++) pairs.push([i, i])
+  // The rest, between them.
+  const lengths = Array.from({ length: endA - start + 1 }, () => new Array<number>(endB - start + 1).fill(0))
+  const length = (i: number, j: number) => lengths[i - start]![j - start]!
+  for (let i = endA - 1; i >= start; i--) {
+    for (let j = endB - 1; j >= start; j--) {
+      lengths[i - start]![j - start] = equals(a[i]!, b[j]!)
+        ? length(i + 1, j + 1) + 1
+        : Math.max(length(i + 1, j), length(i, j + 1))
+    }
+  }
+  for (let i = start, j = start; i < endA && j < endB;) {
     if (equals(a[i]!, b[j]!)) {
       pairs.push([i++, j++])
-    } else if (lengths[i + 1]![j]! >= lengths[i]![j + 1]!) {
+    } else if (length(i + 1, j) >= length(i, j + 1)) {
       i++
     } else {
       j++
     }
   }
+  for (let i = endA, j = endB; i < a.length; i++, j++) pairs.push([i, j])
   return pairs
 }
