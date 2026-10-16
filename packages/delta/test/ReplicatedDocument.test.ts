@@ -1007,6 +1007,28 @@ describe("ReplicatedDocument", () => {
       })
     })
 
+    it.effect("a change that names a parent before any change is refused, and the rest still apply", () =>
+      Effect.gen(function*() {
+        const ada = yield* make("ada")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, votes: 1 }))
+        const forged = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [{ replica: "ada", seq: -1 }],
+          time: 1,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }])
+        const ben = yield* make("ben")
+        malformed(
+          yield* Effect.flip(
+            Replica.receive(ben, Delta.combine(yield* Replica.delta(ada, VersionVector.empty), forged))
+          ),
+          "has a parent before any change"
+        )
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
+      }))
+
     it.effect("says which change a bad text op is in", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
