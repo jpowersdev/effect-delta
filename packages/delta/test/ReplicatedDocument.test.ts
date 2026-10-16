@@ -1317,6 +1317,36 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* ReplicatedDocument.get(later), { status: "Hi" })
       }))
 
+    it.effect("removing a part the schema always has meets nothing, nor decides whose write shows", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* pair
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "review" }))
+        yield* Replica.exchange(ada, ben)
+        yield* TestClock.adjust("1 second")
+        const carol = yield* make("carol")
+        yield* ReplicatedDocument.update(carol, (doc) => ({ ...doc, status: "approved" }))
+        // Later than both, made without seeing either.
+        const removal = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 10_000,
+          ops: [{ _tag: "Unset", path: ["status"] }]
+        }])
+        const overlaps = yield* Replica.receive(
+          ben,
+          Delta.combine(removal, yield* Replica.delta(carol, VersionVector.empty))
+        )
+        assert.strictEqual((yield* ReplicatedDocument.get(ben)).status, "approved")
+        assert.deepStrictEqual(overlaps, [{
+          _tag: "Value",
+          path: ["status"],
+          replicas: [Replica.ReplicaId.make("ada"), Replica.ReplicaId.make("carol")],
+          kept: Replica.ReplicaId.make("carol")
+        }])
+      }))
+
     it.effect("a change must be later than what it was made on top of", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
