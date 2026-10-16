@@ -448,8 +448,8 @@ interface Source {
   readonly at: (name: string) => Source
   /** The keys of the record entries here, in order. */
   readonly keys: () => ReadonlyArray<string>
-  /** The list items here that show, in order. */
-  readonly items: () => ReadonlyArray<Source>
+  /** The list items here that show, in order, for a list whose items have the key field `key`. */
+  readonly items: (key: string | undefined) => ReadonlyArray<Source>
 }
 
 const documentAt = (document: InternalDocument.Document, path: Path.Path): Source => ({
@@ -479,8 +479,15 @@ const jsonAt = (json: Schema.Json | undefined, path: Path.Path, exists: (path: P
   at: (name) =>
     jsonAt(isJsonObject(json) && Object.hasOwn(json, name) ? json[name] : undefined, [...path, name], exists),
   keys: () => isJsonObject(json) ? Object.keys(json) : [],
-  // A list's items are the ones that show, so they exist.
-  items: () => Array.isArray(json) ? json.map((item, i) => jsonAt(item, [...path, String(i)], exists)) : []
+  // A list's items are the ones that show, so they exist. They're at paths by
+  // key, as what's in them that exists is.
+  items: (key) =>
+    Array.isArray(json)
+      ? json.map((item, i) => {
+        const name = key !== undefined && isJsonObject(item) ? item[key] : undefined
+        return jsonAt(item, [...path, Predicate.isString(name) ? name : String(i)], exists)
+      })
+      : []
 })
 
 const isJsonObject = (json: Schema.Json | undefined): json is Schema.JsonObject =>
@@ -562,7 +569,7 @@ const readAt = (
     }
     case "List": {
       const items: Array<unknown> = []
-      for (const item of source.items()) {
+      for (const item of source.items(shape.key)) {
         const value = readItem(shape, item, memo)
         if (value !== Missing) items.push(value)
       }

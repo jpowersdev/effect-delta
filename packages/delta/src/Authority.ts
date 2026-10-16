@@ -89,10 +89,9 @@ export interface TextProposal {
  *   Only the parts that have been written are there, and removed parts
  *   aren't. Texts are strings, counters are the sum of their increments, and
  *   values are their latest write, encoded with their schema's JSON codec.
- * - `exists`: the record entries, list items and optional fields that exist,
- *   as paths into `before` and `after` (list items by index). JSON can't say
- *   this alone: an entry nobody added, but that something was written inside,
- *   has JSON without existing.
+ * - `exists`: the record entries, list items and optional fields that exist
+ *   before and after the change. JSON can't say this alone: an entry nobody
+ *   added, but that something was written inside, has JSON without existing.
  * - `paths`: where the change wrote.
  * - `delta`: the change itself.
  *
