@@ -203,7 +203,7 @@ export const make = Effect.fnUntraced(function*(options: {
         if (check === undefined) {
           // A relay drops a bad change and carries on. If the bad change came
           // with an earlier push, that push has already been answered.
-          for (const problem of integrateAll(state)) {
+          for (const problem of InternalDocument.integrateReady(state, { overlaps: false }).problems) {
             if (pushed.has(problem.key)) malformed ??= problem.message
           }
         } else {
@@ -321,28 +321,10 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
     for (const change of changes) state.history.pending.set(key(change), change)
     // Applied changes were checked before they were stored. One that was
     // stored while it waited, and turns out to be bad, is dropped.
-    integrateAll(state)
+    InternalDocument.integrateReady(state, { overlaps: false })
   }
   return document
 })
-
-// Applies every pending change that can be applied, dropping bad ones (and
-// leaving whatever builds on them waiting). Returns what was wrong with each
-// bad one.
-const integrateAll = (
-  state: InternalDocument.Document
-): Array<{ readonly key: string; readonly message: string }> => {
-  const problems: Array<{ readonly key: string; readonly message: string }> = []
-  const { history } = state
-  for (let ready = History.takeReady(history); ready.length > 0; ready = History.takeReady(history)) {
-    const { problem } = InternalDocument.integrate(state, ready, { overlaps: false })
-    if (problem === undefined) break
-    const [bad, ...behind] = ready.filter((change) => !history.changes.has(key(change)))
-    problems.push({ key: key(bad!), message: problem })
-    for (const change of behind) history.pending.set(key(change), change)
-  }
-  return problems
-}
 
 // An authority's document without some of its changes, started over from the
 // rest. An authority keeps nothing pending, so nothing else is lost.

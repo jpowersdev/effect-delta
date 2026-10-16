@@ -1,4 +1,5 @@
 import * as Equal from "effect/Equal"
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import type * as Replica from "../Replica.ts"
 import * as TextPatch from "../TextPatch.ts"
@@ -498,6 +499,75 @@ export const integrate = (
   changes: ReadonlyArray<AnyChange>,
   options: { readonly overlaps: boolean; readonly check?: ((change: AnyChange) => string | undefined) | undefined }
 ): Integrated => {
+  const found = options.overlaps ? new Found() : undefined
+  const { applied, problem, textOverlaps, texts } = applyChanges(document, changes, options.check, found)
+  return { applied, texts, overlaps: [...(found?.list(document) ?? []), ...textOverlaps], problem }
+}
+
+/**
+ * Applies every pending change that's ready, as `integrate` does, but carries
+ * on past a bad change: it's dropped, the changes ready behind it are applied,
+ * and the ones made on top of it keep waiting. So what a document shows
+ * doesn't depend on how its changes arrived, and replicas and relays drop the
+ * same changes. Says what was wrong with each bad one.
+ *
+ * @internal
+ */
+export const integrateReady = (
+  document: Document,
+  options: { readonly overlaps: boolean }
+): Omit<Integrated, "problem"> & {
+  readonly problems: ReadonlyArray<{ readonly key: string; readonly message: string }>
+} => {
+  const { history } = document
+  // Value and removal overlaps are listed once every round is in, as for one
+  // batch. A text overlap's range is where it is when it's found, so one that
+  // a later round's edits moved is located again from its anchors.
+  const found = options.overlaps ? new Found() : undefined
+  const textOverlaps: Array<TextOverlap> = []
+  const moved = new Set<TextOverlap>()
+  const texts = new Map<string, TextPatch.TextPatch>()
+  const problems: Array<{ readonly key: string; readonly message: string }> = []
+  let applied = 0
+  for (let ready = History.takeReady(history); ready.length > 0; ready = History.takeReady(history)) {
+    const round = applyChanges(document, ready, undefined, found)
+    applied += round.applied
+    for (const overlap of textOverlaps) if (round.texts.has(Path.key(overlap.path))) moved.add(overlap)
+    textOverlaps.push(...round.textOverlaps)
+    for (const [k, patch] of round.texts) texts.set(k, TextPatch.compose(texts.get(k) ?? TextPatch.empty, patch))
+    if (round.problem === undefined) break
+    const [bad, ...behind] = ready.filter((change) => !history.changes.has(key(change)))
+    problems.push({ key: key(bad!), message: round.problem })
+    for (const change of behind) history.pending.set(key(change), change)
+  }
+  const located = textOverlaps.map((overlap) => moved.has(overlap) ? locate(document, overlap) : overlap)
+  return { applied, texts, overlaps: [...(found?.list(document) ?? []), ...located], problems }
+}
+
+type TextOverlap = Extract<Overlap, { readonly _tag: "Text" }>
+
+// A text overlap's range, from where its anchors are now.
+const locate = (document: Document, overlap: TextOverlap): TextOverlap => {
+  const text = slot(document, overlap.path)?.text
+  if (text === undefined) return overlap
+  const start = text.locate(overlap.anchors.start)
+  const end = text.locate(overlap.anchors.end)
+  return Option.isSome(start) && Option.isSome(end) ? { ...overlap, start: start.value, end: end.value } : overlap
+}
+
+// Applies changes as `integrate` says. With `found`, it collects value and
+// removal overlaps there, and returns the text overlaps.
+const applyChanges = (
+  document: Document,
+  changes: ReadonlyArray<AnyChange>,
+  extraCheck: ((change: AnyChange) => string | undefined) | undefined,
+  found: Found | undefined
+): {
+  readonly applied: number
+  readonly texts: Map<string, TextPatch.TextPatch>
+  readonly textOverlaps: ReadonlyArray<TextOverlap>
+  readonly problem: string | undefined
+} => {
   const contexts = contextsOf(document.history, changes)
   // Every text's parts of the batch, in order, for its merge.
   const incoming = new Map<string, Array<TextPart>>()
@@ -514,22 +584,21 @@ export const integrate = (
   const merges = new Map<string, { readonly path: Path.Path; readonly text: Text.Text; readonly merge: Text.Merge }>()
   const mergeOf = (path: Path.Path, strategy: Replica.Strategy) => {
     const k = Path.key(path)
-    let found = merges.get(k)
-    if (found === undefined) {
+    let merge = merges.get(k)
+    if (merge === undefined) {
       const text = slot(document, path)?.text ?? Text.make(strategy)
-      found = { path, text, merge: text.merge(incoming.get(k) ?? []) }
-      merges.set(k, found)
+      merge = { path, text, merge: text.merge(incoming.get(k) ?? []) }
+      merges.set(k, merge)
     }
-    return found
+    return merge
   }
 
-  const found = options.overlaps ? new Found() : undefined
   const texts = new Map<string, TextPatch.TextPatch>()
   let problem: string | undefined
   let applied = 0
   for (const [i, change] of changes.entries()) {
     const context = contexts[i]!
-    problem = options.check?.(change) ??
+    problem = extraCheck?.(change) ??
       check(document, change, context, (path, strategy) => mergeOf(path, strategy).merge)
     if (problem !== undefined) break
     let seq = change.seq
@@ -555,13 +624,13 @@ export const integrate = (
     applied++
   }
 
-  const overlaps = found?.list(document) ?? []
-  if (options.overlaps) {
+  const textOverlaps: Array<TextOverlap> = []
+  if (found !== undefined) {
     for (const { merge, path } of merges.values()) {
-      for (const overlap of merge.overlaps()) overlaps.push({ _tag: "Text", path, ...overlap })
+      for (const overlap of merge.overlaps()) textOverlaps.push({ _tag: "Text", path, ...overlap })
     }
   }
-  return { applied, texts, overlaps, problem }
+  return { applied, texts, textOverlaps, problem }
 }
 
 const composeText = (texts: Map<string, TextPatch.TextPatch>, path: Path.Path, patch: TextPatch.TextPatch): void => {

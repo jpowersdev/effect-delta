@@ -323,18 +323,15 @@ const receive = (
     if (!History.has(history, change)) history.pending.set(key(change), change)
   }
 
-  const ready = History.takeReady(history)
-  if (ready.length === 0) return Effect.succeed([])
-  const integrated = InternalDocument.integrate(state.document, ready, { overlaps: true })
+  // A bad change is dropped, and the rest are applied without it.
+  const integrated = InternalDocument.integrateReady(state.document, { overlaps: true })
   const overlaps = integrated.overlaps.filter(engine.model.shows).map(toOverlap)
   const published = integrated.applied === 0
     ? Effect.void
     : publish(engine, { _tag: "Remote", texts: integrated.texts, overlaps, message: "" })
-  if (integrated.problem === undefined) return Effect.as(published, overlaps)
-  // The bad change is dropped; whatever was ready behind it keeps waiting.
-  const [, ...behind] = ready.filter((change) => !history.changes.has(key(change)))
-  for (const change of behind) history.pending.set(key(change), change)
-  return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: integrated.problem }))))
+  const [problem] = integrated.problems
+  if (problem === undefined) return Effect.as(published, overlaps)
+  return Effect.andThen(published, Effect.fail(deltaError(new Replica.Malformed({ message: problem.message }))))
 }
 
 const toOverlap = (overlap: InternalDocument.Overlap): Replica.Overlap => {
