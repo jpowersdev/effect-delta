@@ -15,6 +15,7 @@ import * as InternalDocument from "./document.ts"
 import * as History from "./history.ts"
 import * as Path from "./path.ts"
 import type * as InternalReplica from "./replica.ts"
+import * as InternalText from "./text.ts"
 
 // The replica behind both ReplicatedText and ReplicatedDocument: a document's
 // state, the replica id it writes under, a lock that serializes everything,
@@ -40,7 +41,7 @@ export interface Event {
   readonly _tag: "Local" | "Remote" | "Rejected"
   /** The value after it. */
   readonly value: unknown
-  /** How each text changed, by path key. */
+  /** How each text it edited changed, by path key; for a rejection, each it rolled back edits to. */
   readonly texts: ReadonlyMap<string, TextPatch.TextPatch>
   readonly overlaps: ReadonlyArray<Replica.Overlap>
   readonly message: string
@@ -125,13 +126,14 @@ const publish = (engine: Engine, event: Omit<Event, "value">): Effect.Effect<voi
     return Effect.andThen(SubscriptionRef.set(engine.value, value), PubSub.publish(engine.events, { ...event, value }))
   })
 
-// How each text changed from one state of the document to another.
+// How each text at `paths` changed from one state of the document to another.
 const textsBetween = (
   before: InternalDocument.Document,
-  after: InternalDocument.Document
+  after: InternalDocument.Document,
+  paths: Iterable<Path.Path>
 ): ReadonlyMap<string, TextPatch.TextPatch> => {
   const texts = new Map<string, TextPatch.TextPatch>()
-  for (const { path } of [...InternalDocument.texts(before), ...InternalDocument.texts(after)]) {
+  for (const path of paths) {
     texts.set(
       Path.key(path),
       TextPatch.get(InternalDocument.textAt(before, path), InternalDocument.textAt(after, path))
@@ -247,7 +249,11 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
               snapshot.texts
             )
             if (loaded !== undefined) {
-              const texts = textsBetween(state.document, loaded)
+              const texts = textsBetween(
+                state.document,
+                loaded,
+                [...InternalDocument.texts(state.document), ...InternalDocument.texts(loaded)].map(({ path }) => path)
+              )
               state.document = loaded
               const after = InternalDelta.fromChanges(changes.filter((change) => !inSnapshot(change)))
               return Effect.andThen(
@@ -278,6 +284,7 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
             // Everything the authority doesn't have was made on top of the
             // rejected change, and nobody else has seen it, so it all goes.
             const { changes, pending } = history()
+            const dropped = [...changes.values()].filter((change) => isUnconfirmed(state, change))
             state.document = InternalDocument.rebuild(
               engine.strategy,
               [...changes.values()].filter((change) => !isUnconfirmed(state, change))
@@ -289,7 +296,13 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
             state.writers.add(state.replica)
             yield* publish(engine, {
               _tag: "Rejected",
-              texts: textsBetween(before, state.document),
+              // Only the texts it rolls back edits to: a rejection elsewhere
+              // in a document leaves a text alone.
+              texts: textsBetween(
+                before,
+                state.document,
+                dropped.flatMap(({ ops }) => ops.filter(InternalText.isOp).map(InternalDocument.pathOf))
+              ),
               overlaps: [],
               message
             })

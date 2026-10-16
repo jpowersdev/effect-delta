@@ -139,7 +139,7 @@ const editsOf = (self: Editable, events: Stream.Stream<InternalEngine.Event>): S
         }
         // A rejection elsewhere in a document leaves this text alone.
         case "Rejected":
-          return patch.length === 0 ? undefined : { _tag: "Rejected", patch, message: event.message }
+          return event.texts.has(k) ? { _tag: "Rejected", patch, message: event.message } : undefined
       }
     }),
     Stream.filter((edit): edit is Edit => edit !== undefined)
@@ -476,8 +476,8 @@ export const changes: (self: Editable) => Stream.Stream<string> = changesImpl
  * - `Remote`: changes from another replica merged in, with any overlaps the
  *   merge found.
  * - `Rejected`: an authority rejected this replica's edit; `patch` rolls it
- *   back. A text field hears of a rejection only if it rolls the field back;
- *   `ReplicatedDocument.subscribe` hears of every one.
+ *   back. A text field hears of a rejection only if it rolls back edits to
+ *   the field; `ReplicatedDocument.subscribe` hears of every one.
  *
  * @stability unstable
  * @category models
