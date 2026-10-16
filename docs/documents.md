@@ -146,6 +146,9 @@ sets, usually a random id, as React keys are. `update` compares the old and new 
 - keys in a different order are moves (the fewest that give the new order);
 - keys in both merge their content by the item's schema.
 
+An item whose key field doesn't say its own key (which `update` never writes) is left out, as an item that
+can't be read is, and a constructor default never fills a key in.
+
 Underneath, a list is a record (an entry per key) plus each item's position. A position is a node in a
 tree, ordered by the tree strategy's rule, so items inserted concurrently at the same spot don't
 interleave. Moving an item gives it a new position, and its latest position wins (Kleppmann, "Moving

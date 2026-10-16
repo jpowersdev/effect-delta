@@ -138,13 +138,15 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
       const item = compileAst(ast.rest[0]!, [...path, "*"])
       if (rule.key === undefined) {
         if (item._tag !== "Value") refuse(path, "a list of values can't hold texts, counters or other merged parts")
-      } else {
-        const field = item._tag === "Fields" ? item.fields.find(({ name }) => name === rule.key) : undefined
-        if (field === undefined || field.optional || field.shape._tag !== "Value") {
-          refuse(path, `a list's items must be structs or classes with a required "${rule.key}" field`)
-        }
+        return { _tag: "List", item, key: undefined }
       }
-      return { _tag: "List", item, key: rule.key }
+      const field = item._tag === "Fields" ? item.fields.find(({ name }) => name === rule.key) : undefined
+      if (item._tag !== "Fields" || field === undefined || field.optional || field.shape._tag !== "Value") {
+        return refuse(path, `a list's items must be structs or classes with a required "${rule.key}" field`)
+      }
+      // An item's key is never made up: one without it can't be read.
+      const fields = item.fields.map((other) => other === field ? { ...field, hasDefault: false } : other)
+      return { _tag: "List", item: { ...item, fields }, key: rule.key }
     }
   }
   const fields = classFields(ast)
@@ -329,8 +331,18 @@ export const misfit = (shape: Shape, change: InternalDocument.AnyChange): string
     if (op._tag === "Set" && here._tag === "Value" && Result.isFailure(here.decode(op.value))) {
       return `${where} a value the schema can't read`
     }
+    if (op._tag === "Set" && isItemKey(shape, path) && op.value !== path[path.length - 2]) {
+      return `${where} a value other than its item's key`
+    }
   }
   return undefined
+}
+
+// Whether `path` is the key field of an item in a list with keys.
+const isItemKey = (shape: Shape, path: Path.Path): boolean => {
+  if (path.length < 2) return false
+  const list = at(shape, path.slice(0, -2))
+  return typeof list !== "string" && list.shape._tag === "List" && list.shape.key === path[path.length - 1]
 }
 
 const describe = (shape: Shape): string => {
@@ -419,6 +431,8 @@ export const readJson = (shape: Shape, json: Schema.Json, initial: unknown): unk
 // JSON a server shows it as.
 interface Source {
   readonly path: Path.Path
+  /** For a list item, its key, where it's known: a server's JSON lists items without theirs. */
+  readonly itemKey: string | undefined
   readonly text: () => string
   readonly counter: () => number
   /** The values written here, latest first. */
@@ -434,6 +448,7 @@ interface Source {
 
 const documentAt = (document: InternalDocument.Document, path: Path.Path): Source => ({
   path,
+  itemKey: path[path.length - 1],
   text: () => InternalDocument.textAt(document, path),
   counter: () => InternalDocument.counterAt(document, path),
   *values() {
@@ -449,6 +464,7 @@ const documentAt = (document: InternalDocument.Document, path: Path.Path): Sourc
 // A server's JSON has only what exists, and only each value's latest write.
 const jsonAt = (json: Schema.Json | undefined, path: Path.Path): Source => ({
   path,
+  itemKey: undefined,
   text: () => Predicate.isString(json) ? json : "",
   counter: () => Predicate.isNumber(json) ? json : 0,
   values: () => json === undefined ? [] : [json],
@@ -538,12 +554,22 @@ const readAt = (
     case "List": {
       const items: Array<unknown> = []
       for (const item of source.items()) {
-        const value = readAt(shape.item, item, undefined, memo)
+        const value = readItem(shape, item, memo)
         if (value !== Missing) items.push(value)
       }
       return share(memo, source.path, items, () => items)
     }
   }
+}
+
+// A list item, or Missing if it can't be read or its key field names another
+// item.
+const readItem = (shape: List, item: Source, memo: Memo): unknown => {
+  const value = readAt(shape.item, item, undefined, memo)
+  return value === Missing || shape.key === undefined || item.itemKey === undefined ||
+      (value as Record<string, unknown>)[shape.key] === item.itemKey
+    ? value
+    : Missing
 }
 
 const safeIntegers = { minimum: globalThis.Number.MIN_SAFE_INTEGER, maximum: globalThis.Number.MAX_SAFE_INTEGER }
@@ -699,7 +725,7 @@ const planItems = (
   }
   // Items this schema can't read aren't in `after`, but they stay.
   const before = InternalDocument.itemsAt(document, path).filter((name) =>
-    readAt(shape.item, documentAt(document, [...path, name]), undefined, memo) !== Missing
+    readItem(shape, documentAt(document, [...path, name]), memo) !== Missing
   )
   for (const name of before) if (!wanted.has(name)) intents.push({ _tag: "Unset", path: [...path, name] })
   const showing = new Set(before)
