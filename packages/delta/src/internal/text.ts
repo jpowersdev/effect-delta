@@ -225,11 +225,12 @@ const makeReplay = (): Text => {
 
   // A walker ready to merge `incoming`: it starts from the text at the latest
   // part that they and every applied part after it were made on top of, and
-  // replays only the applied parts after that.
+  // replays only the applied parts after that. Also says how many of its
+  // stand-ins for that text weren't in it.
   const walkFrom = (
     incoming: ReadonlyArray<ReplayChange>,
     infos: ReadonlyMap<string, TreeText.Info>
-  ): ReplayText.Walker => {
+  ): { readonly walker: ReplayText.Walker; readonly extra: number } => {
     const after = changesAfterBase(history, incoming)
     // The text at the base can't be longer than the text now plus everything
     // removed since; any extra stand-ins sit at the end, out of reach.
@@ -239,7 +240,10 @@ const makeReplay = (): Text => {
     )
     const walker = ReplayText.makeWalker(value.length + removed)
     for (const change of after) ReplayText.replay(walker, change, infoOf(change, infos), false)
-    return walker
+    // Out of reach, they end every view, so the view of everything has them
+    // past the text.
+    ReplayText.moveTo(walker, history.frontier)
+    return { walker, extra: ReplayText.viewLength(walker) - value.length }
   }
 
   return {
@@ -286,6 +290,7 @@ const makeReplay = (): Text => {
       const changeOf = (part: Part): ReplayChange => incoming[parts.indexOf(part)]!
       const infos = new Map<string, TreeText.Info>()
       let walker: ReplayText.Walker | undefined
+      let extra = 0
       let applied = 0
       return {
         check: (part) => {
@@ -296,9 +301,10 @@ const makeReplay = (): Text => {
           }
           // Concurrent with parts here: place it by replaying. Once there's a
           // walker, the rest of the batch goes through it too.
-          walker ??= walkFrom(incoming.slice(applied), infos)
+          if (walker === undefined) ({ extra, walker } = walkFrom(incoming.slice(applied), infos))
           ReplayText.moveTo(walker, change.parents)
-          return ReplayText.check(change, ReplayText.viewLength(walker))
+          // Measured without the extra stand-ins, which a change mustn't reach.
+          return ReplayText.check(change, ReplayText.viewLength(walker) - extra)
         },
         apply: (part) => {
           const change = changeOf(part)
