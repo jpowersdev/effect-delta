@@ -1,8 +1,16 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Cause, Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, Stream } from "effect"
-import { Delta, HistoryStore, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
+import {
+  Delta,
+  HistoryStore,
+  Replica,
+  ReplicatedDocument,
+  ReplicatedText,
+  TextPatch,
+  VersionVector
+} from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
-import type * as InternalDocument from "effect-delta/internal/document"
+import * as InternalDocument from "effect-delta/internal/document"
 import { TestClock } from "effect/testing"
 import { letters, makeTexts, syncAll, TextSession, Which } from "./utils/sessions.ts"
 
@@ -803,6 +811,46 @@ describe("ReplicatedDocument", () => {
           assert.strictEqual(yield* ReplicatedText.get(ReplicatedDocument.text(doc, ["comments", "c2", "text"])), "")
         }
       }))
+
+    it.effect(
+      "a change that starts a text merges about as fast as one that edits a text, however long the history",
+      () =>
+        Effect.gen(function*() {
+          const Notes = Schema.Struct({ notes: Schema.Record(Schema.String, ReplicatedDocument.Text) })
+          // Changes that each type a character, into a text of their own or all
+          // into one.
+          const typed = (strategy: Replica.Strategy, textOf: (i: number) => string) => {
+            const document = InternalDocument.make(strategy)
+            return InternalDelta.fromChanges(Array.from({ length: 6000 }, (_, i) => {
+              const path = ["notes", textOf(i)]
+              const patch = TextPatch.insert(InternalDocument.textAt(document, path).length, "x")
+              return InternalDocument.edit(document, { replica: "ada", seq: i, time: i }, [{
+                _tag: "Text",
+                path,
+                patch
+              }])!
+                .change
+            }))
+          }
+          const merging = Effect.fnUntraced(function*(strategy: Replica.Strategy, delta: Delta.Delta) {
+            const doc = yield* ReplicatedDocument.make(Notes, {
+              initial: { notes: {} },
+              strategy,
+              replica: Replica.ReplicaId.make("ben")
+            })
+            // The test clock stands still, so this is the time on the wall.
+            const start = performance.now()
+            yield* Replica.receive(doc, delta)
+            return performance.now() - start
+          })
+          for (const strategy of ["tree", "replay"] as const) {
+            const own = yield* merging(strategy, typed(strategy, (i) => `n${i}`))
+            const shared = yield* merging(strategy, typed(strategy, () => "n"))
+            assert.isBelow(own / shared, 8, strategy)
+          }
+        }),
+      60_000
+    )
 
     // A document's text field must be a replicated text in every way: the same
     // edits and syncs give the same text, anchors and overlaps, step by step. Only
