@@ -16,6 +16,7 @@ import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
+import { forgedRuns, ForgedSession, initialProject, makeForger, Project } from "./utils/forged.ts"
 import {
   Board,
   documentRuns,
@@ -1004,6 +1005,48 @@ describe("Authority", () => {
         }).pipe(Effect.provide(Reading))
       }),
       { arbitrary: documentRuns }
+    )
+
+    it.effect.prop(
+      "accepts only changes replicas accept, and its check reads each one as replicas show it",
+      { session: ForgedSession },
+      Effect.fnUntraced(function*({ session }) {
+        const read: Array<ReplicatedDocument.Proposed<Project>> = []
+        const Reading = Authority.layer({
+          check: (proposal) =>
+            proposal._tag === "Text"
+              ? Effect.fail(new Authority.Rejected({ message: "Projects aren't texts" }))
+              : Effect.map(
+                ReplicatedDocument.readProposal(proposal, Project, { initial: initialProject }),
+                (proposed) => {
+                  read.push(proposed)
+                }
+              )
+        }).pipe(Layer.provide(HistoryStore.layerMemory))
+        yield* Effect.gen(function*() {
+          const authority = yield* Authority.Authority
+          // A replica that receives each change the authority accepts.
+          const replica = yield* ReplicatedDocument.make(Project, {
+            initial: initialProject,
+            replica: Replica.ReplicaId.make("replica")
+          })
+          const forger = makeForger("tree")
+          for (const command of session) {
+            const change = forger.forge(command)
+            const delta = InternalDelta.fromChanges([change])
+            const before = yield* ReplicatedDocument.get(replica)
+            const ack = yield* Effect.exit(authority.push({ format: Sync.FORMAT, document: spec, delta }))
+            const accepted = Exit.isSuccess(ack) && ack.value._tag === "Accepted"
+            forger.settle(accepted)
+            if (!accepted) continue
+            yield* Replica.receive(replica, delta)
+            const proposed = read.pop()!
+            assert.deepStrictEqual(proposed.before, before, JSON.stringify(change))
+            assert.deepStrictEqual(proposed.after, yield* ReplicatedDocument.get(replica), JSON.stringify(change))
+          }
+        }).pipe(Effect.provide(Reading), asUser("forger"))
+      }),
+      { arbitrary: forgedRuns }
     )
 
     it.effect("accepts a list's first item after text was typed into an item nobody added", () =>

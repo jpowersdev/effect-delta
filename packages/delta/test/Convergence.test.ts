@@ -1,7 +1,18 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Equal, Random, Schema } from "effect"
-import { Delta, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
+import { Effect, Equal, Exit, Layer, Queue, Random, Schema, Stream } from "effect"
+import {
+  Delta,
+  HistoryStore,
+  Relay,
+  Replica,
+  ReplicatedDocument,
+  ReplicatedText,
+  Sync,
+  VersionVector
+} from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
+import type * as InternalDocument from "effect-delta/internal/document"
+import { forgedRuns, ForgedSession, initialProject, makeForger, Project } from "./utils/forged.ts"
 import {
   Board,
   documentRuns,
@@ -222,5 +233,112 @@ describe.each(["tree", "replay"] as const)("document convergence (%s)", (strateg
       assert.deepStrictEqual(yield* viewOf(oneByOne), expected)
     }),
     { arbitrary: documentRuns }
+  )
+})
+
+// Forged changes ----------------------------------------------------------
+
+// Changes made directly, many of them malformed or not fitting the schema, as
+// a buggy or malicious client could send them. Replicas and relays must still
+// accept and refuse the same ones, and show the same value however they
+// arrive.
+
+describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => {
+  const make = (replica: string) =>
+    ReplicatedDocument.make(Project, { initial: initialProject, strategy, replica: Replica.ReplicaId.make(replica) })
+  const view = Effect.fnUntraced(function*(doc: ReplicatedDocument.ReplicatedDocument<Project>) {
+    return { value: yield* ReplicatedDocument.get(doc), version: yield* Replica.version(doc) }
+  })
+  const one = (change: InternalDocument.AnyChange) => InternalDelta.fromChanges([change])
+  const push = (relay: Sync.Server, document: Replica.DocumentId, change: InternalDocument.AnyChange) =>
+    relay.push({ format: Sync.FORMAT, document, delta: one(change) })
+  const subscribe = (relay: Sync.Server, document: Replica.DocumentId) =>
+    Stream.toQueue(
+      relay.subscribe({ format: Sync.FORMAT, document, strategy, version: VersionVector.empty, authority: false }),
+      { capacity: "unbounded" }
+    )
+  // Receives a relay's updates until the replica has `version`, accepting
+  // every one, as a connection must.
+  const catchUp = Effect.fnUntraced(function*(
+    doc: Replica.Replica<unknown>,
+    updates: Queue.Dequeue<Sync.Update, unknown>,
+    version: VersionVector.VersionVector
+  ) {
+    while (VersionVector.compare(yield* Replica.version(doc), version) !== "equal") {
+      yield* Replica.receive(doc, (yield* Queue.take(updates)).delta)
+    }
+  })
+  const inOrder = Replica.DocumentId.make("in-order")
+  const shuffled = Replica.DocumentId.make("shuffled")
+  const saved = Replica.DocumentId.make("saved")
+
+  it.effect.prop(
+    "replicas, relays and reloads accept the same changes, and show the same value whatever the order",
+    { session: ForgedSession, seed: Schema.Int },
+    Effect.fnUntraced(function*({ seed, session }) {
+      const expected = yield* Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const updates = yield* subscribe(relay, shuffled)
+        // In the order they were made, a replica and a relay accept the same
+        // ones.
+        const doc = yield* make("in-order")
+        const forger = makeForger(strategy)
+        const changes: Array<InternalDocument.AnyChange> = []
+        for (const command of session) {
+          const change = forger.forge(command)
+          changes.push(change)
+          const received = yield* Effect.exit(Replica.receive(doc, one(change)))
+          const pushed = yield* Effect.exit(push(relay, inOrder, change))
+          assert.strictEqual(Exit.isSuccess(pushed), Exit.isSuccess(received), JSON.stringify(change))
+          forger.settle(Exit.isSuccess(received))
+        }
+        const expected = yield* view(doc)
+
+        const atOnce = yield* make("at-once")
+        yield* Effect.exit(Replica.receive(atOnce, InternalDelta.fromChanges(changes)))
+        assert.deepStrictEqual(yield* view(atOnce), expected)
+
+        // One at a time, shuffled and repeated, to a replica that saves them,
+        // and to a relay whose subscriber takes what it sends.
+        const order = yield* Random.shuffle([...changes, ...changes]).pipe(Random.withSeed(seed))
+        yield* Effect.scoped(Effect.gen(function*() {
+          const oneByOne = yield* make("one-by-one")
+          yield* HistoryStore.persist(oneByOne, saved)
+          for (const change of order) {
+            yield* Effect.exit(Replica.receive(oneByOne, one(change)))
+            yield* Effect.exit(push(relay, shuffled, change))
+            // Saved before the next arrives.
+            yield* Effect.yieldNow
+          }
+          assert.deepStrictEqual(yield* view(oneByOne), expected)
+        }))
+        const subscriber = yield* make("subscriber")
+        yield* catchUp(subscriber, updates, expected.version)
+        assert.deepStrictEqual(yield* view(subscriber), expected)
+        return expected
+      }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+
+      // Started again from what they stored.
+      const reopened = yield* Effect.scoped(Effect.gen(function*() {
+        const doc = yield* make("reopened")
+        yield* HistoryStore.persist(doc, saved)
+        return yield* view(doc)
+      }))
+      assert.deepStrictEqual(reopened, expected)
+      yield* Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        for (const document of [inOrder, shuffled]) {
+          const doc = yield* make(`from-${document}`)
+          yield* catchUp(doc, yield* subscribe(relay, document), expected.version)
+          assert.deepStrictEqual(yield* view(doc), expected)
+        }
+      }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
+    }, (effect) =>
+      effect.pipe(
+        Effect.scoped,
+        Effect.provide(HistoryStore.layerMemory),
+        Effect.provideService(Sync.CurrentUser, "forger")
+      )),
+    { arbitrary: forgedRuns }
   )
 })
