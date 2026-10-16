@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, Stream } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, Stream } from "effect"
 import { Delta, HistoryStore, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
@@ -817,6 +817,39 @@ describe("ReplicatedDocument", () => {
           const ben = yield* makeTagged("ben")
           yield* Replica.receive(ben, fromAda)
           malformed(yield* Effect.flip(Replica.receive(ben, delta)), message)
+        }
+      }))
+
+    it.effect("nothing goes before the start, where what comes after it would have nothing on its right", () =>
+      Effect.gen(function*() {
+        const Tagged = Schema.Struct({ title: ReplicatedDocument.Text, tags: ReplicatedDocument.List(Schema.String) })
+        const makeTagged = (replica: string) =>
+          ReplicatedDocument.make(Tagged, {
+            initial: { title: "", tags: [] },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        // On the left of nothing, which replicas never do: what goes at the
+        // start goes on the right of nothing.
+        const forged = (ops: InternalDocument.AnyChange["ops"]) =>
+          InternalDelta.fromChanges([{ replica: "mallory", seq: 0, length: ops.length, parents: [], time: 0, ops }])
+        for (
+          const delta of [
+            forged([{ _tag: "Insert", path: ["title"], text: "a", parent: null, side: "L" }]),
+            forged([
+              { _tag: "Set", path: ["tags", "x"], value: "a" },
+              { _tag: "Place", path: ["tags", "x"], parent: null, side: "L" }
+            ])
+          ]
+        ) {
+          const ada = yield* makeTagged("ada")
+          const received = yield* Effect.exit(Replica.receive(ada, delta))
+          // What Ada types or adds after what she has reaches Ben.
+          yield* ReplicatedDocument.update(ada, ({ tags, title }) => ({ title: `${title}b`, tags: [...tags, "b"] }))
+          const ben = yield* makeTagged("ben")
+          yield* Replica.exchange(ada, ben)
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
+          if (Exit.isSuccess(received)) return assert.fail("expected the forged change to be refused")
+          malformed(Option.getOrThrow(Cause.findErrorOption(received.cause)), "before the start")
         }
       }))
 
