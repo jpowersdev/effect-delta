@@ -121,6 +121,11 @@ describe("ReplicatedDocument", () => {
           kept: Replica.ReplicaId.make("ada")
         }])
         assert.strictEqual((yield* converged(ada, ben)).status, "review")
+
+        // A replica that had neither write isn't told they met, as a text
+        // isn't of edits that met before it had either.
+        const carol = yield* make("carol")
+        assert.deepStrictEqual(yield* Replica.receive(carol, yield* Replica.delta(ada, VersionVector.empty)), [])
       }))
 
     it.effect("an update that changes nothing writes nothing", () =>
