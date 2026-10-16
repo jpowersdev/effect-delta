@@ -908,6 +908,22 @@ describe("Authority", () => {
         yield* rejects([{ _tag: "Set", path: ["owner"], value: "intruder" }], "which the schema doesn't have")
       }).pipe(Effect.provide(ownerApproves())))
 
+    it.effect("accepts a list's first item after text was typed into an item nobody added", () =>
+      Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        // Ada types into a task before it's added; Ben, who hasn't seen that,
+        // adds the board's first task.
+        const ada = yield* makeDoc("ada")
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["tasks", "t1", "title"]), 0, "Draft")
+        const ben = yield* makeDoc("ben")
+        yield* ReplicatedDocument.update(ben, (doc) => ({ ...doc, tasks: [{ id: "t2", title: "Ship", done: false }] }))
+        for (const doc of [ada, ben]) {
+          const delta = yield* Replica.delta(doc, VersionVector.empty)
+          const ack = yield* authority.push({ format: Sync.FORMAT, document: spec, delta })
+          assert.strictEqual(ack._tag, "Accepted")
+        }
+      }).pipe(Effect.provide(ownerApproves())))
+
     it.effect("a confirmed document syncs with nothing else", () =>
       Effect.gen(function*() {
         const confirmed = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
