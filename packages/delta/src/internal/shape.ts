@@ -692,7 +692,9 @@ const readAt = (
         const value = readItem(shape, item, memo)
         if (value !== Missing) items.push(value)
       }
-      return share(memo, source.path, items, () => items)
+      // A copy, so a list changed in place leaves what the next read compares
+      // with alone.
+      return share(memo, source.path, items, () => [...items])
     }
   }
 }

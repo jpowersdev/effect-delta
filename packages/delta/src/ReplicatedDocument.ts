@@ -209,7 +209,7 @@ export interface Confirmed<in out A> extends ReplicatedDocument<A> {
  *   never sent, so every replica must use the same one: define it next to the
  *   schema, never from local data. Texts, records and lists start empty in it,
  *   and optional fields start absent; to start with content, write it as a
- *   change.
+ *   change. It isn't copied, so never change it in place.
  * - `strategy`: how its texts merge. `"tree"` (the default) or `"replay"`.
  * - `replica`: the replica id to write changes under. Leave it out to get a
  *   fresh random one.
@@ -594,9 +594,11 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * **Gotchas**
  *
  * `f` must return a new value rather than change the one it's given, which
- * is the one the document shows. A value written whole that's changed in
- * place (an array that isn't a `List`, pushed to, say) reads as unchanged,
- * so it isn't written, and only this replica shows the change.
+ * is the one the document shows and, for parts nobody has written, part of
+ * `initial`. A value written whole that's changed in place (an array that
+ * isn't a `List`, pushed to, say) reads as unchanged, so it isn't written;
+ * and one that still shows `initial` changes it, for every document made
+ * from it.
  *
  * **Example** (Changing one field)
  *
@@ -635,7 +637,7 @@ export const update: {
  *
  * As with `update`, give it a new value, not the one the document shows
  * changed in place: a value written whole that's changed in place isn't
- * written, and only this replica shows the change.
+ * written, and one that still shows `initial` changes it.
  *
  * @stability unstable
  * @category editing

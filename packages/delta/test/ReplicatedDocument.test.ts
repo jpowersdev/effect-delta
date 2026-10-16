@@ -1013,6 +1013,25 @@ describe("ReplicatedDocument", () => {
         assert.strictEqual(after.settings.layout, before.settings.layout)
       }))
 
+    it.effect("a list changed in place is written as a new value", () =>
+      Effect.gen(function*() {
+        const Board = Schema.Struct({ tags: ReplicatedDocument.List(Schema.String) })
+        const board = yield* ReplicatedDocument.make(Board, {
+          initial: { tags: [] },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        yield* ReplicatedDocument.update(board, () => ({ tags: ["a"] }))
+        const before = yield* ReplicatedDocument.get(board)
+        yield* ReplicatedDocument.update(board, (value) => {
+          ;(value.tags as Array<string>).push("b")
+          return value
+        })
+        const after = yield* ReplicatedDocument.get(board)
+        assert.deepStrictEqual(after, { tags: ["a", "b"] })
+        assert.notStrictEqual(after.tags, before.tags)
+        assert.notStrictEqual(after, before)
+      }))
+
     it.effect("an unchanged part keeps its identity though it holds NaN", () =>
       Effect.gen(function*() {
         const Sizes = Schema.Struct({ box: Schema.Struct({ width: Schema.Number }), count: Schema.Number })
