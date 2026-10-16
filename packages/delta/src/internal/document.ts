@@ -205,6 +205,8 @@ export interface Slot {
   presence: PresenceWrite | undefined
   /** Per replica, the sequence number after its last op under this path. */
   readonly below: Record<string, number>
+  /** Per replica, the sequence number after its last write of a value, presence or position here. */
+  readonly written: Record<string, number>
   /** For a list: its items' positions. */
   list: Fugue.Tree<Item> | undefined
   /** For a list item: every position it was given, earliest write first. */
@@ -259,6 +261,7 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
       presences: [],
       presence: undefined,
       below: {},
+      written: {},
       list: undefined,
       places: []
     }
@@ -273,14 +276,20 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
 const seen = (by: Write, write: Write): boolean =>
   by.replica === write.replica ? write.seq < by.seq : (by.past[write.replica] ?? 0) > write.seq
 
-// The writes in `writes` that `write` hadn't seen: the ones it met.
-const unseenBy = <W extends Write>(write: Write, writes: ReadonlyArray<W>): Array<W> =>
-  writes.filter((other) => other !== write && !seen(write, other))
+// The writes in `writes`, at `at`, that `write` hadn't seen: the ones it met.
+// Usually it had seen every write there, which `at.written` says without
+// looking at each.
+const unseenBy = <W extends Write>(at: Slot, write: Write, writes: ReadonlyArray<W>): Array<W> =>
+  Object.entries(at.written).every(([replica, next]) => replica === write.replica || (write.past[replica] ?? 0) >= next)
+    ? []
+    : writes.filter((other) => other !== write && !seen(write, other))
 
-const insertSorted = <W extends Write>(writes: Array<W>, write: W): void => {
+// Adds a write to `writes`, at `at`, in order.
+const addWrite = <W extends Write>(at: Slot, writes: Array<W>, write: W): void => {
   let i = writes.length
   while (i > 0 && compareWrites(writes[i - 1]!, write) > 0) i--
   writes.splice(i, 0, write)
+  at.written[write.replica] = Math.max(at.written[write.replica] ?? 0, write.seq + 1)
 }
 
 // Reading --------------------------------------------------------------------
@@ -784,9 +793,9 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
   switch (op._tag) {
     case "Set": {
       const value: ValueWrite = { ...write, value: op.value }
-      insertSorted(at.values, value)
+      addWrite(at, at.values, value)
       if (found !== undefined) {
-        const differing = unseenBy(value, at.values).filter((other) => !Equal.equals(other.value, value.value))
+        const differing = unseenBy(at, value, at.values).filter((other) => !Equal.equals(other.value, value.value))
         if (differing.length > 0) {
           found.add("Value", op.path, [value.replica, ...differing.map((other) => other.replica)], "value")
         }
@@ -814,9 +823,9 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
         key: op.path[op.path.length - 1]!
       })
       const place: PlaceWrite = { ...write, node }
-      insertSorted(at.places, place)
+      addWrite(at, at.places, place)
       if (found !== undefined) {
-        const moved = unseenBy(place, at.places)
+        const moved = unseenBy(at, place, at.places)
         if (moved.length > 0) {
           found.add("Value", op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
         }
@@ -832,10 +841,10 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
 }
 
 const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: Found | undefined): void => {
-  insertSorted(at.presences, write)
+  addWrite(at, at.presences, write)
   at.presence = at.presences.at(-1)
   if (found !== undefined) {
-    const differing = unseenBy(write, at.presences).filter((other) => other.exists !== write.exists)
+    const differing = unseenBy(at, write, at.presences).filter((other) => other.exists !== write.exists)
     if (differing.length > 0) {
       found.add("Value", at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
     }
@@ -846,7 +855,7 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
         ...Object.entries(at.below).filter(([replica, next]) =>
           replica !== write.replica && next > (write.past[replica] ?? 0)
         ),
-        ...unseenBy(write, at.places).map((other) => [other.replica] as const)
+        ...unseenBy(at, write, at.places).map((other) => [other.replica] as const)
       ]
       if (editors.length > 0) {
         found.add("Removed", at.path, [write.replica, ...editors.map(([replica]) => replica)], "presence")
