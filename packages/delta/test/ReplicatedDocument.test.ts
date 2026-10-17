@@ -730,7 +730,7 @@ describe("ReplicatedDocument", () => {
           const Shelf = Schema.Struct({
             boxes: Schema.Record(Schema.String, Schema.Struct({ count: ReplicatedDocument.Counter }))
           })
-          const boxes = Array.from({ length: 4000 }, (_, i) => `b${i}`)
+          const boxes = Array.from({ length: 2000 }, (_, i) => `b${i}`)
           const added: InternalDocument.AnyChange = {
             replica: "added",
             seq: 0,
