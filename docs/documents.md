@@ -508,7 +508,9 @@ because nothing is lost.
 Nothing has been released, so the format stays 1. None of these changes how a text is edited.
 
 1. **Every change has a write time.** `ReplicatedText` starts reading `Clock`, which every Effect program
-   has, so no requirement changes.
+   has, so no requirement changes. Servers refuse a text's changes stamped more than a day ahead of their
+   clock too, so a device whose clock runs that far ahead can't sync texts either (see
+   [Known limits](#known-limits)).
 2. **Ops can name a path.** Texts never do.
 3. **`Replica.Overlap` is a union, and `Text` overlaps have a `path`.**
 4. **`ReplicatedText` functions take `ReplicatedText.Editable`:** a `ReplicatedText` or a document's text
