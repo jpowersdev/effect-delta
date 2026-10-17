@@ -600,12 +600,13 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * `f` must return a new value rather than change the one it's given, which
  * is the one the document shows and, for parts nobody has written, part of
  * `initial`. A change made in place shows on this replica at once, even if
- * the update fails. In a struct, record or list, it lasts until a merge or
- * an edit changes the part it's in, and an update that succeeds before then
- * writes it. A value written whole that's changed in place (an array that
- * isn't a `List`, pushed to, say) reads as unchanged, so only this replica
- * shows the change until an update writes that value again; one that still
- * shows `initial` changes it, for every document made from it.
+ * the update fails. In a struct, record or list, a later update whose value
+ * still has it writes it, unless a merge or an edit that changes the part
+ * it's in drops it first. A value written whole that's changed in place (an
+ * array that isn't a `List`, pushed to, say) reads as unchanged, so only
+ * this replica shows the change until an update changes that value further;
+ * one that still shows `initial` changes it, for every document made from
+ * it.
  *
  * **Example** (Changing one field)
  *
