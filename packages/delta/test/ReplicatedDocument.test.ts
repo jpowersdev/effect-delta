@@ -1383,6 +1383,29 @@ describe("ReplicatedDocument", () => {
         }
       }))
 
+    it.effect("an optional field that's only ever undefined or void can't read what a newer schema writes", () =>
+      Effect.gen(function*() {
+        const dueV2 = Schema.optionalKey(Schema.NullOr(Schema.String))
+        for (const due of [Schema.optionalKey(Schema.Undefined), Schema.optionalKey(Schema.Void)]) {
+          const old = yield* ReplicatedDocument.make(Schema.Struct({ votes: ReplicatedDocument.Counter, due }), {
+            initial: { votes: 0 },
+            replica: Replica.ReplicaId.make("old")
+          })
+          const updated = yield* ReplicatedDocument.make(
+            Schema.Struct({ votes: ReplicatedDocument.Counter, due: dueV2 }),
+            { initial: { votes: 0 }, replica: Replica.ReplicaId.make("new") }
+          )
+          yield* ReplicatedDocument.update(updated, (ticket) => ({ ...ticket, due: null }))
+          yield* Replica.exchange(old, updated)
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(old), { votes: 0 })
+
+          // Its own edits leave it alone.
+          yield* ReplicatedDocument.update(old, (ticket) => ({ ...ticket, votes: 1 }))
+          yield* Replica.exchange(old, updated)
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(updated), { votes: 1, due: null })
+        }
+      }))
+
     it.effect("an optional field keeps the checks of the union its undefined is left out of", () =>
       Effect.gen(function*() {
         // A member of its own, or one a suspend gives.
