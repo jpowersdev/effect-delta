@@ -181,6 +181,8 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
   const fields = classFields(ast)
   if (fields !== undefined) {
     if (ast.checks !== undefined || fields.checks !== undefined) refuse(path, `a class can't have checks: ${onMerged}`)
+    // Its fields are all it's made of.
+    if (fields.indexSignatures.length > 0) refuse(path, "a class can't have a rest or entries: give them a field each")
     return { _tag: "Fields", fields: compileFields(fields, path), make: SchemaParser.make(Schema.make(ast)) }
   }
   if (SchemaAST.isObjects(ast) && ast.indexSignatures.length === 0) {

@@ -118,6 +118,17 @@ describe("ReplicatedDocument", () => {
           { title: "" },
           "a struct can't have a rest"
         )
+        // Nor a class made of one, or of a record, which its types don't allow.
+        class Tagged extends Schema.Class<Tagged>("Tagged")(
+          Schema.StructWithRest(Schema.Struct({ title: Schema.String }), [
+            Schema.Record(Schema.TemplateLiteral(["tag-", Schema.String]), Schema.Int)
+          ]) as unknown as Schema.Struct<{ readonly title: Schema.String }>
+        ) {}
+        yield* refuses(Tagged, new Tagged({ title: "" }), "a class can't have a rest or entries")
+        class Counts extends Schema.Class<Counts>("Counts")(
+          Schema.Record(Schema.String, Schema.Int) as unknown as Schema.Struct<{}>
+        ) {}
+        yield* refuses(Schema.Struct({ counts: Counts }), { counts: new Counts({}) }, "a class can't have a rest")
       }))
 
     it.effect("refuses an optional field with a constructor default, which would show while it's absent", () =>
