@@ -556,68 +556,105 @@ class Found {
     // Edits lost to the removal the part ends removed by, made
     // concurrently with it: a removal they met may have been undone since,
     // and an edit made after seeing the one that wins wasn't lost to it.
-    const removals = new Map<string, { readonly removal: Write; readonly lost: ReadonlyArray<Lost> }>()
+    const losses: Array<
+      { readonly k: string; readonly path: Path.Path; readonly removal: Write; readonly lost: Lost }
+    > = []
     for (const [k, { lost, path, tag }] of this.found) {
       const removal = tag === "Removed" ? slot(document, path)?.presence : undefined
-      if (removal !== undefined && !removal.exists) {
-        removals.set(k, { removal, lost: lost.filter(({ editor }) => editor !== removal.replica) })
+      if (removal === undefined || removal.exists) continue
+      for (const each of lost) if (each.editor !== removal.replica) losses.push({ k, path, removal, lost: each })
+    }
+    // Each editor's changes are walked once, as far as finding these needs,
+    // in the order they start: one change can edit inside many removed parts,
+    // and many changes inside one each.
+    const editors = new Map<string, Edits>()
+    for (const { lost } of losses) {
+      const edits = editors.get(lost.editor)
+      if (edits === undefined) editors.set(lost.editor, new Edits(history, lost.editor, this.reading))
+      else edits.asked++
+    }
+    const concurrent = new Map<string, Array<Lost>>()
+    const start = ({ lost, removal }: (typeof losses)[number]) =>
+      Math.max(lost.from, VersionVector.get(removal.past, lost.editor))
+    for (const loss of losses.sort((a, b) => start(a) - start(b))) {
+      const { k, lost, path, removal } = loss
+      if (editors.get(lost.editor)!.missed(path, start(loss), lost.next, removal)) {
+        const ofPart = concurrent.get(k)
+        if (ofPart === undefined) concurrent.set(k, [lost])
+        else ofPart.push(lost)
       }
     }
-    const edits = editsBy(history, removals.values(), this.reading)
     return [...this.found].flatMap(([k, { over, path, replicas, tag }]): Array<Overlap> => {
       if (tag === "Value") {
         const kept = keptAt(slot(document, path)!, over, this.reading)
         return [{ _tag: "Value", path, replicas: [...replicas].sort(compareReplica), kept }]
       }
-      const found = removals.get(k)
-      if (found === undefined) return []
-      const { lost, removal } = found
-      const concurrent = lost.filter((each) => editedConcurrently(history, each, removal, edits(each.editor, path)))
-      if (concurrent.length === 0) return []
-      const met = new Set(concurrent.flatMap(({ editor, remover }) => [editor, remover]))
-      return [{ _tag: "Removed", path, replicas: [...met].sort(compareReplica) }]
+      const met = new Set(concurrent.get(k)?.flatMap(({ editor, remover }) => [editor, remover]))
+      return met.size === 0 ? [] : [{ _tag: "Removed", path, replicas: [...met].sort(compareReplica) }]
     })
   }
 }
 
-// Each editor's changes that edits lost to a removal could be in, by the
-// paths they edit inside, in order: worked out once, as one change can edit
-// inside many removed parts, and many changes inside one each. Only the
-// sequence numbers some removal hadn't seen are looked at, each once.
-const editsBy = (
-  history: History.History<Op>,
-  removals: Iterable<{ readonly removal: Write; readonly lost: ReadonlyArray<Lost> }>,
-  reading: Reading
-): (editor: string, path: Path.Path) => ReadonlyArray<AnyChange> => {
-  const spans = new Map<string, Array<{ readonly from: number; readonly next: number }>>()
-  for (const { lost, removal } of removals) {
-    for (const { editor, from, next } of lost) {
-      const start = Math.max(from, VersionVector.get(removal.past, editor))
-      if (start >= next) continue
-      const ofEditor = spans.get(editor)
-      if (ofEditor === undefined) spans.set(editor, [{ from: start, next }])
-      else ofEditor.push({ from: start, next })
-    }
+// One editor's changes, walked in order, and by the paths they edit inside.
+// Asked in the order their spans start, it walks each change once: what one
+// span skips, no later one starts before.
+class Edits {
+  /** How many more times it'll be asked. */
+  asked = 1
+  // Where the walk has got to.
+  private walked = 0
+  private readonly byPath = new Map<string, Array<AnyChange>>()
+  private readonly history: History.History<Op>
+  private readonly editor: string
+  private readonly reading: Reading
+  constructor(history: History.History<Op>, editor: string, reading: Reading) {
+    this.history = history
+    this.editor = editor
+    this.reading = reading
   }
-  const byEditor = new Map<string, Map<string, Array<AnyChange>>>()
-  for (const [editor, ofEditor] of spans) {
-    const byPath = new Map<string, Array<AnyChange>>()
-    byEditor.set(editor, byPath)
-    // Where the walk has got to.
-    let walked = 0
-    for (const { from, next } of ofEditor.sort((a, b) => a.from - b.from)) {
-      for (let seq = Math.max(from, walked); seq < next;) {
-        const change = History.find(history, { replica: editor, seq })!
-        for (const k of editsInside(change, reading)) {
-          const changes = byPath.get(k)
-          if (changes === undefined) byPath.set(k, [change])
+  /**
+   * Whether a change from sequence number `start` up to `next` edited inside
+   * the part at `path` without having seen `removal`.
+   */
+  missed(path: Path.Path, start: number, next: number, removal: Write): boolean {
+    // Changes walked now are looked up only if it's asked again.
+    const again = --this.asked > 0
+    if (start >= next) return false
+    const k = Path.key(path)
+    // Each change says what it was made on top of, which needn't include
+    // what its replica's earlier ones had seen.
+    const unseen = (change: AnyChange) =>
+      VersionVector.get(this.history.pasts.get(key(change))!, removal.replica) <= removal.seq
+    // Among those walked, from the first that ends past `start`: one
+    // replica's changes never overlap.
+    const walked = this.byPath.get(k) ?? []
+    let low = 0
+    let high = walked.length
+    while (low < high) {
+      const middle = (low + high) >> 1
+      if (walked[middle]!.seq + walked[middle]!.length > start) high = middle
+      else low = middle + 1
+    }
+    for (let i = low; i < walked.length && walked[i]!.seq < next; i++) if (unseen(walked[i]!)) return true
+    // Then walking on, as far as it takes.
+    for (let seq = Math.max(start, this.walked); seq < next;) {
+      const change = History.find(this.history, { replica: this.editor, seq })!
+      seq = this.walked = change.seq + change.length
+      let inside = false
+      if (again) {
+        for (const each of editsInside(change, this.reading)) {
+          const changes = this.byPath.get(each)
+          if (changes === undefined) this.byPath.set(each, [change])
           else changes.push(change)
+          inside ||= each === k
         }
-        seq = walked = change.seq + change.length
+      } else {
+        inside = change.ops.some((op) => editsInsideAt(op, path, this.reading))
       }
+      if (inside && unseen(change)) return true
     }
+    return false
   }
-  return (editor, path) => byEditor.get(editor)?.get(Path.key(path)) ?? []
 }
 
 // The paths a change edits inside, as `noteInside` and moves count it: the
@@ -635,30 +672,12 @@ const editsInside = (change: AnyChange, reading: Reading): Set<string> => {
   return inside
 }
 
-// Whether any of the edits `lost` names was made concurrently with `removal`:
-// neither had seen the other. `edits` are its editor's changes that edit
-// inside the part, in order.
-const editedConcurrently = (
-  history: History.History<Op>,
-  lost: Lost,
-  removal: Write,
-  edits: ReadonlyArray<AnyChange>
-): boolean => {
-  const start = Math.max(lost.from, VersionVector.get(removal.past, lost.editor))
-  // The first that ends past `start`: one replica's changes never overlap.
-  let low = 0
-  let high = edits.length
-  while (low < high) {
-    const middle = (low + high) >> 1
-    if (edits[middle]!.seq + edits[middle]!.length > start) high = middle
-    else low = middle + 1
-  }
-  for (let i = low; i < edits.length && edits[i]!.seq < lost.next; i++) {
-    // Each change says what it was made on top of, which needn't include
-    // what its replica's earlier ones had seen.
-    if (VersionVector.get(history.pasts.get(key(edits[i]!))!, removal.replica) <= removal.seq) return true
-  }
-  return false
+// Whether an op edits inside the part at `path`, as `editsInside` counts it.
+const editsInsideAt = (op: Op, path: Path.Path, reading: Reading): boolean => {
+  const at = pathOf(op)
+  if (at.length > path.length) return path.every((segment, i) => segment === at[i])
+  return Path.equals(at, path) &&
+    (Text.isOp(op) || op._tag === "Increment" || (op._tag === "Place" && reading.moves(path)))
 }
 
 // Whose write shows at a path where writes met: a removal if it won, else the
