@@ -96,9 +96,14 @@ export interface Value {
  * @internal
  */
 export const compile = (schema: Schema.Top): Fields | Entries => {
-  const shape = compileAst(SchemaAST.toType(schema.ast), Path.root)
+  const ast = SchemaAST.toType(schema.ast)
+  const shape = compileAst(ast, Path.root)
   if (shape._tag !== "Fields" && shape._tag !== "Entries") {
-    throw new Error("A document's schema must be a struct, a class or a record. For one text, use ReplicatedText")
+    throw new Error(
+      SchemaAST.isSuspend(ast)
+        ? `A document's schema must be a struct, a class or a record: ${recursive}`
+        : "A document's schema must be a struct, a class or a record. For one text, use ReplicatedText"
+    )
   }
   // Every receiver refuses a change that writes deeper.
   if (depthOf(shape) > InternalDocument.maxDepth) {
@@ -141,6 +146,8 @@ const refuse = (path: Path.Path, message: string): never => {
 
 const onMerged = "merging concurrent edits could break it, so check it in an authority instead"
 
+const recursive = "a recursive schema (Schema.suspend) is a value written whole, so far"
+
 const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
   const rule = ruleOf(ast)
   switch (rule?._tag) {
@@ -170,7 +177,9 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
       ) {
         return refuse(
           path,
-          `a list's items must be structs or classes with a required "${rule.key}" field that's a string`
+          SchemaAST.isSuspend(ast.rest[0]!)
+            ? `a list with a key holds structs or classes, and ${recursive}`
+            : `a list's items must be structs or classes with a required "${rule.key}" field that's a string`
         )
       }
       // An item's key is never made up: one without it can't be read.
@@ -211,7 +220,12 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
     }
   }
   if (hasRule(ast, new Set())) {
-    refuse(path, "texts, counters and lists can't be inside a value that's written whole (a union, an array, ...)")
+    refuse(
+      path,
+      SchemaAST.isSuspend(ast)
+        ? `texts, counters and lists can't be inside it: ${recursive}`
+        : "texts, counters and lists can't be inside a value that's written whole (a union, an array, ...)"
+    )
   }
   return compileValue(ast)
 }
@@ -228,7 +242,9 @@ const classFields = (ast: SchemaAST.AST): SchemaAST.Objects | undefined => {
 
 const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<Field> =>
   ast.propertySignatures.map((signature) => {
-    if (!Predicate.isString(signature.name)) return refuse(path, "a struct's fields must have string names")
+    if (!Predicate.isString(signature.name)) {
+      return refuse(path, "a struct's fields, and a record's literal keys, must have string names")
+    }
     const optional = SchemaAST.isOptional(signature.type)
     const hasDefault = signature.type.context?.constructorDefault !== undefined
     // Filled in whenever it's absent, it could never be absent.
