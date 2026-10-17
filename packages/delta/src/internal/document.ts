@@ -511,6 +511,9 @@ class Found {
   // that both arrive in it, as when a document loads, don't count.
   private readonly fresh = new Set<Write>()
   private readonly insideBefore = new Map<Slot, Record<string, number>>()
+  // Where each change edits inside parts, worked out once: it can edit
+  // inside many removed parts.
+  private readonly edits = new Map<AnyChange, { readonly inside: Set<string>; readonly placed: Set<string> }>()
   readonly reading: Reading
   constructor(reading: Reading) {
     this.reading = reading
@@ -561,23 +564,31 @@ class Found {
       // and an edit made after seeing the one that wins wasn't lost to it.
       const removal = slot(document, path)?.presence
       if (removal === undefined || removal.exists) return []
-      // Worked out once for each change, which can make many of the edits.
-      const edits = new Map<AnyChange, boolean>()
-      const editsHere = (change: AnyChange) => {
-        let found = edits.get(change)
-        if (found === undefined) {
-          found = change.ops.some((op) => editsInside(op, path, this.reading))
-          edits.set(change, found)
-        }
-        return found
-      }
       const concurrent = lost.filter((each) =>
-        each.editor !== removal.replica && editedConcurrently(document.history, each, removal, editsHere)
+        each.editor !== removal.replica &&
+        editedConcurrently(document.history, each, removal, (change) => this.editsInside(change, path))
       )
       if (concurrent.length === 0) return []
       const met = new Set(concurrent.flatMap(({ editor, remover }) => [editor, remover]))
       return [{ _tag: "Removed", path, replicas: [...met].sort(compareReplica) }]
     })
+  }
+  // Whether a change edits inside the part at `path`, as `noteInside` and
+  // moves count it: under it, or on the text or counter it is, or moving it.
+  private editsInside(change: AnyChange, path: Path.Path): boolean {
+    let edits = this.edits.get(change)
+    if (edits === undefined) {
+      edits = { inside: new Set(), placed: new Set() }
+      for (const op of change.ops) {
+        const at = pathOf(op)
+        for (const prefix of Path.prefixes(at)) edits.inside.add(Path.key(prefix))
+        if (Text.isOp(op) || op._tag === "Increment") edits.inside.add(Path.key(at))
+        else if (op._tag === "Place") edits.placed.add(Path.key(at))
+      }
+      this.edits.set(change, edits)
+    }
+    const k = Path.key(path)
+    return edits.inside.has(k) || (edits.placed.has(k) && this.reading.moves(path))
   }
 }
 
@@ -599,16 +610,6 @@ const editedConcurrently = (
     seq = change.seq + change.length
   }
   return false
-}
-
-// Whether an op edits inside the part at `path`, as `noteInside` and moves
-// count it: under it, or on the text or counter it is, or moving it.
-const editsInside = (op: Op, path: Path.Path, reading: Reading): boolean => {
-  const at = pathOf(op)
-  return at.length > path.length
-    ? Path.equals(at.slice(0, path.length), path)
-    : Path.equals(at, path) &&
-      (Text.isOp(op) || op._tag === "Increment" || (op._tag === "Place" && reading.moves(path)))
 }
 
 // Whose write shows at a path where writes met: a removal if it won, else the
