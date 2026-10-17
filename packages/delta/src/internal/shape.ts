@@ -100,7 +100,28 @@ export const compile = (schema: Schema.Top): Fields | Entries => {
   if (shape._tag !== "Fields" && shape._tag !== "Entries") {
     throw new Error("A document's schema must be a struct, a class or a record. For one text, use ReplicatedText")
   }
+  // Every receiver refuses a change that writes deeper.
+  if (depthOf(shape) > InternalDocument.maxDepth) {
+    refuse(
+      Path.root,
+      `its parts are nested more than ${InternalDocument.maxDepth} deep, deeper than a change can write`
+    )
+  }
   return shape
+}
+
+// The most steps a path to one of a shape's parts takes.
+const depthOf = (shape: Shape): number => {
+  switch (shape._tag) {
+    case "Fields":
+      return shape.fields.reduce((depth, field) => Math.max(depth, 1 + depthOf(field.shape)), 0)
+    case "Entries":
+      return 1 + depthOf(shape.value)
+    case "List":
+      return 1 + depthOf(shape.item)
+    default:
+      return 0
+  }
 }
 
 const ruleOf = (ast: SchemaAST.AST): Rule | undefined => {

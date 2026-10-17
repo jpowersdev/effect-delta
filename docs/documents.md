@@ -269,7 +269,8 @@ they do now, plus `time`.
 A change's ops on one text come together, each op takes at least one sequence number, and its parents are the
 last ids of changes. Receivers check all three (`Malformed` otherwise), and check that text ops and positions
 name only characters and positions their author had seen at their path, and put nothing on the left of the
-start, so whether a change is accepted doesn't depend on what else the receiver has.
+start, so whether a change is accepted doesn't depend on what else the receiver has. A path has at most 64
+steps: receivers refuse a change that writes deeper, and `make` a schema whose parts are nested deeper.
 
 **Servers don't need the schema.** Ops say what they do, so a relay or an authority applies a document's
 changes without the app's code. Values are JSON, texts are texts, counters are numbers. A server checks what
@@ -656,6 +657,8 @@ All built, each with tests and an example:
     unless it's a millisecond after its parents', as the changes of a replica that saw one are. A change
     stamped at the last whole numbers a change can carry left peers that took it directly unable to stamp a
     change after it, so nobody accepted their changes.
+11. **Paths have at most 64 steps.** A change that wrote thousands of steps deep took receivers more stack
+    than they had, and a relay that stored it while it waited couldn't load the document again.
 
 ## Later
 

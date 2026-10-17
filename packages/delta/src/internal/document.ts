@@ -957,9 +957,11 @@ export const arrive = (
 
 // What's wrong with a change that the change alone shows: it takes no sequence
 // numbers, which version vectors can't say whether anyone has, or more than
-// they can count, or it starts, or names a parent, before any change. It's
-// refused before it can wait or be saved: nothing checks a waiting change's
-// ops against its length, and servers count changes that wait as held.
+// they can count, or it starts, or names a parent, before any change, or it
+// writes deeper than a document goes, which would take a receiver more stack
+// than it has. It's refused before it can wait or be saved: nothing checks a
+// waiting change's ops against its length, and servers count changes that
+// wait as held.
 const checkOnArrival = (change: AnyChange): string | undefined => {
   const name = `Change ${key(change)}`
   if (change.length < 1) return `${name} takes no sequence numbers`
@@ -968,8 +970,16 @@ const checkOnArrival = (change: AnyChange): string | undefined => {
   }
   if (change.seq < 0) return `${name} starts before any change`
   if (change.parents.some((parent) => parent.seq < 0)) return `${name} has a parent before any change`
+  if (change.ops.some((op) => pathOf(op).length > maxDepth)) return `${name} writes more than ${maxDepth} parts deep`
   return undefined
 }
+
+/**
+ * How many steps a path can have: how deep a document's parts can be nested.
+ *
+ * @internal
+ */
+export const maxDepth = 64
 
 // The last millisecond a `Date` holds. No clock reads later, so a change
 // stamped later is forged, unless it's a millisecond after what it was made on

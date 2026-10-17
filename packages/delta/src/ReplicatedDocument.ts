@@ -321,8 +321,8 @@ export const List: {
  *
  * The schema's root must be a struct, a class or a record. A schema whose
  * merge rules can't hold, such as a check across a struct's fields or a text
- * inside a union, is refused with a defect, as is an `initial` that doesn't
- * fit it.
+ * inside a union, is refused with a defect, as is one whose parts are nested
+ * more than 64 deep, and an `initial` that doesn't fit it.
  *
  * Without a `replica` option, a fresh random replica id comes from `Crypto`,
  * which platform layers such as `NodeServices.layer` provide.
