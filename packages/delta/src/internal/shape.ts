@@ -249,14 +249,14 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
   })
 
 // An optional field's `undefined` (or `void`) counts as absent, so it's no
-// value the field can read, however deep in its unions. The union's checks
-// still hold: on its one other member, so a part with a rule refuses them,
-// or for a suspend, which can't take checks, in a union of its own.
+// value the field can read, however deep in its unions, and a field that's
+// only ever undefined reads nothing. The union's checks still hold: on its one
+// other member, so a part with a rule refuses them, or for a suspend, which
+// can't take checks, in a union of its own.
 const withoutUndefined = (ast: SchemaAST.AST): SchemaAST.AST => {
+  if (isUndefined(ast)) return new SchemaAST.Union([])
   if (!SchemaAST.isUnion(ast)) return ast
-  const defined = ast.types.flatMap((type) =>
-    SchemaAST.isUndefined(type) || SchemaAST.isVoid(type) ? [] : [withoutUndefined(type)]
-  )
+  const defined = ast.types.flatMap((type) => isUndefined(type) ? [] : [withoutUndefined(type)])
   if (defined.length === 1) {
     const [only] = defined
     return ast.checks === undefined
@@ -269,6 +269,8 @@ const withoutUndefined = (ast: SchemaAST.AST): SchemaAST.AST => {
     ? ast
     : new SchemaAST.Union(defined, ast.options, ast.annotations, ast.checks)
 }
+
+const isUndefined = (ast: SchemaAST.AST): boolean => SchemaAST.isUndefined(ast) || SchemaAST.isVoid(ast)
 
 // Whether an item's field `key` holds strings, as the steps of a path are.
 const holdsStrings = (item: SchemaAST.AST, key: string): boolean => {
