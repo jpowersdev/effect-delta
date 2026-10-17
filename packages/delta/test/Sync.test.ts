@@ -844,6 +844,48 @@ describe("Relay", () => {
         assert.strictEqual(ack._tag, "Accepted")
       }).pipe(Effect.provide(RelayLive)))
 
+    it.effect("refuses a change that writes deeper than a document goes, though it would wait", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const push = (changes: ReadonlyArray<InternalDocument.AnyChange>, user: string) =>
+          relay.push({ format: Sync.FORMAT, document: spec, delta: InternalDelta.fromChanges(changes) }).pipe(
+            asUser(user)
+          )
+        // A path that takes a receiver more than its stack, or a long time.
+        const deep: InternalDocument.Op = {
+          _tag: "Set",
+          path: ["comments", ...Array.from({ length: 20_000 }, () => "c")],
+          value: 1
+        }
+        for (const parents of [[], [{ replica: "ghost", seq: 0 }]]) {
+          const forged: ReadonlyArray<InternalDocument.AnyChange> = [
+            { replica: "f", seq: 0, length: 1, parents, time: 1, ops: [deep] }
+          ]
+          const refused = yield* Effect.flip(
+            Replica.receive(yield* makeDoc("replica"), InternalDelta.fromChanges(forged))
+          )
+          assert.strictEqual(refused.reason._tag, "Malformed")
+          const error = yield* Effect.flip(push(forged, "forger"))
+          assert.deepStrictEqual(error.reason, refused)
+        }
+        // The document still takes everyone else's changes.
+        const ada = yield* makeDoc("ada")
+        yield* ReplicatedDocument.update(ada, (doc) => ({ ...doc, status: "approved" }))
+        const ack = yield* push([
+          ...((yield* Replica.delta(ada, VersionVector.empty)) as InternalDelta.DeltaImpl).changes.values()
+        ], "ada")
+        assert.strictEqual(ack._tag, "Accepted")
+        const ghost: InternalDocument.AnyChange = {
+          replica: "ghost",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "Increment", path: ["votes"], by: 1 }]
+        }
+        assert.strictEqual((yield* push([ghost], "ghost"))._tag, "Accepted")
+      }).pipe(Effect.provide(RelayLive)))
+
     it.effect("passes on changes a replica's schema has another rule for, without cutting it off", () =>
       Effect.gen(function*() {
         const relay = yield* Relay.Relay

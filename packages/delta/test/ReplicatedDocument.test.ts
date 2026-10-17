@@ -147,6 +147,16 @@ describe("ReplicatedDocument", () => {
         "a struct field can't have a constructor default"
       ))
 
+    it.effect("refuses a schema nested deeper than a change can write, which every receiver would refuse", () => {
+      let Nested: Schema.Top = Schema.Struct({ done: Schema.Boolean })
+      let start: unknown = { done: false }
+      for (let i = 0; i < 64; i++) {
+        Nested = Schema.Struct({ inner: Nested })
+        start = { inner: start }
+      }
+      return refuses(Nested, start, "nested more than 64 deep")
+    })
+
     it.effect("refuses an initial value that doesn't fit, or writes texts, entries or optional fields", () =>
       Effect.gen(function*() {
         yield* refuses(Doc, { ...initial, title: "Draft" }, "a text starts empty")
