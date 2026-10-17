@@ -219,7 +219,7 @@ export const make = Effect.fnUntraced(function*(options: {
             const unkept = InternalDocument.checkPaths(state, change)
             const { problem, texts } = InternalDocument.integrate(state, [change])
             if (problem !== undefined) {
-              malformed = problem
+              malformed ??= problem
               break
             }
             if (unkept !== undefined) {

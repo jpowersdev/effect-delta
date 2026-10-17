@@ -886,6 +886,40 @@ describe("Relay", () => {
         assert.strictEqual((yield* push([ghost], "ghost"))._tag, "Accepted")
       }).pipe(Effect.provide(RelayLive)))
 
+    it.effect("gives the reason a replica and an authority give for a delta with more than one bad change", () =>
+      Effect.gen(function*() {
+        const relay = yield* Relay.Relay
+        const authority = Context.get(yield* Layer.build(Layer.fresh(NoSecrets)), Authority.Authority)
+        // One refused as it arrives, and one once it's checked, in either order.
+        const deep: InternalDocument.AnyChange = {
+          replica: "deep",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "Set", path: Array.from({ length: 65 }, () => "c"), value: 1 }]
+        }
+        const short: InternalDocument.AnyChange = {
+          replica: "short",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+        }
+        for (const [i, changes] of [[deep, short], [short, deep]].entries()) {
+          const delta = InternalDelta.fromChanges(changes)
+          const document = Replica.DocumentId.make(`both-${i}`)
+          const refused = yield* Effect.flip(Replica.receive(yield* makeDoc("replica"), delta))
+          const relayed = yield* Effect.flip(relay.push({ format: Sync.FORMAT, document, delta }))
+          const checked = yield* Effect.flip(authority.push({ format: Sync.FORMAT, document, delta }))
+          const reasons = [refused, relayed.reason, checked.reason].map((error) =>
+            error._tag === "DeltaError" && error.reason._tag === "Malformed" ? error.reason.message : error._tag
+          )
+          assert.deepStrictEqual(reasons, [reasons[0], reasons[0], reasons[0]])
+        }
+      }).pipe(Effect.scoped, Effect.provide(RelayLive)))
+
     it.effect("passes on changes a replica's schema has another rule for, without cutting it off", () =>
       Effect.gen(function*() {
         const relay = yield* Relay.Relay
