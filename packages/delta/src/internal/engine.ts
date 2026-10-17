@@ -239,8 +239,11 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
         engine,
         Effect.suspend(() => {
           const all = InternalDelta.combine(stored.history, stored.unconfirmed)
-          // Refused as receiving them would be, though a snapshot skips that.
-          const refused = refusal(engine, all.changes.values())
+          // Refused as receiving them would be, before anything changes here,
+          // and though a snapshot skips receiving them.
+          const changes = [...all.changes.values()]
+          const reused = InternalDocument.reusing(state.document.history, changes)
+          const refused = refusal(engine, changes) ?? (reused === undefined ? undefined : reusedId(reused.replica))
           if (refused !== undefined) return Effect.fail(refused)
           for (const writer of stored.writers) state.writers.add(writer)
           // A store's history holds only what the authority had confirmed;
@@ -255,7 +258,6 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
             // merge only what came after it.
             const inSnapshot = (change: InternalDocument.AnyChange) =>
               change.seq + change.length <= VersionVector.get(snapshot.version, change.replica)
-            const changes = [...all.changes.values()]
             const loaded = InternalDocument.load(
               engine.strategy,
               changes.filter(inSnapshot),
@@ -356,6 +358,7 @@ const receive = (
   const refused = refusal(engine, delta.changes.values())
   if (refused !== undefined) return Effect.fail(refused)
   const arrived = InternalDocument.arrive(state.document, [...delta.changes.values()])
+  if (arrived.reused !== undefined) return Effect.fail(reusedId(arrived.reused))
 
   // A bad change is dropped, and the rest are applied without it.
   const integrated = InternalDocument.integrateReady(state.document, {
@@ -374,24 +377,18 @@ const receive = (
 
 // Why the replica refuses changes whole, before taking any: one has another
 // strategy, or is under its own replica id but not its own, made by another
-// copy of it, or has the key of another change the replica has.
-const refusal = (
-  engine: Engine,
-  given: Iterable<InternalDocument.AnyChange>
-): Replica.DeltaError | undefined => {
+// copy of it.
+const refusal = (engine: Engine, changes: Iterable<InternalDocument.AnyChange>): Replica.DeltaError | undefined => {
   const { state } = engine
-  const { history } = state.document
-  const changes = [...given]
   for (const change of changes) {
     if (!InternalDocument.fitsStrategy(change, engine.strategy)) {
       return deltaError(new Replica.StrategyMismatch({ expected: engine.strategy }))
     }
-    if (change.replica === state.replica && History.get(history, key(change)) === undefined) {
+    if (change.replica === state.replica && History.get(state.document.history, key(change)) === undefined) {
       return reusedId(change.replica)
     }
   }
-  const reused = InternalDocument.reusing(history, changes)
-  return reused === undefined ? undefined : reusedId(reused.replica)
+  return undefined
 }
 
 const reusedId = (replica: string) =>
