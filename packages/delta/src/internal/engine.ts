@@ -356,7 +356,6 @@ const receive = (
   const refused = refusal(engine, delta.changes.values())
   if (refused !== undefined) return Effect.fail(refused)
   const arrived = InternalDocument.arrive(state.document, [...delta.changes.values()])
-  if (arrived.reused !== undefined) return Effect.fail(reusedId(arrived.reused))
 
   // A bad change is dropped, and the rest are applied without it.
   const integrated = InternalDocument.integrateReady(state.document, {
@@ -375,18 +374,24 @@ const receive = (
 
 // Why the replica refuses changes whole, before taking any: one has another
 // strategy, or is under its own replica id but not its own, made by another
-// copy of it.
-const refusal = (engine: Engine, changes: Iterable<InternalDocument.AnyChange>): Replica.DeltaError | undefined => {
+// copy of it, or has the key of another change the replica has.
+const refusal = (
+  engine: Engine,
+  given: Iterable<InternalDocument.AnyChange>
+): Replica.DeltaError | undefined => {
   const { state } = engine
+  const { history } = state.document
+  const changes = [...given]
   for (const change of changes) {
     if (!InternalDocument.fitsStrategy(change, engine.strategy)) {
       return deltaError(new Replica.StrategyMismatch({ expected: engine.strategy }))
     }
-    if (change.replica === state.replica && History.get(state.document.history, key(change)) === undefined) {
+    if (change.replica === state.replica && History.get(history, key(change)) === undefined) {
       return reusedId(change.replica)
     }
   }
-  return undefined
+  const reused = InternalDocument.reusing(history, changes)
+  return reused === undefined ? undefined : reusedId(reused.replica)
 }
 
 const reusedId = (replica: string) =>

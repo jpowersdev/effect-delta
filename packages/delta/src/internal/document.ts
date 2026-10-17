@@ -942,11 +942,7 @@ export const arrive = (
   readonly fresh: ReadonlyArray<AnyChange>
 } => {
   const { history } = document
-  // A store keeps one change per key, so the other is another change too.
-  const reused = changes.find((change) => {
-    const existing = History.get(history, key(change))
-    return existing !== undefined && !Equal.equals(existing, change)
-  })
+  const reused = reusing(history, changes)
   if (reused !== undefined) return { reused: reused.replica, refused: undefined, fresh: [] }
   let refused: string | undefined
   const fresh: Array<AnyChange> = []
@@ -957,6 +953,21 @@ export const arrive = (
   }
   for (const change of fresh) history.pending.set(key(change), change)
   return { reused: undefined, refused, fresh }
+}
+
+/**
+ * The first of `changes` under the key of another change the history has,
+ * even one dropped as bad: a store keeps one change per key, so the other is
+ * another change too.
+ *
+ * @internal
+ */
+export const reusing = (history: History.History<Op>, changes: Iterable<AnyChange>): AnyChange | undefined => {
+  for (const change of changes) {
+    const existing = History.get(history, key(change))
+    if (existing !== undefined && !Equal.equals(existing, change)) return change
+  }
+  return undefined
 }
 
 // What's wrong with a change that the change alone shows: it takes no sequence

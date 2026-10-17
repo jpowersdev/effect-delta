@@ -575,4 +575,32 @@ describe("HistoryStore", () => {
         TestCrypto.layer("store").pipe(Layer.provide(NodeCrypto.layer))
       ])
     ))
+
+  it.effect("a reopen refused for a change under the key of another leaves the replica as it was", () =>
+    Effect.gen(function*() {
+      const spec = Replica.DocumentId.make("spec")
+      const replica = Replica.ReplicaId.make("laptop")
+      yield* Effect.scoped(Effect.gen(function*() {
+        const text = yield* ReplicatedText.makeConfirmed({ document: spec, replica })
+        yield* HistoryStore.persist(text, spec)
+        yield* ReplicatedText.insert(text, 0, "saved")
+        yield* Stream.runHead(Stream.filter(text.connection.unconfirmed, (count) => count === 0))
+      }))
+      // Another copy under the same id, offline, writes its own first change.
+      const offline = Authority.Authority.of({ subscribe: () => Stream.never, push: () => Effect.never })
+      yield* Effect.scoped(Effect.gen(function*() {
+        const copy = yield* ReplicatedText.makeConfirmed({ document: spec, replica })
+        yield* ReplicatedText.insert(copy, 0, "other")
+        const refused = yield* Effect.flip(HistoryStore.persist(copy, spec))
+        assert.strictEqual(refused._tag === "DeltaError" && refused.reason._tag, "ReplicaIdReused")
+        // Its change is still unconfirmed, so it's in no delta.
+        assert.isTrue(Delta.isEmpty(yield* Replica.delta(copy, VersionVector.empty)))
+      })).pipe(Effect.provideService(Authority.Authority, offline))
+    }).pipe(
+      Effect.provide([
+        Authority.layer({ check: () => Effect.void }).pipe(Layer.provide(Layer.fresh(HistoryStore.layerMemory))),
+        HistoryStore.layerMemory,
+        TestCrypto.layer("store").pipe(Layer.provide(NodeCrypto.layer))
+      ])
+    ))
 })
