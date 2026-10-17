@@ -260,7 +260,7 @@ they do now, plus `time`.
 | Op                                                      | Sequence numbers | What it does                                                              |
 | ------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------- |
 | `Insert`, `Remove` (tree); `InsertAt`, `RemoveAt` (replay) | one per character | Edits the text at the path, as now.                                     |
-| `Set { path, value }`                                   | 1                | Writes a value, encoded with its schema's JSON codec. On an entry, item or optional field, it also means it exists. |
+| `Set { path, value }`                                   | 1                | Writes a value as its type's JSON (`Schema.toCodecJson` of the schema's type, whatever the schema's own encoding). On an entry, item or optional field, it also means it exists. |
 | `Add { path }`                                          | 1                | The entry, item or optional field at the path exists (for content that isn't a value). |
 | `Unset { path }`                                        | 1                | Removes the entry, item or optional field at the path.                    |
 | `Increment { path, by }`                                | 1                | Adds to the counter at the path.                                          |
@@ -434,7 +434,8 @@ interface Proposed<A> { readonly before: A; readonly after: A; readonly paths: R
 - lists, as [Lists](#lists) says.
 
 The whole call is one change. It fails with `Schema.SchemaError` when a new value doesn't encode, for example
-when it fails a check, or encodes to something JSON can't carry (`Schema.Any` passes anything on), or to JSON
+when it fails a check, or encodes to something JSON can't carry (a value is written as its type's JSON,
+whatever the schema's own encoding, and `Schema.Any` passes anything on), or to JSON
 that reads back as another value (a union of a number and a string writes the string `"NaN"` as the number's
 JSON), and when two items of a list have the same key. Values are
 written as JSON sends them, so `-0` is written as `0`, and a `-0` in JSON text, which other languages send,

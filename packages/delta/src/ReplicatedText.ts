@@ -423,8 +423,12 @@ export interface ConfirmedOptions {
  * import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "effect-delta"
  *
  * const EditorsOnly = Authority.layer({
- *   check: ({ user }) =>
- *     user === "editor" ? Effect.void : Effect.fail(new Authority.Rejected({ message: "Read only" }))
+ *   check: ({ _tag, user }) =>
+ *     _tag !== "Text"
+ *       ? Effect.fail(new Authority.Rejected({ message: "Specs are texts" }))
+ *       : user === "editor"
+ *       ? Effect.void
+ *       : Effect.fail(new Authority.Rejected({ message: "Read only" }))
  * }).pipe(Layer.provide(HistoryStore.layerMemory))
  *
  * const program = Effect.gen(function*() {

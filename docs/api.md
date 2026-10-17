@@ -522,7 +522,8 @@ interface DocumentProposal {
   readonly user: string
   readonly before: Schema.Json
   readonly after: Schema.Json
-  // The entries, list items and optional fields that exist in each, which JSON alone can't say
+  // The paths in each whose latest write says they exist (entries, list items and optional fields added,
+  // and values), which JSON alone can't say
   readonly exists: { readonly before: ReadonlyArray<Replica.Path>; readonly after: ReadonlyArray<Replica.Path> }
   readonly paths: ReadonlyArray<Replica.Path> // where the change wrote
   readonly delta: Delta                       // the change itself

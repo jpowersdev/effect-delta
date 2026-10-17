@@ -39,7 +39,9 @@ export const FORMAT = 1 as const
 
 /**
  * Changes sent from a server to a replica, and what the server has seen once
- * they're included.
+ * they're included. A relay's `version` also counts changes it keeps that wait
+ * for what they build on, which it sends once that's there, so their authors
+ * don't push them again.
  *
  * @stability unstable
  * @category schemas
@@ -152,8 +154,9 @@ export class SyncError extends Schema.TaggedError<SyncError>()("SyncError", {
 
 /**
  * Subscribes to a document: streams back the changes a replica at `version`
- * lacks, then each new change. `authority` says whether the replica expects to
- * answer to an authority, so the server can refuse a mismatch.
+ * lacks, then each new change, once what it builds on is there. `authority`
+ * says whether the replica expects to answer to an authority, so the server
+ * can refuse a mismatch.
  *
  * @stability unstable
  * @category protocols

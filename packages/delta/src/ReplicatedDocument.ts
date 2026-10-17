@@ -588,7 +588,8 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * disappear and move. Fails with `Schema.SchemaError` if the new value doesn't
  * fit the schema (a class's parts must be its instances, as for its schema),
  * if two items of a list have the same key, or
- * if a value encodes to something JSON can't carry, or to JSON that reads
+ * if a value encodes to something JSON can't carry (a value is written as its
+ * type's JSON, whatever the schema's own encoding), or to JSON that reads
  * back as another value (as a union's members can).
  *
  * Editors should edit text fields through `text`, which says exactly what the

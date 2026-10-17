@@ -392,9 +392,10 @@ export const texts = (document: Document): ReadonlyArray<{ readonly path: Path.P
  * without what's been removed. For servers, which have no schema to read it
  * with.
  *
- * With `existing`, it also adds the path of every record entry, optional
- * field and list item that exists. JSON alone can't tell one nobody added,
- * but with something written inside, from a struct field.
+ * With `existing`, it also adds the path of everything whose latest write
+ * says it exists: record entries, optional fields and list items added, and
+ * values written. JSON alone can't tell an entry nobody added, but with
+ * something written inside, from a struct field.
  *
  * @internal
  */
