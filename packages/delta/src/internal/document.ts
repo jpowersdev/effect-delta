@@ -750,11 +750,14 @@ const applyChanges = (
       continue
     }
     let seq = change.seq
+    // Parts come in the order of their ops, and each is applied at its first.
+    let next = 0
     for (const op of change.ops) {
       const write: Write = { replica: change.replica, seq, time: change.time, past: context.past }
       if (Text.isOp(op)) {
-        const part = context.parts.find((part) => part.seq === seq)
-        if (part !== undefined) {
+        const part = context.parts[next]
+        if (part?.seq === seq) {
+          next++
           const strategy = Text.strategyOfOp(op)
           document.strategy ??= strategy
           const { merge, text } = mergeOf(part.path, strategy)
