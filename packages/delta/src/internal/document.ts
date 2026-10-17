@@ -568,10 +568,13 @@ class Found {
     // in the order they start: one change can edit inside many removed parts,
     // and many changes inside one each.
     const editors = new Map<string, Edits>()
-    for (const { lost } of losses) {
-      const edits = editors.get(lost.editor)
-      if (edits === undefined) editors.set(lost.editor, new Edits(history, lost.editor, this.reading))
-      else edits.asked++
+    for (const { lost, path } of losses) {
+      let edits = editors.get(lost.editor)
+      if (edits === undefined) {
+        edits = new Edits(history, lost.editor, this.reading)
+        editors.set(lost.editor, edits)
+      }
+      edits.ask(path)
     }
     const concurrent = new Map<string, Array<Lost>>()
     const start = ({ lost, removal }: (typeof losses)[number]) =>
@@ -595,15 +598,24 @@ class Found {
   }
 }
 
-// One editor's changes, walked in order, and by the paths they edit inside.
-// Asked in the order their spans start, it walks each change once: what one
-// span skips, no later one starts before.
+// The parts an editor's edits may have been lost in, as a tree of their
+// paths' steps.
+interface Part {
+  readonly children: Map<string, Part>
+  /** Its path's key, if it's one of them. */
+  key: string | undefined
+}
+
+// One editor's changes, walked in order, and by which of the parts it's asked
+// about they edit inside. Asked in the order their spans start, it walks each
+// change once: what one span skips, no later one starts before.
 class Edits {
-  /** How many more times it'll be asked. */
-  asked = 1
+  // How many more times it'll be asked.
+  private asked = 0
   // Where the walk has got to.
   private walked = 0
-  private readonly byPath = new Map<string, Array<AnyChange>>()
+  private readonly parts: Part = { children: new Map(), key: undefined }
+  private readonly byPart = new Map<string, Array<AnyChange>>()
   private readonly history: History.History<Op>
   private readonly editor: string
   private readonly reading: Reading
@@ -611,6 +623,20 @@ class Edits {
     this.history = history
     this.editor = editor
     this.reading = reading
+  }
+  /** Notes a part it'll be asked about. */
+  ask(path: Path.Path): void {
+    this.asked++
+    let part = this.parts
+    for (const step of path) {
+      let child = part.children.get(step)
+      if (child === undefined) {
+        child = { children: new Map(), key: undefined }
+        part.children.set(step, child)
+      }
+      part = child
+    }
+    part.key = Path.key(path)
   }
   /**
    * Whether a change from sequence number `start` up to `next` edited inside
@@ -627,7 +653,7 @@ class Edits {
       VersionVector.get(this.history.pasts.get(key(change))!, removal.replica) <= removal.seq
     // Among those walked, from the first that ends past `start`: one
     // replica's changes never overlap.
-    const walked = this.byPath.get(k) ?? []
+    const walked = this.byPart.get(k) ?? []
     let low = 0
     let high = walked.length
     while (low < high) {
@@ -640,39 +666,40 @@ class Edits {
     for (let seq = Math.max(start, this.walked); seq < next;) {
       const change = History.find(this.history, { replica: this.editor, seq })!
       seq = this.walked = change.seq + change.length
-      let inside = false
       if (again) {
-        for (const each of editsInside(change, this.reading)) {
-          const changes = this.byPath.get(each)
-          if (changes === undefined) this.byPath.set(each, [change])
-          else changes.push(change)
-          inside ||= each === k
-        }
-      } else {
-        inside = change.ops.some((op) => editsInsideAt(op, path, this.reading))
+        this.index(change)
+        if (this.byPart.get(k)?.at(-1) === change && unseen(change)) return true
+      } else if (unseen(change) && change.ops.some((op) => editsInsideAt(op, path, this.reading))) {
+        return true
       }
-      if (inside && unseen(change)) return true
     }
     return false
   }
-}
-
-// The paths a change edits inside, as `noteInside` and moves count it: the
-// parts above each op, the text or counter it edits, and the list item it
-// moves.
-const editsInside = (change: AnyChange, reading: Reading): Set<string> => {
-  const inside = new Set<string>()
-  for (const op of change.ops) {
-    const at = pathOf(op)
-    for (const prefix of Path.prefixes(at)) inside.add(Path.key(prefix))
-    if (Text.isOp(op) || op._tag === "Increment" || (op._tag === "Place" && reading.moves(at))) {
-      inside.add(Path.key(at))
+  // Notes a change under each part it's asked about that the change edits
+  // inside.
+  private index(change: AnyChange): void {
+    for (const op of change.ops) {
+      const at = pathOf(op)
+      let part: Part | undefined = this.parts
+      for (let i = 0; part !== undefined; i++) {
+        if (i === at.length) {
+          if (part.key !== undefined && editsInsideAt(op, at, this.reading)) this.record(part.key, change)
+          break
+        }
+        if (part.key !== undefined) this.record(part.key, change)
+        part = part.children.get(at[i]!)
+      }
     }
   }
-  return inside
+  private record(k: string, change: AnyChange): void {
+    const changes = this.byPart.get(k)
+    if (changes === undefined) this.byPart.set(k, [change])
+    else if (changes.at(-1) !== change) changes.push(change)
+  }
 }
 
-// Whether an op edits inside the part at `path`, as `editsInside` counts it.
+// Whether an op edits inside the part at `path`, as `noteInside` and moves
+// count it: under it, or on the text or counter it is, or moving it.
 const editsInsideAt = (op: Op, path: Path.Path, reading: Reading): boolean => {
   const at = pathOf(op)
   if (at.length > path.length) return path.every((segment, i) => segment === at[i])
