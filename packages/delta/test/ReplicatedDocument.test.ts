@@ -672,6 +672,46 @@ describe("ReplicatedDocument", () => {
       60_000
     )
 
+    it.effect(
+      "a removal of every entry one change edits merges about as fast as a removal of one of them",
+      () =>
+        Effect.gen(function*() {
+          const Shelf = Schema.Struct({ boxes: Schema.Record(Schema.String, Schema.Struct({ count: Schema.Int })) })
+          const boxes = (count: number) =>
+            Object.fromEntries(Array.from({ length: 8000 }, (_, i) => [`b${i}`, { count }]))
+          // Ben removes one box, or every box, while Ada's one change counts
+          // every box again.
+          const merging = Effect.fnUntraced(function*(removes: "one" | "every") {
+            const open = (replica: string) =>
+              ReplicatedDocument.make(Shelf, { initial: { boxes: {} }, replica: Replica.ReplicaId.make(replica) })
+            const ada = yield* open("ada")
+            const ben = yield* open("ben")
+            yield* ReplicatedDocument.update(ada, () => ({ boxes: boxes(0) }))
+            yield* Replica.exchange(ada, ben)
+            yield* ReplicatedDocument.update(ben, (shelf) => {
+              if (removes === "every") return { boxes: {} }
+              const { b0: _, ...rest } = shelf.boxes
+              return { boxes: rest }
+            })
+            yield* ReplicatedDocument.update(ada, () => ({ boxes: boxes(1) }))
+            const delta = yield* Replica.delta(ada, yield* Replica.version(ben))
+            // The test clock stands still, so this is the time on the wall.
+            const start = performance.now()
+            const overlaps = yield* Replica.receive(ben, delta)
+            const took = performance.now() - start
+            assert.strictEqual(overlaps.length, removes === "every" ? 8000 : 1)
+            return took
+          })
+          // The least of a few, so a pause elsewhere doesn't count.
+          const least = (removes: "one" | "every") =>
+            Effect.map(Effect.all([merging(removes), merging(removes), merging(removes)]), (took) => Math.min(...took))
+          const one = yield* least("one")
+          const every = yield* least("every")
+          assert.isBelow(every / one, 8)
+        }),
+      60_000
+    )
+
     it.effect("a removal wins over edits to the entry's own text or counter it hadn't seen, and the merge says so", () =>
       Effect.gen(function*() {
         // Entries and an optional field that are a text or a counter.
