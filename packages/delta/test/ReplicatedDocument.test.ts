@@ -723,6 +723,74 @@ describe("ReplicatedDocument", () => {
       60_000
     )
 
+    it.effect(
+      "a removal of entries another replica edited merges about as fast whether it edited them in one change or one each",
+      () =>
+        Effect.gen(function*() {
+          const Shelf = Schema.Struct({
+            boxes: Schema.Record(Schema.String, Schema.Struct({ count: ReplicatedDocument.Counter }))
+          })
+          const boxes = Array.from({ length: 4000 }, (_, i) => `b${i}`)
+          const added: InternalDocument.AnyChange = {
+            replica: "added",
+            seq: 0,
+            length: boxes.length,
+            parents: [],
+            time: 1,
+            ops: boxes.map((box) => ({ _tag: "Add", path: ["boxes", box] }))
+          }
+          const last = { replica: "added", seq: boxes.length - 1 }
+          const count = (box: string): InternalDocument.Op => ({
+            _tag: "Increment",
+            path: ["boxes", box, "count"],
+            by: 1
+          })
+          // Ada counts every box again, in one change or one change each,
+          // while Ben removes every box.
+          const counted = {
+            once: [{ replica: "ada", seq: 0, length: boxes.length, parents: [last], time: 2, ops: boxes.map(count) }],
+            each: boxes.map((box, i): InternalDocument.AnyChange => ({
+              replica: "ada",
+              seq: i,
+              length: 1,
+              parents: [i === 0 ? last : { replica: "ada", seq: i - 1 }],
+              time: 2 + i,
+              ops: [count(box)]
+            }))
+          }
+          const removed: InternalDocument.AnyChange = {
+            replica: "ben",
+            seq: 0,
+            length: boxes.length,
+            parents: [last],
+            time: 2,
+            ops: boxes.map((box) => ({ _tag: "Unset", path: ["boxes", box] }))
+          }
+          // How long a replica that had Ada's counts takes to take in Ben's
+          // removal.
+          const merging = Effect.fnUntraced(function*(split: "once" | "each") {
+            const carol = yield* ReplicatedDocument.make(Shelf, {
+              initial: { boxes: {} },
+              replica: Replica.ReplicaId.make("carol")
+            })
+            yield* Replica.receive(carol, InternalDelta.fromChanges([added, ...counted[split]]))
+            // The test clock stands still, so this is the time on the wall.
+            const start = performance.now()
+            const overlaps = yield* Replica.receive(carol, InternalDelta.fromChanges([removed]))
+            const took = performance.now() - start
+            assert.strictEqual(overlaps.length, boxes.length)
+            return took
+          })
+          // The least of a few, so a pause elsewhere doesn't count.
+          const least = (split: "once" | "each") =>
+            Effect.map(Effect.all([merging(split), merging(split), merging(split)]), (took) => Math.min(...took))
+          const once = yield* least("once")
+          const each = yield* least("each")
+          assert.isBelow(each / once, 8)
+        }),
+      60_000
+    )
+
     it.effect("a removal wins over edits to the entry's own text or counter it hadn't seen, and the merge says so", () =>
       Effect.gen(function*() {
         // Entries and an optional field that are a text or a counter.
