@@ -451,7 +451,10 @@ own declarations, such as `Schema.URL`, have one), to JSON nested more than 128 
 that reads back as another value (a union of a number and a string writes the string `"NaN"` as the number's
 JSON), and when two items of a list have the same key. Values are
 written as JSON sends them, so `-0` is written as `0`, and a `-0` in JSON text, which other languages send,
-is read as `0`.
+is read as `0`. A union whose members can't tell their values apart is written as its first member that takes
+the value, as Effect's own JSON codec writes it, and its equivalence calls them the same: a struct member
+writes a class's instance with the same fields as a plain object, and a struct of optional fields leaves out
+another member's fields.
 
 **Text fields are handles.** `ReplicatedDocument.text(doc, path)` returns a `ReplicatedText.Editable`. Every
 `ReplicatedText` function except the constructors takes one: `insert`, `remove`, `applyPatch`, `set`,
