@@ -2148,6 +2148,30 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual((yield* ReplicatedDocument.get(notes)).data, nested(128))
       }))
 
+    it.effect("a change under the key of another that writes a value nested too deep is refused as reusing its id", () =>
+      Effect.gen(function*() {
+        const notes = yield* ReplicatedDocument.make(Schema.Struct({ data: Schema.Json }), {
+          initial: { data: null },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        const writing = (value: Schema.Json) =>
+          InternalDelta.fromChanges([{
+            replica: "mallory",
+            seq: 0,
+            length: 1,
+            parents: [],
+            time: 1,
+            ops: [{ _tag: "Set", path: ["data"], value }]
+          }])
+        yield* Replica.receive(notes, writing("x"))
+        // Shallow enough for JSON to send, but not to compare with the other.
+        let deep: Schema.Json = 0
+        for (let i = 0; i < 5000; i++) deep = { a: deep }
+        const refused = yield* Effect.flip(Replica.receive(notes, writing(deep)))
+        assert.strictEqual(refused.reason._tag, "ReplicaIdReused")
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(notes), { data: "x" })
+      }))
+
     it.effect("an update fails for a value nested too deep in a list of values, or in a field showing its default", () =>
       Effect.gen(function*() {
         const nested = (depth: number) => {
