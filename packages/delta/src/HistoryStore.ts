@@ -278,9 +278,9 @@ export interface Persisted {
  * Loads what the store has for `document` into `replica`, then saves every
  * change the replica makes or receives, for the life of the scope. Loading
  * fails with `Replica.DeltaError`, and leaves the replica as it was, when the
- * store has changes the replica refuses whole: another strategy's, or ones
+ * store has changes the replica refuses whole: another strategy's, ones
  * under its own replica id that it didn't make, as when two sessions open
- * under one id.
+ * under one id, or one under the key of another change the replica has.
  *
  * **Example** (Keeping a text across restarts)
  *
