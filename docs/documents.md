@@ -644,6 +644,10 @@ All built, each with tests and an example:
   text parts would fix that.
 - **One long edit is slow to merge.** Trees are one node per character, so inserting or removing a long run
   costs its length times the tree's depth (see the text limits in [`api.md`](./api.md#known-limits)).
+- **An item moved many times is slower to move.** Each move adds a position to the list's tree, and the old
+  one stays there hidden, as a removed character does in a text. A move to where earlier ones went passes
+  them, so an item moved to the top thousands of times takes longer to move again, and loading its history
+  takes time growing with the square of its moves.
 
 ## Changed while building
 

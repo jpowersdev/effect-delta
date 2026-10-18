@@ -1326,7 +1326,7 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
           reportRemovals(found, at, place)
         }
       }
-      refreshPosition(at)
+      refreshPosition(at, place)
       break
     }
   }
@@ -1414,11 +1414,16 @@ const reportRemovals = (found: Found, at: Slot, write: Write): void => {
 const listOf = (document: Document, path: Path.Path): Fugue.Tree<Item> =>
   ensureSlot(document, Path.parent(path)).list ??= Fugue.make<Item>({ key: "" })
 
-// A list item shows at its latest position, while it exists.
-const refreshPosition = (item: Slot): void => {
+// A list item shows at its latest position, while it exists. Its others are
+// hidden as they're made or passed, so a new one, `added`, changes at most the
+// one it passes.
+const refreshPosition = (item: Slot, added?: PlaceWrite): void => {
   const latest = item.places.at(-1)
-  const shows = item.presence?.exists ?? false
-  for (const place of item.places) Fugue.setRemoved(place.node, !(shows && place === latest))
+  if (latest === undefined) return
+  if (added !== undefined && added !== latest) return Fugue.setRemoved(added.node, true)
+  const passed = added === undefined ? undefined : item.places.at(-2)
+  if (passed !== undefined) Fugue.setRemoved(passed.node, true)
+  Fugue.setRemoved(latest.node, !(item.presence?.exists ?? false))
 }
 
 // Local edits ----------------------------------------------------------------
@@ -1476,8 +1481,9 @@ export const edit = (
   }
   const place = (path: Path.Path, after: string | undefined) => {
     const list = listOf(document, path)
-    // Its current position goes as soon as this one is made.
-    for (const { node } of ensureSlot(document, path).places) Fugue.setRemoved(node, true)
+    // The position it shows at goes as soon as this one is made.
+    const shown = ensureSlot(document, path).places.at(-1)
+    if (shown !== undefined) Fugue.setRemoved(shown.node, true)
     const index = after === undefined ? 0 : Fugue.indexOf(shownPosition(document, [...Path.parent(path), after])) + 1
     const placement = Fugue.place(list, index)
     write(
