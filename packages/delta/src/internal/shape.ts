@@ -54,6 +54,8 @@ export interface Field {
   readonly optional: boolean
   /** Whether the schema fills the field in when it's missing. */
   readonly hasDefault: boolean
+  /** Whether two of its values are the same. */
+  readonly equivalence: Equivalence.Equivalence<unknown>
 }
 
 /** @internal */
@@ -287,7 +289,8 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
         "a struct field can't have a constructor default: give the fields in it defaults instead"
       )
     }
-    return { name: signature.name, shape, optional, hasDefault }
+    const equivalence = Schema.toEquivalence(Schema.make<Schema.Codec<unknown>>(signature.type))
+    return { name: signature.name, shape, optional, hasDefault, equivalence }
   })
 
 // An optional field's `undefined` (or `void`) counts as absent, so it's no
@@ -632,7 +635,7 @@ export const read = (
  * Reads a document's value from the JSON a server shows it as, by the same
  * rules. JSON has only each value's latest write, so a class whose
  * constructor won't take them, where it can't be left out, can't be read as
- * replicas show it: fails with its path.
+ * replicas show it: it reads as `initial` has it, and `unbuilt` has its path.
  *
  * @internal
  */
@@ -643,17 +646,15 @@ export const readJson = (
   // Which optional fields and entries exist, by their paths in `json`, where
   // JSON alone can't say.
   exists: (path: Path.Path) => boolean
-): Result.Result<unknown, Path.Path> => {
-  let unbuilt: Path.Path | undefined
+): { readonly value: unknown; readonly unbuilt: ReadonlyArray<Path.Path> } => {
+  const unbuilt: Array<Path.Path> = []
   const value = readAt(
     shape,
-    jsonAt(json, Path.root, exists, (path) => {
-      unbuilt ??= path
-    }),
+    jsonAt(json, Path.root, exists, (path) => unbuilt.push(path)),
     { value: initial },
     new Map()
   )
-  return unbuilt === undefined ? Result.succeed(value) : Result.fail(unbuilt)
+  return { value, unbuilt }
 }
 
 // What reading needs from one part of a document: a replica's state, or the
@@ -813,18 +814,24 @@ const readAt = (
 // The struct or class made of `fields`, or Missing if its constructor throws.
 const build = (shape: Fields, fields: ReadonlyArray<readonly [string, unknown]>): unknown => {
   // Defined rather than assigned, so a field such as `__proto__` is a field.
-  const value = Object.fromEntries(fields)
+  const value: Record<string, unknown> = Object.fromEntries(fields)
   if (shape.make === undefined) return value
-  let made: object
+  let made: Record<string, unknown>
   try {
-    made = shape.make(value) as object
+    made = shape.make(value) as Record<string, unknown>
   } catch {
     return Missing
   }
-  // Making copies the parts it's given. The ones read go back in, so those
-  // that didn't change keep their identity.
-  for (const [name, part] of fields) {
-    if (Object.getOwnPropertyDescriptor(made, name)?.writable) (made as Record<string, unknown>)[name] = part
+  // Making copies the parts it's given. Those it kept as they were go back
+  // in, so the ones that didn't change keep their identity; what it made of
+  // the rest stays.
+  for (const field of shape.fields) {
+    if (!Object.hasOwn(value, field.name)) continue
+    const part = value[field.name]
+    if (
+      made[field.name] !== part && Object.getOwnPropertyDescriptor(made, field.name)?.writable &&
+      field.equivalence(made[field.name], part)
+    ) made[field.name] = part
   }
   return made
 }
@@ -992,35 +999,26 @@ const planAt = (
       return
     }
     case "Fields": {
-      // What the struct shows, once a field that shows its default needs it.
-      let shownValue: unknown
       // A class shown as it was, since its constructor won't take what its
       // fields hold, is left alone unless the update changes it from that.
-      // Then its values are written all at once, so it shows what it's
-      // given; its other parts show what they hold, and are written as they
-      // change. Shown as `initial` has it, what those hold doesn't show, and
-      // writing them would write over it, so it can't be changed.
+      // Then it's written as given: its texts, counters, records and lists
+      // show what they hold, so they're written as they change. Shown as
+      // `initial` has it, they don't.
       const rolledBack = initial !== undefined && shape.make !== undefined
         ? rolledBackAt(shape, document, path, initial, memo)
         : undefined
       if (rolledBack !== undefined && shape.equivalence!(rolledBack, after)) return
       if (rolledBack !== undefined && rolledBack === initial!.value) {
-        throw new Schema.SchemaError(
-          new SchemaIssue.InvalidValue({
-            message: `The class at ${
-              Path.key(path)
-            } can't be changed: it shows as the initial value has it, since its constructor won't take what's in it`
-          })
-        )
+        if (writeValues(shape, document, path, path, after, rolledBack, initial, intents, memo) === Missing) {
+          throw cantChange(path, "with the values given, its constructor won't take what's in it")
+        }
+        return
       }
-      const changesValues = rolledBack !== undefined && shape.fields.some((field) =>
-        isValueField(field) &&
-        !(field.shape as Value).equivalence(rolledBack[field.name], (after as Record<string, unknown>)[field.name])
-      )
+      // What the struct shows, once a field that shows its default needs it.
+      let shownValue: unknown
       for (const field of shape.fields) {
         const fieldPath = [...path, field.name]
         const fieldAfter = (after as Record<string, unknown>)[field.name]
-        if (rolledBack !== undefined && isValueField(field) && !changesValues) continue
         // Inside an entry or item, a field that nothing this schema can read
         // was written to shows its default. Left as it shows, it's left
         // unwritten, so it doesn't write over what a newer schema wrote there,
@@ -1035,17 +1033,7 @@ const planAt = (
             field.shape.equivalence((shownValue as Record<string, unknown>)[field.name], fieldAfter)
           ) continue
         }
-        if (!field.optional) {
-          const fieldInitial = initial === undefined
-            ? undefined
-            : { value: (initial.value as Record<string, unknown>)[field.name] }
-          planAt(field.shape, document, fieldPath, fieldAfter, fieldInitial, false, intents, memo)
-          continue
-        }
-        const present = Object.hasOwn(after as object, field.name) && fieldAfter !== undefined
-        // One this schema can't read isn't in `after`, but it stays.
-        if (!present && !shown(field.shape, document, fieldPath, memo)) continue
-        planPresence(field.shape, document, fieldPath, present ? { value: fieldAfter } : undefined, intents, memo)
+        planField(field, document, fieldPath, after as Record<string, unknown>, initial, intents, memo)
       }
       return
     }
@@ -1072,6 +1060,92 @@ const planAt = (
         : planItems(shape, shape.key, document, path, after as ReadonlyArray<Record<string, unknown>>, intents, memo)
   }
 }
+
+// Plans a struct's field, as it's given in `after`.
+const planField = (
+  field: Field,
+  document: InternalDocument.Document,
+  path: Path.Path,
+  after: Record<string, unknown>,
+  initial: { readonly value: unknown } | undefined,
+  intents: Array<InternalDocument.Intent>,
+  memo: Memo
+): void => {
+  const fieldAfter = after[field.name]
+  if (!field.optional) {
+    const fieldInitial = initial === undefined
+      ? undefined
+      : { value: (initial.value as Record<string, unknown>)[field.name] }
+    return planAt(field.shape, document, path, fieldAfter, fieldInitial, false, intents, memo)
+  }
+  const present = Object.hasOwn(after, field.name) && fieldAfter !== undefined
+  // One this schema can't read isn't in `after`, but it stays.
+  if (!present && !shown(field.shape, document, path, memo)) return
+  planPresence(field.shape, document, path, present ? { value: fieldAfter } : undefined, intents, memo)
+}
+
+// In a class shown as `initial` has it, whose texts, counters, records and
+// lists hold what doesn't show, writes the values `after` gives the class or
+// struct at `path`, and refuses to change the rest. Returns what it then
+// holds, or Missing if its constructor won't take that.
+const writeValues = (
+  shape: Fields,
+  document: InternalDocument.Document,
+  // The class's, and the part's in it.
+  at: Path.Path,
+  path: Path.Path,
+  after: unknown,
+  shows: unknown,
+  initial: { readonly value: unknown } | undefined,
+  intents: Array<InternalDocument.Intent>,
+  memo: Memo
+): unknown => {
+  const given = after as Record<string, unknown>
+  const was = shows as Record<string, unknown>
+  const fields: Array<readonly [string, unknown]> = []
+  for (const field of shape.fields) {
+    const fieldPath = [...path, field.name]
+    const fieldInitial = initial === undefined || field.optional
+      ? undefined
+      : { value: (initial.value as Record<string, unknown>)[field.name] }
+    if (field.shape._tag === "Value") {
+      planField(field, document, fieldPath, given, initial, intents, memo)
+      if (Object.hasOwn(given, field.name) && (!field.optional || given[field.name] !== undefined)) {
+        fields.push([field.name, given[field.name]])
+      }
+    } else if (field.shape._tag === "Fields" && !field.optional) {
+      const inner = writeValues(
+        field.shape,
+        document,
+        at,
+        fieldPath,
+        given[field.name],
+        was[field.name],
+        fieldInitial,
+        intents,
+        memo
+      )
+      if (inner === Missing) return Missing
+      fields.push([field.name, inner])
+    } else {
+      if (
+        Object.hasOwn(given, field.name) !== Object.hasOwn(was, field.name) ||
+        !field.equivalence(given[field.name], was[field.name])
+      ) {
+        throw cantChange(at, "it shows as the initial value has it, since its constructor won't take what's in it")
+      }
+      if (field.optional && !InternalDocument.exists(document, fieldPath)) continue
+      const holds = readAt(field.shape, documentAt(document, fieldPath), fieldInitial, memo)
+      if (holds !== Missing) fields.push([field.name, holds])
+    }
+  }
+  return build(shape, fields)
+}
+
+const cantChange = (path: Path.Path, why: string) =>
+  new Schema.SchemaError(
+    new SchemaIssue.InvalidValue({ message: `The class at ${Path.key(path)} can't be changed: ${why}` })
+  )
 
 // The class at `path`, always there, if it shows as it was because its
 // constructor won't take what its fields hold.

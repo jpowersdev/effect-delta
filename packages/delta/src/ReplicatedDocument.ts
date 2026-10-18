@@ -335,13 +335,14 @@ export const List: {
  * checked together, so it must take any values its fields can hold. One that
  * throws for some, as a check would, is a check `make` can't see: an entry,
  * item or optional field holding such values is left out. A class that's
- * always there shows as it was after the latest write to its values that its
- * constructor took, on every replica alike, and an update writes its values
- * only if it changes one from what shows, then all of them, as given. If no
- * values make it build, because of what's in its texts, counters, records or
- * lists, it shows as `initial` has it, and an update that changes it fails:
- * it would write over what doesn't show. `readProposal` rejects a change that
- * leaves a class so.
+ * always there shows as it was after the latest write to its required values
+ * that its constructor took, on every replica alike, or if none makes it
+ * build, as `initial` has it. An update that leaves it as it shows doesn't
+ * write it, and one that changes it writes it as given. Shown as `initial`
+ * has it, though, its texts, counters, records and lists don't show what they
+ * hold, so an update writes only its values, and fails if it changes anything
+ * else or the class won't build from what those hold. `readProposal` rejects
+ * a change that leaves a class so.
  *
  * **Example** (Two copies of a document)
  *
@@ -767,11 +768,12 @@ export interface Proposed<A> {
  * `Authority.Rejected` when the change writes where the schema has no part,
  * writes a part with an op its rule doesn't take, writes a value the schema
  * can't read, gives a list item a key field that names another item, or adds
- * a list item without placing it in its list. It also fails when a class
- * that's always there has fields its constructor won't take, before or after
- * the change: replicas show it as it was, which JSON can't say. A change that
- * fits reads as replicas will show it: entries, items and optional fields only
- * where they exist, and each value as its latest write.
+ * a list item without placing it in its list. It also fails when the change
+ * leaves a class that's always there with fields its constructor won't take,
+ * or writes in one that already had them: replicas show it as it was, which
+ * JSON can't say. One the change leaves alone reads as `initial` has it. A
+ * change that fits reads as replicas will show it: entries, items and
+ * optional fields only where they exist, and each value as its latest write.
  *
  * **Gotchas**
  *
@@ -820,18 +822,22 @@ export const readProposal = <A>(
     }
     const before = InternalShape.readJson(shape, proposal.before, options.initial, existsIn(proposal.exists.before))
     const after = InternalShape.readJson(shape, proposal.after, options.initial, existsIn(proposal.exists.after))
-    // Replicas show such a class as it was, which JSON can't say.
-    const unbuilt = (when: string, path: Replica.Path) =>
-      Effect.fail(
+    // Replicas show a class its constructor won't take the fields of as it
+    // was, which JSON can't say: a change can't leave one so, nor write in one
+    // that was so already, which reads as `initial` has it.
+    const unbuiltBefore = new Set(before.unbuilt.map(InternalPath.key))
+    const unbuilt = after.unbuilt.find((at) =>
+      !unbuiltBefore.has(InternalPath.key(at)) ||
+      proposal.paths.some((path) => at.every((step, i) => path[i] === step))
+    )
+    if (unbuilt !== undefined) {
+      return Effect.fail(
         new Authority.Rejected({
-          message: `The document ${when} the change has a class at ${
-            InternalPath.key(path)
-          } whose constructor won't take its fields`
+          message: `The change leaves the class at ${InternalPath.key(unbuilt)} with fields its constructor won't take`
         })
       )
-    if (Result.isFailure(after)) return unbuilt("after", after.failure)
-    if (Result.isFailure(before)) return unbuilt("before", before.failure)
-    return Effect.succeed({ before: before.success as A, after: after.success as A, paths: proposal.paths })
+    }
+    return Effect.succeed({ before: before.value as A, after: after.value as A, paths: proposal.paths })
   }))
 
 const existsIn = (paths: ReadonlyArray<Replica.Path>): (path: Replica.Path) => boolean => {
