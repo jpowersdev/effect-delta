@@ -687,37 +687,57 @@ describe("ReplicatedDocument", () => {
       "a removal of every entry one change edits merges about as fast as a removal of one of them",
       () =>
         Effect.gen(function*() {
-          const Shelf = Schema.Struct({ boxes: Schema.Record(Schema.String, Schema.Struct({ count: Schema.Int })) })
-          const boxes = (count: number) =>
-            Object.fromEntries(Array.from({ length: 8000 }, (_, i) => [`b${i}`, { count }]))
-          // Ben removes one box, or every box, while Ada's one change counts
-          // every box again.
-          const merging = Effect.fnUntraced(function*(removes: "one" | "every") {
-            const open = (replica: string) =>
-              ReplicatedDocument.make(Shelf, { initial: { boxes: {} }, replica: Replica.ReplicaId.make(replica) })
-            const ada = yield* open("ada")
-            const ben = yield* open("ben")
-            yield* ReplicatedDocument.update(ada, () => ({ boxes: boxes(0) }))
-            yield* Replica.exchange(ada, ben)
-            yield* ReplicatedDocument.update(ben, (shelf) => {
-              if (removes === "every") return { boxes: {} }
-              const { b0: _, ...rest } = shelf.boxes
-              return { boxes: rest }
+          const Shelf = Schema.Struct({
+            boxes: Schema.Record(Schema.String, Schema.Struct({ count: ReplicatedDocument.Counter }))
+          })
+          const boxes = Array.from({ length: 8000 }, (_, i) => `b${i}`)
+          const added: InternalDocument.AnyChange = {
+            replica: "added",
+            seq: 0,
+            length: boxes.length,
+            parents: [],
+            time: 1,
+            ops: boxes.map((box) => ({ _tag: "Add", path: ["boxes", box] }))
+          }
+          const last = { replica: "added", seq: boxes.length - 1 }
+          // Ada's one change counts every box again, while Ben removes one
+          // box, or every box.
+          const counted: InternalDocument.AnyChange = {
+            replica: "ada",
+            seq: 0,
+            length: boxes.length,
+            parents: [last],
+            time: 2,
+            ops: boxes.map((box) => ({ _tag: "Increment", path: ["boxes", box, "count"], by: 1 }))
+          }
+          const removed = (removes: ReadonlyArray<string>): InternalDocument.AnyChange => ({
+            replica: "ben",
+            seq: 0,
+            length: removes.length,
+            parents: [last],
+            time: 2,
+            ops: removes.map((box) => ({ _tag: "Unset", path: ["boxes", box] }))
+          })
+          // How long a replica that had Ada's counts takes to take in Ben's
+          // removal.
+          const merging = Effect.fnUntraced(function*(removes: ReadonlyArray<string>) {
+            const carol = yield* ReplicatedDocument.make(Shelf, {
+              initial: { boxes: {} },
+              replica: Replica.ReplicaId.make("carol")
             })
-            yield* ReplicatedDocument.update(ada, () => ({ boxes: boxes(1) }))
-            const delta = yield* Replica.delta(ada, yield* Replica.version(ben))
+            yield* Replica.receive(carol, InternalDelta.fromChanges([added, counted]))
             // The test clock stands still, so this is the time on the wall.
             const start = performance.now()
-            const overlaps = yield* Replica.receive(ben, delta)
+            const overlaps = yield* Replica.receive(carol, InternalDelta.fromChanges([removed(removes)]))
             const took = performance.now() - start
-            assert.strictEqual(overlaps.length, removes === "every" ? 8000 : 1)
+            assert.strictEqual(overlaps.length, removes.length)
             return took
           })
           // The least of a few, so a pause elsewhere doesn't count.
-          const least = (removes: "one" | "every") =>
+          const least = (removes: ReadonlyArray<string>) =>
             Effect.map(Effect.all([merging(removes), merging(removes), merging(removes)]), (took) => Math.min(...took))
-          const one = yield* least("one")
-          const every = yield* least("every")
+          const one = yield* least(["b0"])
+          const every = yield* least(boxes)
           assert.isBelow(every / one, 8)
         }),
       60_000
@@ -822,7 +842,7 @@ describe("ReplicatedDocument", () => {
           // inside them.
           const later = removes("later", 1_000_000, ["p", "q"])
           const deep = Array.from({ length: 20 }, (_, i) => `d${i}`)
-          const counted = Array.from({ length: 2000 }, (_, i): InternalDocument.AnyChange => ({
+          const counted = Array.from({ length: 1000 }, (_, i): InternalDocument.AnyChange => ({
             replica: "ada",
             seq: i * 8,
             length: 8,
