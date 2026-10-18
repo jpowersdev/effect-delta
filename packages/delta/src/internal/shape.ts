@@ -1010,8 +1010,9 @@ const planAt = (
           readAt(field.shape, documentAt(document, fieldPath), undefined, memo) === Missing
         ) {
           shownValue ??= readAt(shape, documentAt(document, path), undefined, memo)
+          // Comparing recurses into it, deeper than encoding would let it be.
           if (
-            shownValue !== Missing &&
+            shownValue !== Missing && !InternalDocument.nestsTooDeep(fieldAfter as Schema.Json) &&
             field.shape.equivalence((shownValue as Record<string, unknown>)[field.name], fieldAfter)
           ) continue
         }
@@ -1253,6 +1254,8 @@ const planValues = (
   memo: Memo
 ): void => {
   const item = shape.item as Value
+  // Comparing recurses into them, deeper than encoding would let them be.
+  if (after.some((value) => InternalDocument.nestsTooDeep(value as Schema.Json))) throw tooDeep()
   const before: Array<{ readonly name: string; readonly value: unknown }> = []
   for (const name of InternalDocument.itemsAt(document, path)) {
     const value = readAt(item, documentAt(document, [...path, name]), undefined, memo)
