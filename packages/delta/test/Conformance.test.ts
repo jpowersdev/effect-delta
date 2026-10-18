@@ -87,7 +87,10 @@ const apply = (state: TreeText.State, history: History.History<TreeText.Op>, cha
   History.record(history, change, past)
 }
 
-describe("conformance with Eg-walker", () => {
+// The tests in this file are heavy, so they run one at a time: side by side on
+// one thread, each would take about as long as all of them together.
+
+describe("conformance with Eg-walker", { concurrent: false }, () => {
   it("tree text matches the reference for every case", () => {
     for (const [index, { endContent, txns }] of (cases as ReadonlyArray<Case>).entries()) {
       const state = TreeText.make()

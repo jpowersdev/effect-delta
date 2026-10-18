@@ -60,7 +60,10 @@ const toChanges = (transactions: ReadonlyArray<Transaction>): Array<Change<Repla
 const makeReplay = (replica: string) =>
   ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
 
-describe("conformance with Eg-walker", () => {
+// The tests in this file are heavy, so they run one at a time: side by side on
+// one thread, each would take about as long as all of them together.
+
+describe("conformance with Eg-walker", { concurrent: false }, () => {
   it.effect("replay text matches the reference for every case", () =>
     Effect.gen(function*() {
       for (const [index, { endContent, txns }] of (cases as ReadonlyArray<Case>).entries()) {
@@ -89,7 +92,7 @@ describe("conformance with Eg-walker", () => {
 // every step each pair must show the same text, every merge must report the
 // same overlaps, and anchors must be the same and land in the same places.
 
-describe("replay against tree", () => {
+describe("replay against tree", { concurrent: false }, () => {
   it.effect("an overlap where both removed the same words", () =>
     Effect.gen(function*() {
       const overlaps = yield* Effect.forEach(["tree", "replay"] as const, (strategy) =>
@@ -194,7 +197,7 @@ describe("replay against tree", () => {
 // Random document sessions, run on tree documents and replay documents side by
 // side.
 
-describe("replay against tree, for documents", () => {
+describe("replay against tree, for documents", { concurrent: false }, () => {
   it.effect.prop(
     "every step gives the same value and overlaps",
     { session: DocumentSession },

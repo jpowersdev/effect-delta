@@ -105,7 +105,10 @@ const run = Effect.fnUntraced(function*(strategy: Replica.Strategy, session: typ
   return replicas
 })
 
-describe.each(["tree", "replay"] as const)("convergence (%s)", (strategy) => {
+// The tests in this file are heavy, so they run one at a time: side by side on
+// one thread, each would take about as long as all of them together.
+
+describe.each(["tree", "replay"] as const)("convergence (%s)", { concurrent: false }, (strategy) => {
   it.effect.prop(
     "replicas that have exchanged everything show the same text",
     { session: Session },
@@ -161,7 +164,7 @@ describe.each(["tree", "replay"] as const)("convergence (%s)", (strategy) => {
 
 // The interleaving cases from "The Art of the Fugue": two people typing at the
 // same spot without seeing each other must each get a contiguous passage.
-describe.each(["tree", "replay"] as const)("non-interleaving (%s)", (strategy) => {
+describe.each(["tree", "replay"] as const)("non-interleaving (%s)", { concurrent: false }, (strategy) => {
   const typeForward = Effect.fnUntraced(function*(replica: ReplicatedText.ReplicatedText, at: number, text: string) {
     for (let i = 0; i < text.length; i++) yield* ReplicatedText.insert(replica, at + i, text[i]!)
   })
@@ -217,7 +220,7 @@ describe.each(["tree", "replay"] as const)("non-interleaving (%s)", (strategy) =
 
 // The same, for documents, over a schema that uses every merge rule.
 
-describe.each(["tree", "replay"] as const)("document convergence (%s)", (strategy) => {
+describe.each(["tree", "replay"] as const)("document convergence (%s)", { concurrent: false }, (strategy) => {
   it.effect.prop(
     "replicas that have exchanged everything show the same value",
     { session: DocumentSession },
@@ -371,7 +374,7 @@ const everything = { start: { _tag: "Start" }, end: { _tag: "End" } } as const
 
 const textOps = new Set(["Insert", "Remove", "InsertAt", "RemoveAt"])
 
-describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => {
+describe.each(["tree", "replay"] as const)("forged changes (%s)", { concurrent: false }, (strategy) => {
   const make = (replica: string) =>
     ReplicatedDocument.make(Project, { initial: initialProject, strategy, replica: Replica.ReplicaId.make(replica) })
   const view = Effect.fnUntraced(function*(doc: ReplicatedDocument.ReplicatedDocument<Project>) {
@@ -635,7 +638,7 @@ describe.each(["tree", "replay"] as const)("forged changes (%s)", (strategy) => 
 // among changes a client of the newer one makes directly, which they take
 // only when an authority on the newer one lets them through.
 
-describe("schema versions", () => {
+describe("schema versions", { concurrent: false }, () => {
   // What a value shows at `path`, as JSON. List items are found by their `id`.
   const shownAt = (value: unknown, path: ReadonlyArray<string>): string | undefined =>
     JSON.stringify(partAt(value, path))
