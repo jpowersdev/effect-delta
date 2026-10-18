@@ -314,6 +314,56 @@ describe("merge time", { concurrent: false }, () => {
   )
 
   it.effect(
+    "writes of a value that meet another merge about as fast however often it was written before",
+    () =>
+      Effect.gen(function*() {
+        const Status = Schema.Struct({ updatedAt: Schema.Number })
+        // Ada writes the value again and again, each time on top of the last.
+        const written = (times: number) =>
+          Array.from({ length: times }, (_, i): InternalDocument.AnyChange => ({
+            replica: "ada",
+            seq: i,
+            length: 1,
+            parents: i === 0 ? [] : [{ replica: "ada", seq: i - 1 }],
+            time: 1 + i,
+            ops: [{ _tag: "Set", path: ["updatedAt"], value: i }]
+          }))
+        // Ben writes it as often, starting on top of all but her last write,
+        // so each of his meets that one.
+        const meeting = (times: number) =>
+          Array.from({ length: 200 }, (_, i): InternalDocument.AnyChange => ({
+            replica: "ben",
+            seq: i,
+            length: 1,
+            parents: [i === 0 ? { replica: "ada", seq: times - 2 } : { replica: "ben", seq: i - 1 }],
+            time: times + 1 + i,
+            ops: [{ _tag: "Set", path: ["updatedAt"], value: -1 - i }]
+          }))
+        // How long a replica with Ada's writes takes in Ben's.
+        const merging = Effect.fnUntraced(function*(times: number) {
+          const carol = yield* ReplicatedDocument.make(Status, {
+            initial: { updatedAt: 0 },
+            replica: Replica.ReplicaId.make("carol")
+          })
+          yield* Replica.receive(carol, InternalDelta.fromChanges(written(times)))
+          // The test clock stands still, so this is the time on the wall.
+          const start = performance.now()
+          const overlaps = yield* Replica.receive(carol, InternalDelta.fromChanges(meeting(times)))
+          const took = performance.now() - start
+          assert.deepStrictEqual(overlaps.map(({ _tag }) => _tag), ["Value"])
+          return took
+        })
+        // The least of a few, so a pause elsewhere doesn't count.
+        const least = (times: number) =>
+          Effect.map(Effect.all([merging(times), merging(times), merging(times)]), (took) => Math.min(...took))
+        const seldom = yield* least(250)
+        const often = yield* least(8000)
+        assert.isBelow(often / seldom, 8)
+      }),
+    60_000
+  )
+
+  it.effect(
     "a change that starts a text merges about as fast as one that edits a text, however long the history",
     () =>
       Effect.gen(function*() {
