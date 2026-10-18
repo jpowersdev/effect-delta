@@ -541,6 +541,14 @@ class Rejected extends Schema.TaggedError<Rejected>()("Rejected", { message: Sch
   someone else is `Forbidden`. So a client can't forge another user's edits. A connection uploads only
   its own changes; other devices upload theirs.
 
+**Relays trust their clients; put an authority in front of untrusted ones.** A relay refuses what's
+malformed or stamped far ahead of its clock, so a forged change can't crash it, stop it, or leave the
+replicas it serves showing different values. Past that, it takes a client's changes as they come. A client
+that forges well-formed changes, claiming to have seen changes it hadn't, can make overlaps misleading or
+make relays that heard different pushes disagree about one. An authority checks every change before anyone
+sees it, so it's the boundary for clients you don't trust. Peers that exchange directly trust each other
+the same way.
+
 **Rejection.** The authority checks a push's changes in order and accepts the longest acceptable prefix,
 answering `Rejected` with what it accepted and the reason.
 The confirmed replica:
@@ -655,6 +663,9 @@ All accepted 2026-10-15.
     contract. A multi-region diff can come later as a separate function.
 15. **`TextPatch` mirrors `JsonPatch`**, and instances use PascalCase (`TextPatch.Differ`,
     `Delta.ReducerUnion`), as `Number.ReducerSum` does.
+16. **Relays trust their clients; authorities are the boundary for untrusted ones** (accepted 2026-10-17).
+    Relays refuse what's malformed, so forged changes can't crash them or split replicas, but they don't
+    check what a well-formed change claims.
 
 ## Changed while building
 

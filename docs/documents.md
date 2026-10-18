@@ -479,7 +479,8 @@ because nothing is lost.
 
 - `Replica.exchange`, `Replica.receive`, `Relay.connect` and `HistoryStore.persist` take documents as they
   are.
-- **Relays** need nothing new. They don't need the schema.
+- **Relays** need nothing new. They don't need the schema, and they trust their clients as they do for
+  texts: an authority is the boundary for clients you don't trust.
 - **Authorities** check each change, as now. `Authority.Proposal` becomes a union. A `DocumentProposal` has
   the document before and after the change as JSON (only the parts that have been written), which entries,
   items and optional fields exist in each, the paths the change touched, and the change itself. `ReplicatedDocument.readProposal` reads them with the app's schema
