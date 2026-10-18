@@ -34,6 +34,8 @@ const open = Effect.gen(function*() {
   return laptop
 })
 
+// Nothing else edits the text meanwhile, so the end it reads is still the end
+// when it inserts there.
 const append = (text: ReplicatedText.Editable, more: string) =>
   Effect.flatMap(ReplicatedText.get(text), (current) => ReplicatedText.insert(text, current.length, more))
 

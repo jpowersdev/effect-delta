@@ -454,8 +454,8 @@ is read as `0`.
 `update`, `get`, `changes`, `subscribe` and the anchor functions. A `ReplicatedText` is an `Editable` that is
 also a replica. Editors should edit text fields through the handle, which says exactly what the user did;
 `update` on the whole document has to diff. A handle on an entry that doesn't exist, or was removed, still
-works: its text is kept (see [Entries](#entries)). The path is typed to string fields, and a path that isn't
-a text field is a defect.
+works: its text is kept (see [Entries](#entries)). The path is typed to string fields up to 16 steps deep (a
+deeper text field needs a cast), and a path that isn't a text field is a defect.
 
 **`changes` keeps the identity of unchanged parts.** A new value shares every part that didn't change with the
 previous one, so a UI can skip re-rendering them.
