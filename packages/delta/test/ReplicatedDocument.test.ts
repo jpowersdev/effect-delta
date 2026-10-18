@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, Stream } from "effect"
+import { Cause, Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, SchemaGetter, Stream } from "effect"
 import { Delta, HistoryStore, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
@@ -159,6 +159,32 @@ describe("ReplicatedDocument", () => {
       }
       return refuses(Nested, start, "nested more than 64 deep")
     })
+
+    it.effect("refuses a value with no JSON form, which no update could write", () =>
+      Effect.gen(function*() {
+        // Written as its type's JSON, which a declaration without a JSON
+        // codec, such as an instance of a class, doesn't have.
+        const Url = Schema.String.pipe(Schema.decodeTo(Schema.instanceOf(URL), {
+          decode: SchemaGetter.transform((href: string) => new URL(href)),
+          encode: SchemaGetter.transform((url: URL) => url.href)
+        }))
+        const home = new URL("https://example.com")
+        yield* refuses(Schema.Struct({ home: Url }), { home }, "has no JSON form")
+        yield* refuses(Schema.Struct({ links: Schema.Array(Url) }), { links: [] }, "has no JSON form")
+        yield* refuses(
+          Schema.Struct({ pages: Schema.Record(Schema.String, Schema.Struct({ link: Schema.Option(Url) })) }),
+          { pages: {} },
+          "has no JSON form"
+        )
+        // Those with one, as Effect's own have, are written as it.
+        const Site = Schema.Struct({ home: Schema.URL, since: Schema.Date })
+        const site = yield* ReplicatedDocument.make(Site, {
+          initial: { home, since: new Date(0) },
+          replica: Replica.ReplicaId.make("r")
+        })
+        yield* ReplicatedDocument.update(site, (value) => ({ ...value, home: new URL("https://example.org") }))
+        assert.strictEqual((yield* ReplicatedDocument.get(site)).home.href, "https://example.org/")
+      }))
 
     it.effect("refuses an initial value that doesn't fit, or writes texts, entries or optional fields", () =>
       Effect.gen(function*() {
