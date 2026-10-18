@@ -332,15 +332,64 @@ interface Run<W> {
   readonly to: number
 }
 
-// Whether any write in a run is one `is` picks out.
-const anyIn = <W>({ from, to, writes }: Run<W>, is: (write: W) => boolean): boolean => {
-  for (let i = from; i < to; i++) if (is(writes[i]!)) return true
-  return false
-}
-
 // How many writes in a run say the part doesn't exist.
 const removalsIn = ({ from, to, writes }: Run<PresenceWrite>): number =>
   writes[to - 1]!.removals - (from === 0 ? 0 : writes[from - 1]!.removals)
+
+// Whether a value in a run reads as different from `json`, which the replica
+// reads. Two in it that read differently from each other mean one of them
+// does; otherwise every value in it it reads reads as its latest.
+const differsIn = (reading: Reading, path: Path.Path, run: Run<ValueWrite>, json: Schema.Json): boolean => {
+  const { differs, latest } = valueIndex(reading, path, run.writes, run.to)
+  const last = latest[run.to - 1]!
+  if (last < run.from) return false
+  return differs[run.to - 1]! >= run.from || reading.differ(path, run.writes[last]!.value, json)
+}
+
+// For each of a replica's values at a path: the latest one up to it that the
+// replica reads, and the latest one before that which reads differently from
+// it, or -1. Worked out once per value, as a merge adds it or first asks
+// about it, so a run is never looked through.
+interface ValueIndex {
+  readonly reading: Reading
+  readonly latest: Array<number>
+  readonly differs: Array<number>
+}
+
+const valueIndexes = new WeakMap<ReadonlyArray<ValueWrite>, ValueIndex>()
+
+const valueIndex = (
+  reading: Reading,
+  path: Path.Path,
+  writes: ReadonlyArray<ValueWrite>,
+  to: number
+): ValueIndex => {
+  let index = valueIndexes.get(writes)
+  if (index === undefined || index.reading !== reading) {
+    index = { reading, latest: [], differs: [] }
+    valueIndexes.set(writes, index)
+  }
+  const { differs, latest } = index
+  for (let i = latest.length; i < to; i++) {
+    const previous = i === 0 ? -1 : latest[i - 1]!
+    if (!reading.reads(path, writes[i]!.value)) {
+      latest.push(previous)
+      differs.push(i === 0 ? -1 : differs[i - 1]!)
+      continue
+    }
+    latest.push(i)
+    // What reads differently from the latest before reads differently from
+    // this one too, if they read the same.
+    differs.push(
+      previous < 0
+        ? -1
+        : reading.differ(path, writes[previous]!.value, writes[i]!.value)
+        ? previous
+        : differs[previous]!
+    )
+  }
+  return index
+}
 
 // A value is history: every reader shares it, so nobody may change it in place.
 const freeze = (json: Schema.Json): Schema.Json => {
@@ -351,8 +400,14 @@ const freeze = (json: Schema.Json): Schema.Json => {
   return json
 }
 
-// Adds a write of a kind at `at`, in order. `found` notes it as the merge's.
-const addWrite = <K extends WriteKind>(at: Slot, kind: K, write: WritesOf[K], found: Found | undefined): void => {
+// Adds a write of a kind at `at`, in order, and returns its replica's writes
+// of that kind there. `found` notes it as the merge's.
+const addWrite = <K extends WriteKind>(
+  at: Slot,
+  kind: K,
+  write: WritesOf[K],
+  found: Found | undefined
+): ReadonlyArray<WritesOf[K]> => {
   const writes = at[kind] as Array<WritesOf[K]>
   // After every write it's later than: usually all of them.
   let low = 0
@@ -370,6 +425,7 @@ const addWrite = <K extends WriteKind>(at: Slot, kind: K, write: WritesOf[K], fo
   }
   found?.adding(ofReplica)
   ofReplica.push(write)
+  return ofReplica
 }
 
 // Reading --------------------------------------------------------------------
@@ -1371,17 +1427,14 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
   switch (op._tag) {
     case "Set": {
       const value: ValueWrite = { ...write, value: freeze(op.value) }
-      addWrite(at, "values", value, found)
+      const ofReplica = addWrite(at, "values", value, found)
       if (found !== undefined) {
-        // Only values the replica reads meet, as it reads them.
+        // Only values the replica reads meet, as it reads them. Indexed as
+        // it's added, so what meets it later needn't look through its run.
         const { reading } = found
-        const differing = reading.reads(op.path, value.value)
-          ? metBy(found, at, value, "values").filter((run) =>
-            anyIn(
-              run,
-              (other) => reading.reads(op.path, other.value) && reading.differ(op.path, other.value, value.value)
-            )
-          )
+        const { latest } = valueIndex(reading, op.path, ofReplica, ofReplica.length)
+        const differing = latest[ofReplica.length - 1] === ofReplica.length - 1
+          ? metBy(found, at, value, "values").filter((run) => differsIn(reading, op.path, run, value.value))
           : []
         if (differing.length > 0) {
           found.add(op.path, [value.replica, ...differing.map(({ replica }) => replica)], "value")
