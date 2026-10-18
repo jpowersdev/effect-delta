@@ -1,6 +1,6 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
+import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Schedule, Schema, Stream } from "effect"
 import {
   Authority,
   Delta,
@@ -8,6 +8,7 @@ import {
   Replica,
   ReplicatedDocument,
   ReplicatedText,
+  Sync,
   VersionVector
 } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
@@ -187,6 +188,44 @@ describe("HistoryStore", () => {
       ])
     )
   })
+
+  it.effect("persist saves a confirmed change as confirmed, though the authority's answer was lost", () =>
+    Effect.gen(function*() {
+      const spec = Replica.DocumentId.make("spec")
+      const authority = Context.get(
+        yield* Layer.build(
+          Layer.fresh(Authority.layer({ check: () => Effect.void }).pipe(Layer.provide(HistoryStore.layerMemory)))
+        ),
+        Authority.Authority
+      )
+      // Takes the first change it's pushed, but the answer never arrives.
+      let answered = false
+      const losing = Authority.Authority.of({
+        subscribe: authority.subscribe,
+        push: (request) =>
+          Effect.andThen(authority.push(request), (ack) => {
+            if (answered) return Effect.succeed(ack)
+            answered = true
+            return Effect.fail(new Sync.SyncError({ reason: new Sync.Disconnected({ cause: "lost" }) }))
+          })
+      })
+      yield* Effect.scoped(Effect.gen(function*() {
+        const text = yield* ReplicatedText.makeConfirmed({ document: spec, retry: Schedule.forever })
+        yield* HistoryStore.persist(text, spec)
+        yield* ReplicatedText.insert(text, 0, "Hello")
+        // Reconnected, it learns the authority has it.
+        yield* Stream.runHead(Stream.filter(text.connection.unconfirmed, (count) => count === 0))
+      })).pipe(Effect.provideService(Authority.Authority, losing))
+      const store = yield* HistoryStore.HistoryStore
+      const stored = Option.getOrThrow(yield* store.load(spec))
+      assert.deepStrictEqual(
+        [...(stored.history as InternalDelta.DeltaImpl).changes.values()].map(({ ops }) => ops.length),
+        [1]
+      )
+      assert.isTrue(Delta.isEmpty(stored.unconfirmed))
+    }).pipe(
+      Effect.provide([HistoryStore.layerMemory, TestCrypto.layer("store").pipe(Layer.provide(NodeCrypto.layer))])
+    ))
 
   it.effect("persist keeps a document across restarts, in either store", () =>
     Effect.forEach([
