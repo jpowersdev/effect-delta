@@ -2147,6 +2147,54 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual((yield* ReplicatedDocument.get(notes)).data, nested(128))
       }))
 
+    it.effect("an update fails for a value nested too deep in a list of values, or in a field showing its default", () =>
+      Effect.gen(function*() {
+        const nested = (depth: number) => {
+          let value: Schema.Json = 0
+          for (let i = 0; i < depth; i++) value = [value]
+          return value
+        }
+        const Notes = Schema.Struct({ items: ReplicatedDocument.List(Schema.Json) })
+        const notes = yield* ReplicatedDocument.make(Notes, {
+          initial: { items: [] },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        yield* ReplicatedDocument.update(notes, () => ({ items: [[1]] }))
+        // Compared with what's there, it's nested as deep as comparing can go.
+        for (const items of [[nested(8000)], [nested(8000), [1]], [[1], nested(129)]]) {
+          const failed = yield* Effect.flip(ReplicatedDocument.update(notes, () => ({ items })))
+          assert.include(failed.message, "nested more than 128 deep")
+        }
+        assert.deepStrictEqual((yield* ReplicatedDocument.get(notes)).items, [[1]])
+
+        // An entry an older schema added shows a newer one's default.
+        const Entry = Schema.Struct({ name: Schema.String })
+        const EntryV2 = Schema.Struct({
+          ...Entry.fields,
+          data: Schema.Array(Schema.Json).pipe(Schema.withConstructorDefault(Effect.succeed([])))
+        })
+        const old = yield* ReplicatedDocument.make(Schema.Struct({ entries: Schema.Record(Schema.String, Entry) }), {
+          initial: { entries: {} },
+          replica: Replica.ReplicaId.make("old")
+        })
+        const updated = yield* ReplicatedDocument.make(
+          Schema.Struct({ entries: Schema.Record(Schema.String, EntryV2) }),
+          {
+            initial: { entries: {} },
+            replica: Replica.ReplicaId.make("new")
+          }
+        )
+        yield* ReplicatedDocument.update(old, () => ({ entries: { e: { name: "e" } } }))
+        yield* Replica.exchange(old, updated)
+        const failed = yield* Effect.flip(
+          ReplicatedDocument.update(
+            updated,
+            () => ({ entries: { e: { name: "e", data: nested(8000) as ReadonlyArray<Schema.Json> } } })
+          )
+        )
+        assert.include(failed.message, "nested more than 128 deep")
+      }))
+
     it.effect("a change that takes no sequence numbers is refused whenever it arrives", () => {
       const first: InternalDocument.AnyChange = {
         replica: "mallory",
