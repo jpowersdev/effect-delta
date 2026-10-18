@@ -520,9 +520,9 @@ Nothing has been released, so the format stays 1. None of these changes how a te
    [Known limits](#known-limits)).
 6. **`HistoryStore.Snapshot` holds texts by path.**
 7. **Receivers handle bad changes as documents need.** A delta with a malformed change still applies the
-   changes that don't need it; a change dropped as malformed is remembered, so a different change under its
-   key is `ReplicaIdReused`; and relays send subscribers a change that waits only once what it builds on is
-   there.
+   changes that don't need it; a change dropped as malformed is remembered while the receiver is open, so a
+   different change under its key is `ReplicaIdReused`; and relays send subscribers a change that waits only
+   once what it builds on is there.
 
 ## Decisions
 
