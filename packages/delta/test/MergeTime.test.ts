@@ -364,6 +364,90 @@ describe("merge time", { concurrent: false }, () => {
   )
 
   it.effect(
+    "edits and moves inside a part merge about as fast however many times it was removed that they hadn't seen",
+    () =>
+      Effect.gen(function*() {
+        const Board = Schema.Struct({
+          boxes: Schema.Record(Schema.String, Schema.Struct({ count: ReplicatedDocument.Counter })),
+          tasks: ReplicatedDocument.List(Schema.Struct({ id: Schema.String }), { key: "id" })
+        })
+        const added: InternalDocument.AnyChange = {
+          replica: "added",
+          seq: 0,
+          length: 4,
+          parents: [],
+          time: 1,
+          ops: [
+            { _tag: "Add", path: ["boxes", "p"] },
+            { _tag: "Add", path: ["tasks", "t"] },
+            { _tag: "Set", path: ["tasks", "t", "id"], value: "t" },
+            { _tag: "Place", path: ["tasks", "t"], parent: null, side: "R", rightOrigin: null }
+          ]
+        }
+        // Ben, offline, removes the box and the task and adds them back, again
+        // and again, ending with them removed.
+        const toggled = (times: number) =>
+          Array.from({ length: 2 * times }, (_, i): InternalDocument.AnyChange => {
+            const _tag = i % 2 === 0 ? "Add" : "Unset"
+            return {
+              replica: "ben",
+              seq: 2 * i,
+              length: 2,
+              parents: [i === 0 ? { replica: "added", seq: 3 } : { replica: "ben", seq: 2 * i - 1 }],
+              time: 2 + i,
+              ops: [{ _tag, path: ["boxes", "p"] }, { _tag, path: ["tasks", "t"] }]
+            }
+          })
+        // Ada, offline too, counts in the box and moves the task, many times.
+        const edited = Array.from({ length: 1000 }, (_, i): InternalDocument.AnyChange => ({
+          replica: "ada",
+          seq: 2 * i,
+          length: 2,
+          parents: [i === 0 ? { replica: "added", seq: 3 } : { replica: "ada", seq: 2 * i - 1 }],
+          time: 2 + i,
+          ops: [
+            { _tag: "Increment", path: ["boxes", "p", "count"], by: 1 },
+            { _tag: "Place", path: ["tasks", "t"], parent: null, side: "R", rightOrigin: null }
+          ]
+        }))
+        // How long a replica with Ben's toggles takes in Ada's edits, and one
+        // with Ada's edits takes in Ben's toggles.
+        const merging = Effect.fnUntraced(function*(times: number) {
+          const open = (replica: string) =>
+            ReplicatedDocument.make(Board, {
+              initial: { boxes: {}, tasks: [] },
+              replica: Replica.ReplicaId.make(replica)
+            })
+          const carol = yield* open("carol")
+          const dan = yield* open("dan")
+          yield* Replica.receive(carol, InternalDelta.fromChanges([added, ...toggled(times)]))
+          yield* Replica.receive(dan, InternalDelta.fromChanges([added, ...edited]))
+          // The test clock stands still, so this is the time on the wall.
+          const start = performance.now()
+          const met = [
+            ...yield* Replica.receive(carol, InternalDelta.fromChanges(edited)),
+            ...yield* Replica.receive(dan, InternalDelta.fromChanges(toggled(times)))
+          ]
+          const took = performance.now() - start
+          assert.deepStrictEqual(met.map(({ _tag }) => _tag).filter((tag) => tag === "Removed"), [
+            "Removed",
+            "Removed",
+            "Removed",
+            "Removed"
+          ])
+          return took
+        })
+        // The least of a few, so a pause elsewhere doesn't count.
+        const least = (times: number) =>
+          Effect.map(Effect.all([merging(times), merging(times), merging(times)]), (took) => Math.min(...took))
+        const few = yield* least(25)
+        const many = yield* least(400)
+        assert.isBelow(many / few, 8)
+      }),
+    60_000
+  )
+
+  it.effect(
     "a change that starts a text merges about as fast as one that edits a text, however long the history",
     () =>
       Effect.gen(function*() {
