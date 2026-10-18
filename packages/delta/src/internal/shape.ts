@@ -430,6 +430,8 @@ export const at = (
         presence = "entry"
         break
       case "List":
+        // An item's key, which a path given in memory may not have as a string.
+        if (!Predicate.isString(segment)) return `whose item key ${String(segment)} isn't a string`
         current = current.item
         presence = "item"
         break
