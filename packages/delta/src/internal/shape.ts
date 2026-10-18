@@ -337,6 +337,20 @@ const asJson = Schema.decodeUnknownResult(Schema.Json)
 const shallowEnough = (json: Schema.Json): Result.Result<Schema.Json, Schema.SchemaError> =>
   InternalDocument.nestsTooDeep(json) ? Result.fail(tooDeep()) : Result.succeed(json)
 
+// Whether a part shows the value an update gives it, as the part's
+// equivalence says. Comparing recurses into them, and a value nested deeper
+// than the stack goes, as it can be inside an `Option` or a class, where
+// looking for values nested too deep doesn't go, counts as another: writing
+// it then fails, as encoding finds it nested too deep.
+const sameValue = (shape: Value, shown: unknown, given: unknown): boolean => {
+  try {
+    return shape.equivalence(shown, given)
+  } catch (error) {
+    if (error instanceof RangeError) return false
+    throw error
+  }
+}
+
 const tooDeep = () =>
   new Schema.SchemaError(
     new SchemaIssue.InvalidValue({
@@ -975,7 +989,7 @@ const planAt = (
         if (before === after) return
         // Comparing recurses into it, deeper than encoding would let it be.
         if (InternalDocument.nestsTooDeep(after as Schema.Json)) throw tooDeep()
-        if (before !== Missing && shape.equivalence(before, after)) return
+        if (before !== Missing && sameValue(shape, before, after)) return
       }
       intents.push({ _tag: "Set", path, value: Result.getOrThrow(shape.encode(after)) })
       return
@@ -1013,7 +1027,7 @@ const planAt = (
           // Comparing recurses into it, deeper than encoding would let it be.
           if (
             shownValue !== Missing && !InternalDocument.nestsTooDeep(fieldAfter as Schema.Json) &&
-            field.shape.equivalence((shownValue as Record<string, unknown>)[field.name], fieldAfter)
+            sameValue(field.shape, (shownValue as Record<string, unknown>)[field.name], fieldAfter)
           ) continue
         }
         planField(field, document, fieldPath, after as Record<string, unknown>, initial, intents, memo)
@@ -1263,7 +1277,7 @@ const planValues = (
   }
   // Values that stay are matched in order; a changed value is a removal and an
   // insert.
-  const matches = longestCommonBy(before, after, (a, b) => item.equivalence(a.value, b))
+  const matches = longestCommonBy(before, after, (a, b) => sameValue(item, a.value, b))
   const matched = new Map(matches.map(([i, j]) => [j, before[i]!.name]))
   const kept = new Set(matches.map(([i]) => i))
   for (const [i, { name }] of before.entries()) {
