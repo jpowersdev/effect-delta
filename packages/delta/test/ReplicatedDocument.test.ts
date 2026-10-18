@@ -2407,6 +2407,49 @@ describe("ReplicatedDocument", () => {
       })
     })
 
+    it.effect("a change taking sequence numbers another of its replica's took is dropped however it arrives", () =>
+      Effect.gen(function*() {
+        const set = (value: string): InternalDocument.Op => ({ _tag: "Set", path: ["status"], value })
+        // Two changes of Mallory's that both take sequence number 1.
+        const both: InternalDocument.AnyChange = {
+          replica: "mallory",
+          seq: 0,
+          length: 2,
+          parents: [],
+          time: 1,
+          ops: [set("draft"), set("review")]
+        }
+        const inside: InternalDocument.AnyChange = { ...both, seq: 1, length: 1, ops: [set("approved")] }
+        // Another change under the same key, and Ben's vote with it.
+        const other: InternalDocument.AnyChange = { ...inside, ops: [set("review")] }
+        const vote: InternalDocument.AnyChange = {
+          replica: "ben",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 5,
+          ops: [{ _tag: "Increment", path: ["votes"], by: 1 }]
+        }
+        const together = yield* make("together")
+        const apart = yield* make("apart")
+        const receiving = (replica: typeof together, changes: ReadonlyArray<InternalDocument.AnyChange>) =>
+          Effect.flip(Replica.receive(replica, InternalDelta.fromChanges(changes)))
+        malformed(yield* receiving(together, [both, inside]), "takes sequence numbers")
+        yield* Replica.receive(apart, InternalDelta.fromChanges([both]))
+        malformed(yield* receiving(apart, [inside]), "takes sequence numbers")
+        // Each refuses another change under its key, whole, and sends on the same.
+        for (const replica of [together, apart]) {
+          assert.strictEqual((yield* receiving(replica, [other, vote])).reason._tag, "ReplicaIdReused")
+        }
+        yield* converged(together, apart)
+        const sent = (replica: typeof together) =>
+          Effect.map(
+            Replica.delta(replica, VersionVector.empty),
+            (delta) => [...(delta as InternalDelta.DeltaImpl).changes.keys()]
+          )
+        assert.deepStrictEqual(yield* sent(together), yield* sent(apart))
+      }))
+
     it.effect("a change that names a parent before any change is refused, and the rest still apply", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
