@@ -170,7 +170,7 @@ const updateImpl = <A>(self: ReplicatedDocument<A>, f: (value: A) => A) => {
   const { engine, initial, memo, shape, validate } = impl(self)
   return InternalEngine.edit(engine, (document) => {
     const value = f(engine.model.read(document) as A)
-    return Result.flatMap(validate(value), () => InternalShape.plan(shape, document, value, initial, memo))
+    return InternalShape.plan(shape, document, value, initial, memo, validate)
   })
 }
 

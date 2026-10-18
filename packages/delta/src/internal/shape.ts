@@ -932,8 +932,9 @@ const share = (memo: Memo, path: Path.Path, parts: ReadonlyArray<unknown>, build
 // Writing --------------------------------------------------------------------
 
 /**
- * Works out the writes that turn the document into `value`, comparing it part
- * by part with what's there. Fails if a value doesn't encode.
+ * Works out the writes that turn the document into `value`, once `validate`
+ * takes it, comparing it part by part with what's there. Fails if a value
+ * doesn't encode, or is nested deeper than a change can write.
  *
  * @internal
  */
@@ -942,16 +943,48 @@ export const plan = (
   document: InternalDocument.Document,
   value: unknown,
   initial: unknown,
-  memo: Memo
+  memo: Memo,
+  validate: (value: unknown) => Result.Result<unknown, Schema.SchemaError>
 ): Result.Result<ReadonlyArray<InternalDocument.Intent>, Schema.SchemaError> => {
   const intents: Array<InternalDocument.Intent> = []
   try {
+    const valid = validate(value)
+    if (Result.isFailure(valid)) return Result.fail(valid.failure)
     planAt(shape, document, Path.root, value, { value: initial }, false, intents, memo)
   } catch (error) {
     if (Schema.isSchemaError(error)) return Result.fail(error)
+    // Validating and encoding recurse into a value as its schema does, so
+    // one nested deeper than the stack goes, as a recursive schema's can be,
+    // takes more stack than there is.
+    if (nestsDeeperThanWritable(value)) return Result.fail(tooDeep())
     throw error
   }
   return Result.succeed(intents)
+}
+
+// Whether a value nests deeper than any document can be written: as deep as
+// its parts go, and the deepest value written whole in one. Worked out
+// without recursing, looking into every object's own values, and a map's or
+// a set's, as checking it with a schema can; what refers to itself nests
+// without end.
+const nestsDeeperThanWritable = (value: unknown): boolean => {
+  const most = InternalDocument.maxDepth + InternalDocument.maxValueDepth
+  // How deep each object was found, so one found deeper is looked into again.
+  const deepest = new Map<object, number>()
+  const pending: Array<readonly [unknown, number]> = [[value, 1]]
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [part, depth] = next
+    if (typeof part !== "object" || part === null || (deepest.get(part) ?? 0) >= depth) continue
+    if (depth > most) return true
+    deepest.set(part, depth)
+    const parts = part instanceof Map
+      ? [...part.keys(), ...part.values()]
+      : part instanceof Set
+      ? [...part]
+      : Object.values(part)
+    for (const each of parts) pending.push([each, depth + 1])
+  }
+  return false
 }
 
 const planAt = (
