@@ -196,12 +196,14 @@ Anything without its own rule is written and replaced whole.
   schema, as a defect. Rules like these belong in an authority's check, which sees every change before anyone
   else does. A class's constructor that throws for some values of its fields is such a check, one `make`
   can't see: an entry, item or optional field holding one is left out. A class that's always there can't be,
-  so it shows as it was after the latest write to its values that its constructor took (or as `initial` has
-  it): its values' writes are taken back, latest first, until it builds. That depends only on the writes, so
-  every replica that has them shows the same, and merges, syncing and reloading go on. An `update` that
-  leaves it as it shows doesn't write it, so the writes it doesn't show stay; one that changes a value in it
-  writes all its values as given, so it shows them. `readProposal` rejects a change that leaves one so,
-  because the JSON it reads has only each value's latest write.
+  so it shows as it was after the latest write to its values that its constructor took: its values' writes
+  are taken back, latest first, until it builds. That depends only on the writes, so every replica that has
+  them shows the same, and merges, syncing and reloading go on. An `update` that leaves it as it shows
+  doesn't write it, so the writes it doesn't show stay; one that changes a value in it writes all its values
+  as given, so it shows them. If no values make it build, because of what's in its texts, counters, records
+  or lists, it shows as `initial` has it, and an `update` that changes it fails, since it would write over
+  what doesn't show. `readProposal` rejects a change that leaves a class so, because the JSON it reads has
+  only each value's latest write.
 
 ### The initial value
 

@@ -336,9 +336,12 @@ export const List: {
  * throws for some, as a check would, is a check `make` can't see: an entry,
  * item or optional field holding such values is left out. A class that's
  * always there shows as it was after the latest write to its values that its
- * constructor took (or as `initial` has it), on every replica alike, and an
- * update writes its values only if it changes one from what shows, then all
- * of them, as given. `readProposal` rejects a change that leaves one so.
+ * constructor took, on every replica alike, and an update writes its values
+ * only if it changes one from what shows, then all of them, as given. If no
+ * values make it build, because of what's in its texts, counters, records or
+ * lists, it shows as `initial` has it, and an update that changes it fails:
+ * it would write over what doesn't show. `readProposal` rejects a change that
+ * leaves a class so.
  *
  * **Example** (Two copies of a document)
  *

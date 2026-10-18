@@ -43,6 +43,8 @@ export interface Fields {
    * constructor defaults filled in. Undefined for a struct without defaults.
    */
   readonly make: ((fields: object) => unknown) | undefined
+  /** Where `make` is defined: whether two of its values are the same. */
+  readonly equivalence: Equivalence.Equivalence<unknown> | undefined
 }
 
 /** @internal */
@@ -192,13 +194,27 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
     if (ast.checks !== undefined || fields.checks !== undefined) refuse(path, `a class can't have checks: ${onMerged}`)
     // Its fields are all it's made of.
     if (fields.indexSignatures.length > 0) refuse(path, "a class can't have a rest or entries: give them a field each")
-    return { _tag: "Fields", fields: compileFields(fields, path), make: SchemaParser.make(Schema.make(ast)) }
+    const schema = Schema.make<Schema.Codec<unknown>>(ast)
+    return {
+      _tag: "Fields",
+      fields: compileFields(fields, path),
+      make: SchemaParser.make(schema),
+      equivalence: Schema.toEquivalence(schema)
+    }
   }
   if (SchemaAST.isObjects(ast) && ast.indexSignatures.length === 0) {
     if (ast.checks !== undefined) refuse(path, `a struct can't have checks: ${onMerged}`)
     const compiled = compileFields(ast, path)
-    const make = compiled.some(({ hasDefault }) => hasDefault) ? SchemaParser.make(Schema.make(ast)) : undefined
-    return { _tag: "Fields", fields: compiled, make }
+    if (!compiled.some(({ hasDefault }) => hasDefault)) {
+      return { _tag: "Fields", fields: compiled, make: undefined, equivalence: undefined }
+    }
+    const schema = Schema.make<Schema.Codec<unknown>>(ast)
+    return {
+      _tag: "Fields",
+      fields: compiled,
+      make: SchemaParser.make(schema),
+      equivalence: Schema.toEquivalence(schema)
+    }
   }
   if (SchemaAST.isObjects(ast)) {
     // Schema makes a record's literal keys fields.
@@ -979,12 +995,24 @@ const planAt = (
       // What the struct shows, once a field that shows its default needs it.
       let shownValue: unknown
       // A class shown as it was, since its constructor won't take what its
-      // fields hold, is left as it is but for what the update changes from
-      // that: its values all at once, so it shows what it's given, and its
-      // other parts one by one.
+      // fields hold, is left alone unless the update changes it from that.
+      // Then its values are written all at once, so it shows what it's
+      // given; its other parts show what they hold, and are written as they
+      // change. Shown as `initial` has it, what those hold doesn't show, and
+      // writing them would write over it, so it can't be changed.
       const rolledBack = initial !== undefined && shape.make !== undefined
         ? rolledBackAt(shape, document, path, initial, memo)
         : undefined
+      if (rolledBack !== undefined && shape.equivalence!(rolledBack, after)) return
+      if (rolledBack !== undefined && rolledBack === initial!.value) {
+        throw new Schema.SchemaError(
+          new SchemaIssue.InvalidValue({
+            message: `The class at ${
+              Path.key(path)
+            } can't be changed: it shows as the initial value has it, since its constructor won't take what's in it`
+          })
+        )
+      }
       const changesValues = rolledBack !== undefined && shape.fields.some((field) =>
         isValueField(field) &&
         !(field.shape as Value).equivalence(rolledBack[field.name], (after as Record<string, unknown>)[field.name])
@@ -992,12 +1020,7 @@ const planAt = (
       for (const field of shape.fields) {
         const fieldPath = [...path, field.name]
         const fieldAfter = (after as Record<string, unknown>)[field.name]
-        if (
-          rolledBack !== undefined && (isValueField(field)
-            ? !changesValues
-            : Object.is(rolledBack[field.name], fieldAfter) &&
-              Object.hasOwn(rolledBack, field.name) === Object.hasOwn(after as object, field.name))
-        ) continue
+        if (rolledBack !== undefined && isValueField(field) && !changesValues) continue
         // Inside an entry or item, a field that nothing this schema can read
         // was written to shows its default. Left as it shows, it's left
         // unwritten, so it doesn't write over what a newer schema wrote there,
