@@ -698,6 +698,45 @@ describe("Relay", () => {
         assert.deepStrictEqual(yield* Replica.version(phone), { now: 1 })
       }).pipe(Effect.scoped, Effect.provide(Relay.layer.pipe(Layer.provideMerge(HistoryStore.layerMemory)))))
 
+    it.effect("an authority doesn't count what's made on top of a stored change it drops as it loads", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        const authority = yield* Authority.Authority
+        // A store written before receivers refused values nested this deep,
+        // and a change made on top of one.
+        let deep: Schema.Json = "deep"
+        for (let i = 0; i < 129; i++) deep = [deep]
+        yield* store.append(
+          notes,
+          InternalDelta.fromChanges([
+            {
+              replica: "r",
+              seq: 0,
+              length: 1,
+              parents: [],
+              time: 1,
+              ops: [{ _tag: "Set", path: ["status"], value: deep }]
+            },
+            {
+              replica: "s",
+              seq: 0,
+              length: 1,
+              parents: [{ replica: "r", seq: 0 }],
+              time: 2,
+              ops: [{ _tag: "Set", path: ["status"], value: "review" }]
+            }
+          ])
+        )
+        const ack = yield* authority.push({ format: Sync.FORMAT, document: notes, delta: Delta.empty }).pipe(
+          asUser("ada")
+        )
+        assert.deepStrictEqual(ack.confirmed, {})
+      }).pipe(
+        Effect.provide(
+          Authority.layer({ check: () => Effect.void }).pipe(Layer.provideMerge(HistoryStore.layerMemory))
+        )
+      ))
+
     it.effect("syncs replicas on two versions of a schema, which it doesn't need", () =>
       Effect.gen(function*() {
         // The newer version adds a field and a status.

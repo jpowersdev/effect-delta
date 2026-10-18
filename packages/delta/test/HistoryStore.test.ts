@@ -602,23 +602,29 @@ describe("HistoryStore", () => {
     it.effect("reopening from a snapshot drops what receiving would refuse, as reopening without one does", () =>
       Effect.gen(function*() {
         const store = yield* HistoryStore.HistoryStore
-        // A store written before receivers refused values nested this deep.
+        // A store written before receivers refused values nested this deep,
+        // or stamped later than any clock reads.
         let deep: Schema.Json = "deep"
         for (let i = 0; i < 129; i++) deep = [deep]
-        const nested: InternalDocument.AnyChange = {
+        const old = (time: number, value: Schema.Json): InternalDocument.AnyChange => ({
           replica: "old",
           seq: 0,
           length: 1,
           parents: [],
-          time: 1,
-          ops: [{ _tag: "Set", path: ["status"], value: deep }]
+          time,
+          ops: [{ _tag: "Set", path: ["status"], value }]
+        })
+        for (const [i, change] of [old(1, deep), old(9e15, "review")].entries()) {
+          const document = Replica.DocumentId.make(`old-${i}`)
+          yield* store.append(document, InternalDelta.fromChanges([change]))
+          yield* store.setSnapshot(document, { version: { old: 1 }, texts: [] })
+          const reopened = yield* Effect.scoped(Effect.gen(function*() {
+            const doc = yield* makeDoc("session-1", "replay")
+            yield* HistoryStore.persist(doc, document)
+            return { version: yield* Replica.version(doc), status: (yield* ReplicatedDocument.get(doc)).status }
+          }))
+          assert.deepStrictEqual(reopened, { version: {}, status: "draft" })
         }
-        yield* store.append(notes, InternalDelta.fromChanges([nested]))
-        yield* store.setSnapshot(notes, { version: { old: 1 }, texts: [] })
-        const reopened = yield* Effect.scoped(
-          Effect.flatMap(openDoc("session-1", "replay"), (doc) => Replica.version(doc))
-        )
-        assert.deepStrictEqual(reopened, {})
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
     it.effect("a reopened text still merges concurrent edits like a tree", () =>
