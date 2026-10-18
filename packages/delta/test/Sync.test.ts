@@ -1781,6 +1781,14 @@ describe("Authority", () => {
     it.effect("checks changes to a class its constructor no longer takes, but rejects those that write in it", () => {
       // Written while the authority checked with a range that took any ends.
       class AnyRange extends Schema.Class<AnyRange>("Range")({ start: Schema.Int, end: Schema.Int }) {}
+      // A theme filled in by default makes the document a struct with a
+      // constructor, which builds it from the range as it reads it, unlike a
+      // class's.
+      const Themed = Schema.Struct({
+        title: ReplicatedDocument.Text,
+        range: Range,
+        theme: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("light")))
+      })
       const Loose = Schema.Struct({ title: ReplicatedDocument.Text, range: AnyRange })
       const loose = { title: "", range: new AnyRange({ start: 0, end: 10 }) }
       const checking = { strict: false }
@@ -1817,7 +1825,10 @@ describe("Authority", () => {
             proposal._tag === "Text"
               ? Effect.fail(new Authority.Rejected({ message: "Plans aren't texts" }))
               : checking.strict
-              ? Effect.asVoid(ReplicatedDocument.readProposal(proposal, Plan, { initial: plan }))
+              ? Effect.andThen(
+                ReplicatedDocument.readProposal(proposal, Plan, { initial: plan }),
+                ReplicatedDocument.readProposal(proposal, Themed, { initial: { ...plan, theme: "light" } })
+              )
               : Effect.asVoid(ReplicatedDocument.readProposal(proposal, Loose, { initial: loose }))
         }).pipe(Layer.provide(HistoryStore.layerMemory))
       ))

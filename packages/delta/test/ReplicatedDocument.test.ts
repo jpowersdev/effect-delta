@@ -1,5 +1,18 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Cause, Clock, Effect, Exit, Fiber, Option, Scheduler, Schema, SchemaGetter, Stream } from "effect"
+import {
+  BigDecimal,
+  Cause,
+  Chunk,
+  Clock,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Scheduler,
+  Schema,
+  SchemaGetter,
+  Stream
+} from "effect"
 import { Delta, HistoryStore, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
@@ -317,6 +330,25 @@ describe("ReplicatedDocument", () => {
         })
         yield* ReplicatedDocument.update(site, (value) => ({ ...value, home: new URL("https://example.org") }))
         assert.strictEqual((yield* ReplicatedDocument.get(site)).home.href, "https://example.org/")
+      }))
+
+    it.effect("an update writes values whose parts refer to each other, as Effect's own can", () =>
+      Effect.gen(function*() {
+        const Order = Schema.Struct({
+          title: Schema.String,
+          price: Schema.BigDecimal,
+          scores: Schema.Chunk(Schema.Number)
+        })
+        const order = yield* ReplicatedDocument.make(Order, {
+          initial: { title: "", price: BigDecimal.fromNumberUnsafe(0), scores: Chunk.empty() },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        yield* ReplicatedDocument.update(order, (value) => ({ ...value, price: BigDecimal.fromStringUnsafe("12.50") }))
+        // Showing it normalizes it, which leaves it referring to itself.
+        BigDecimal.format((yield* ReplicatedDocument.get(order)).price)
+        yield* ReplicatedDocument.update(order, (value) => ({ ...value, title: "Lunch", scores: Chunk.make(1, 2) }))
+        const { scores, title } = yield* ReplicatedDocument.get(order)
+        assert.deepStrictEqual([title, Chunk.toReadonlyArray(scores)], ["Lunch", [1, 2]])
       }))
 
     it.effect("an update fails for a value whose JSON reads back as another, so a replica shows what it's given", () =>
@@ -1237,14 +1269,23 @@ describe("ReplicatedDocument", () => {
 
     it.effect("an update that leaves a class shown as it was alone writes nothing, however it gives its absent fields", () =>
       Effect.gen(function*() {
+        const Tag = Schema.Struct({ id: Schema.String, note: Schema.optional(Schema.String) })
         class Span extends Schema.Class<Span>("Span")({
           start: Schema.Int,
           end: Schema.Int,
-          note: Schema.optional(Schema.String)
+          note: Schema.optional(Schema.String),
+          tags: ReplicatedDocument.List(Tag, { key: "id" }),
+          notes: Schema.Record(Schema.String, Tag)
         }) {
           // Schema advises against overriding it, for reasons such as this.
           // @effect-diagnostics-next-line overriddenSchemaConstructor:off
-          constructor(fields: { readonly start: number; readonly end: number; readonly note?: string | undefined }) {
+          constructor(fields: {
+            readonly start: number
+            readonly end: number
+            readonly note?: string | undefined
+            readonly tags: ReadonlyArray<typeof Tag.Type>
+            readonly notes: Readonly<Record<string, typeof Tag.Type>>
+          }) {
             if (fields.start > fields.end) throw new Error("A span can't end before it starts")
             super(fields)
           }
@@ -1252,19 +1293,29 @@ describe("ReplicatedDocument", () => {
         const Plan = Schema.Struct({ span: Span })
         const open = (replica: string) =>
           ReplicatedDocument.make(Plan, {
-            initial: { span: new Span({ start: 0, end: 10 }) },
+            initial: { span: new Span({ start: 0, end: 10, tags: [], notes: {} }) },
             replica: Replica.ReplicaId.make(replica)
           })
         const ada = yield* open("ada")
         const ben = yield* open("ben")
+        yield* ReplicatedDocument.update(ada, ({ span }) => ({
+          span: new Span({ ...span, tags: [{ id: "t" }], notes: { n: { id: "n" } } })
+        }))
+        yield* Replica.exchange(ada, ben)
         yield* ReplicatedDocument.update(ada, ({ span }) => ({ span: new Span({ ...span, start: 5 }) }))
         yield* TestClock.adjust("1 second")
         yield* ReplicatedDocument.update(ben, ({ span }) => ({ span: new Span({ ...span, end: 3 }) }))
         yield* Replica.exchange(ada, ben)
-        // The same span, its note given as undefined rather than left out.
+        // The same span, its notes given as undefined rather than left out.
         const before = yield* Replica.version(ada)
         yield* ReplicatedDocument.update(ada, ({ span }) => ({
-          span: new Span({ start: span.start, end: span.end, note: span.note })
+          span: new Span({
+            start: span.start,
+            end: span.end,
+            note: span.note,
+            tags: span.tags.map((tag) => ({ id: tag.id, note: tag.note })),
+            notes: Object.fromEntries(Object.entries(span.notes).map(([k, tag]) => [k, { id: tag.id, note: tag.note }]))
+          })
         }))
         assert.deepStrictEqual(yield* Replica.version(ada), before)
       }))
