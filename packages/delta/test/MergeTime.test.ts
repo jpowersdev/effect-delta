@@ -448,6 +448,60 @@ describe("merge time", { concurrent: false }, () => {
   )
 
   it.effect(
+    "moves of an item merge about as fast however many times it was moved before",
+    () =>
+      Effect.gen(function*() {
+        const Board = Schema.Struct({
+          tasks: ReplicatedDocument.List(Schema.Struct({ id: Schema.String }), { key: "id" })
+        })
+        const added: InternalDocument.AnyChange = {
+          replica: "added",
+          seq: 0,
+          length: 3,
+          parents: [],
+          time: 1,
+          ops: [
+            { _tag: "Add", path: ["tasks", "t"] },
+            { _tag: "Set", path: ["tasks", "t", "id"], value: "t" },
+            { _tag: "Place", path: ["tasks", "t"], parent: null, side: "R", rightOrigin: null }
+          ]
+        }
+        // Ada moves the task to the top again and again.
+        const moves = (from: number, count: number) =>
+          Array.from({ length: count }, (_, i): InternalDocument.AnyChange => ({
+            replica: "ada",
+            seq: from + i,
+            length: 1,
+            parents: [from + i === 0 ? { replica: "added", seq: 2 } : { replica: "ada", seq: from + i - 1 }],
+            time: 2 + from + i,
+            ops: [{ _tag: "Place", path: ["tasks", "t"], parent: null, side: "R", rightOrigin: null }]
+          }))
+        // How long a replica that had seen it moved that often takes in a few
+        // more moves.
+        const merging = Effect.fnUntraced(function*(before: number) {
+          const carol = yield* ReplicatedDocument.make(Board, {
+            initial: { tasks: [] },
+            replica: Replica.ReplicaId.make("carol")
+          })
+          yield* Replica.receive(carol, InternalDelta.fromChanges([added, ...moves(0, before)]))
+          // The test clock stands still, so this is the time on the wall.
+          const start = performance.now()
+          yield* Replica.receive(carol, InternalDelta.fromChanges(moves(before, 200)))
+          const took = performance.now() - start
+          assert.deepStrictEqual(yield* ReplicatedDocument.get(carol), { tasks: [{ id: "t" }] })
+          return took
+        })
+        // The least of a few, so a pause elsewhere doesn't count.
+        const least = (before: number) =>
+          Effect.map(Effect.all([merging(before), merging(before), merging(before)]), (took) => Math.min(...took))
+        const seldom = yield* least(100)
+        const often = yield* least(6400)
+        assert.isBelow(often / seldom, 8)
+      }),
+    60_000
+  )
+
+  it.effect(
     "a change that starts a text merges about as fast as one that edits a text, however long the history",
     () =>
       Effect.gen(function*() {
