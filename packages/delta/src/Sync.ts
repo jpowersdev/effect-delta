@@ -41,7 +41,8 @@ export const FORMAT = 1 as const
  * Changes sent from a server to a replica, and what the server has seen once
  * they're included. A relay's `version` also counts changes it keeps that wait
  * for what they build on, which it sends once that's there, so their authors
- * don't push them again.
+ * don't push them again. An authority's counts only what it accepted: a
+ * confirmed replica takes it as confirmed, as it does a push's answer.
  *
  * @stability unstable
  * @category schemas
