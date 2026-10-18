@@ -179,32 +179,6 @@ describe("ReplicatedDocument", () => {
       return refuses(Nested, start, "nested more than 64 deep")
     })
 
-    it.effect("refuses a value with no JSON form, which no update could write", () =>
-      Effect.gen(function*() {
-        // Written as its type's JSON, which a declaration without a JSON
-        // codec, such as an instance of a class, doesn't have.
-        const Url = Schema.String.pipe(Schema.decodeTo(Schema.instanceOf(URL), {
-          decode: SchemaGetter.transform((href: string) => new URL(href)),
-          encode: SchemaGetter.transform((url: URL) => url.href)
-        }))
-        const home = new URL("https://example.com")
-        yield* refuses(Schema.Struct({ home: Url }), { home }, "has no JSON form")
-        yield* refuses(Schema.Struct({ links: Schema.Array(Url) }), { links: [] }, "has no JSON form")
-        yield* refuses(
-          Schema.Struct({ pages: Schema.Record(Schema.String, Schema.Struct({ link: Schema.Option(Url) })) }),
-          { pages: {} },
-          "has no JSON form"
-        )
-        // Those with one, as Effect's own have, are written as it.
-        const Site = Schema.Struct({ home: Schema.URL, since: Schema.Date })
-        const site = yield* ReplicatedDocument.make(Site, {
-          initial: { home, since: new Date(0) },
-          replica: Replica.ReplicaId.make("r")
-        })
-        yield* ReplicatedDocument.update(site, (value) => ({ ...value, home: new URL("https://example.org") }))
-        assert.strictEqual((yield* ReplicatedDocument.get(site)).home.href, "https://example.org/")
-      }))
-
     it.effect("refuses an initial value that doesn't fit, or writes texts, entries or optional fields", () =>
       Effect.gen(function*() {
         yield* refuses(Doc, { ...initial, title: "Draft" }, "a text starts empty")
@@ -309,6 +283,40 @@ describe("ReplicatedDocument", () => {
         const ben = yield* open("ben")
         yield* Replica.receive(ben, Schema.decodeUnknownSync(Delta.Delta)(JSON.parse(JSON.stringify(sent))))
         assert.deepStrictEqual(yield* ReplicatedDocument.get(ben), yield* ReplicatedDocument.get(ada))
+      }))
+
+    it.effect("a declaration without a JSON codec is written as it is, which only a value that's JSON can be", () =>
+      Effect.gen(function*() {
+        // Values that are strings already, as Effect's JSON codec writes them.
+        const Email = Schema.declare((u): u is string => typeof u === "string" && u.includes("@"))
+        // Instances of a class, which JSON can't carry.
+        const Url = Schema.String.pipe(Schema.decodeTo(Schema.instanceOf(URL), {
+          decode: SchemaGetter.transform((href: string) => new URL(href)),
+          encode: SchemaGetter.transform((url: URL) => url.href)
+        }))
+        const Contact = Schema.Struct({ email: Email, sites: Schema.Record(Schema.String, Url) })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Contact, {
+            initial: { email: "a@example.com", sites: {} },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* open("ada")
+        const ben = yield* open("ben")
+        yield* ReplicatedDocument.update(ada, (contact) => ({ ...contact, email: "ada@example.com" }))
+        yield* Replica.exchange(ada, ben)
+        assert.strictEqual((yield* ReplicatedDocument.get(ben)).email, "ada@example.com")
+        const failed = yield* Effect.flip(
+          ReplicatedDocument.update(ada, (contact) => ({ ...contact, sites: { home: new URL("https://example.com") } }))
+        )
+        assert.strictEqual(failed._tag, "SchemaError")
+        // Those with a JSON codec, as Effect's own have, are written as it.
+        const Site = Schema.Struct({ home: Schema.URL, since: Schema.Date })
+        const site = yield* ReplicatedDocument.make(Site, {
+          initial: { home: new URL("https://example.com"), since: new Date(0) },
+          replica: Replica.ReplicaId.make("r")
+        })
+        yield* ReplicatedDocument.update(site, (value) => ({ ...value, home: new URL("https://example.org") }))
+        assert.strictEqual((yield* ReplicatedDocument.get(site)).home.href, "https://example.org/")
       }))
 
     it.effect("an update fails for a value whose JSON reads back as another, so a replica shows what it's given", () =>
