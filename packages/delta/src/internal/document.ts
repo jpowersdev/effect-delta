@@ -1127,8 +1127,9 @@ export const maxDepth = 64
 export const maxValueDepth = 128
 
 /**
- * Whether a value nests arrays and objects more than `maxValueDepth` deep,
- * worked out without recursing as deep.
+ * Whether a value nests arrays and plain objects more than `maxValueDepth`
+ * deep, as JSON does, worked out without recursing as deep. Other objects,
+ * which may refer to themselves, it doesn't look into.
  *
  * @internal
  */
@@ -1136,11 +1137,17 @@ export const nestsTooDeep = (json: Schema.Json): boolean => {
   const pending: Array<readonly [Schema.Json, number]> = [[json, 1]]
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const [value, depth] = next
-    if (typeof value !== "object" || value === null) continue
+    if (!isPlain(value)) continue
     if (depth > maxValueDepth) return true
     for (const part of Object.values(value) as Array<Schema.Json>) pending.push([part, depth + 1])
   }
   return false
+}
+
+const isPlain = (value: unknown): value is object => {
+  if (typeof value !== "object" || value === null) return false
+  const prototype = Object.getPrototypeOf(value)
+  return Array.isArray(value) || prototype === Object.prototype || prototype === null
 }
 
 // The last millisecond a `Date` holds. No clock reads later, so a change

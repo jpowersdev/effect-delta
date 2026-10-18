@@ -43,6 +43,8 @@ export interface Fields {
    * constructor defaults filled in. Undefined for a struct without defaults.
    */
   readonly make: ((fields: object) => unknown) | undefined
+  /** Whether it's a class, whose constructor may make anything of its fields. */
+  readonly isClass: boolean
 }
 
 /** @internal */
@@ -52,8 +54,6 @@ export interface Field {
   readonly optional: boolean
   /** Whether the schema fills the field in when it's missing. */
   readonly hasDefault: boolean
-  /** Whether two of its values are the same. */
-  readonly equivalence: Equivalence.Equivalence<unknown>
 }
 
 /** @internal */
@@ -194,13 +194,18 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
     if (ast.checks !== undefined || fields.checks !== undefined) refuse(path, `a class can't have checks: ${onMerged}`)
     // Its fields are all it's made of.
     if (fields.indexSignatures.length > 0) refuse(path, "a class can't have a rest or entries: give them a field each")
-    return { _tag: "Fields", fields: compileFields(fields, path), make: SchemaParser.make(Schema.make(ast)) }
+    return {
+      _tag: "Fields",
+      fields: compileFields(fields, path),
+      make: SchemaParser.make(Schema.make(ast)),
+      isClass: true
+    }
   }
   if (SchemaAST.isObjects(ast) && ast.indexSignatures.length === 0) {
     if (ast.checks !== undefined) refuse(path, `a struct can't have checks: ${onMerged}`)
     const compiled = compileFields(ast, path)
     const make = compiled.some(({ hasDefault }) => hasDefault) ? SchemaParser.make(Schema.make(ast)) : undefined
-    return { _tag: "Fields", fields: compiled, make }
+    return { _tag: "Fields", fields: compiled, make, isClass: false }
   }
   if (SchemaAST.isObjects(ast)) {
     // Schema makes a record's literal keys fields.
@@ -265,8 +270,7 @@ const compileFields = (ast: SchemaAST.Objects, path: Path.Path): ReadonlyArray<F
         "a struct field can't have a constructor default: give the fields in it defaults instead"
       )
     }
-    const equivalence = Schema.toEquivalence(Schema.make<Schema.Codec<unknown>>(signature.type))
-    return { name: signature.name, shape, optional, hasDefault, equivalence }
+    return { name: signature.name, shape, optional, hasDefault }
   })
 
 // An optional field's `undefined` (or `void`) counts as absent, so it's no
@@ -372,14 +376,14 @@ const compileValue = (ast: SchemaAST.AST): Value => {
 }
 
 /**
- * Whether the part at `path` is built by a constructor: a class's, or a
- * struct's that fills in defaults.
+ * Whether the part at `path` is a class, whose constructor may make anything
+ * of its fields. A struct's fills in defaults, and keeps what it's given.
  *
  * @internal
  */
 export const isClass = (shape: Shape, path: Path.Path): boolean => {
   const found = at(shape, path)
-  return typeof found !== "string" && found.shape._tag === "Fields" && found.shape.make !== undefined
+  return typeof found !== "string" && found.shape._tag === "Fields" && found.shape.isClass
 }
 
 /**
@@ -805,7 +809,7 @@ const build = (shape: Fields, fields: ReadonlyArray<readonly [string, unknown]>)
     const part = value[field.name]
     if (
       made[field.name] !== part && Object.getOwnPropertyDescriptor(made, field.name)?.writable &&
-      field.equivalence(made[field.name], part)
+      same(field.shape, made[field.name], part)
     ) made[field.name] = part
   }
   return made
@@ -966,10 +970,11 @@ const planAt = (
       return
     }
     case "Value": {
-      // Comparing recurses into it, deeper than encoding would let it be.
-      if (InternalDocument.nestsTooDeep(after as Schema.Json)) throw tooDeep()
       if (!force) {
         const before = readAt(shape, documentAt(document, path), initial, memo)
+        if (before === after) return
+        // Comparing recurses into it, deeper than encoding would let it be.
+        if (InternalDocument.nestsTooDeep(after as Schema.Json)) throw tooDeep()
         if (before !== Missing && shape.equivalence(before, after)) return
       }
       intents.push({ _tag: "Set", path, value: Result.getOrThrow(shape.encode(after)) })
@@ -1116,8 +1121,34 @@ const writeValues = (
   return build(shape, fields)
 }
 
-// Whether two values of a struct or class hold the same, where an optional
-// field that's undefined is absent, as it is for writing.
+// Whether two values a part can hold are the same as writing compares them,
+// where an optional field that's undefined is absent.
+const same = (shape: Shape, a: unknown, b: unknown): boolean => {
+  if (a === b) return true
+  switch (shape._tag) {
+    case "Text":
+    case "Counter":
+      return false
+    case "Value":
+      return shape.equivalence(a, b)
+    case "Fields":
+      return Predicate.isObject(a) && Predicate.isObject(b) &&
+        sameFields(shape, a as Record<string, unknown>, b as Record<string, unknown>)
+    case "Entries": {
+      if (!Predicate.isObject(a) || !Predicate.isObject(b)) return false
+      const keys = Object.keys(a).filter(shape.isKey)
+      return keys.length === Object.keys(b).filter(shape.isKey).length &&
+        keys.every((key) =>
+          Object.hasOwn(b, key) &&
+          same(shape.value, (a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+        )
+    }
+    case "List":
+      return Array.isArray(a) && Array.isArray(b) && a.length === b.length &&
+        a.every((item, i) => same(shape.item, item, b[i]))
+  }
+}
+
 const sameFields = (shape: Fields, a: Record<string, unknown>, b: Record<string, unknown>): boolean =>
   shape.fields.every((field) => sameField(field, a, b))
 
@@ -1125,9 +1156,7 @@ const sameField = (field: Field, a: Record<string, unknown>, b: Record<string, u
   const inA = Object.hasOwn(a, field.name) && a[field.name] !== undefined
   const inB = Object.hasOwn(b, field.name) && b[field.name] !== undefined
   if (field.optional && (inA !== inB || !inA)) return inA === inB
-  return field.shape._tag === "Fields"
-    ? sameFields(field.shape, a[field.name] as Record<string, unknown>, b[field.name] as Record<string, unknown>)
-    : field.equivalence(a[field.name], b[field.name])
+  return same(field.shape, a[field.name], b[field.name])
 }
 
 const cantChange = (path: Path.Path, why: string) =>

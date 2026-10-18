@@ -771,10 +771,11 @@ export interface Proposed<A> {
  * a list item without placing it in its list. It also fails when the change
  * leaves a class that's always there with fields its constructor won't take:
  * replicas show it as it was, which JSON can't say. One that had them already
- * reads as `initial` has it, and so do the classes around it, so it fails too
- * when the change writes in one of those. A change that fits reads as
- * replicas will show it: entries, items and optional fields only where they
- * exist, and each value as its latest write.
+ * reads as `initial` has it, and the classes around it are built from that,
+ * so it fails too when the change writes in one of those, unless it mends
+ * every such class in it. A change that fits reads as replicas will show it:
+ * entries, items and optional fields only where they exist, and each value as
+ * its latest write.
  *
  * **Gotchas**
  *

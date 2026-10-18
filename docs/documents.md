@@ -201,8 +201,10 @@ Anything without its own rule is written and replaced whole.
   its texts, counters, records and lists don't show what they hold, so an `update` writes only its values,
   and fails if it changes anything else or the class won't build from what those hold. `readProposal`
   rejects a change that leaves a class so: the JSON it reads has only each value's latest write, so it can't
-  say how replicas show one. One that already was reads as `initial` has it, and so do the classes around
-  it, so `readProposal` rejects a change that writes in any of those too.
+  say how replicas show one. One that already was (after an upgrade to a stricter constructor, say) reads as
+  `initial` has it, and the classes around it are built from that, so `readProposal` rejects a change that
+  writes in any of those too, unless the change mends every such class in it. Where the document's root is
+  a class, that's every change until they're mended.
 
 ### The initial value
 
