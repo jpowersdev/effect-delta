@@ -227,6 +227,14 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
         : "texts, counters and lists can't be inside a value that's written whole (a union, an array, ...)"
     )
   }
+  // Written as its type's JSON, so one without any could never be written.
+  if (hasNoJson(ast, new Set())) {
+    refuse(
+      path,
+      "a value is written as its type's JSON, and this one has no JSON form: it holds a declaration without a " +
+        "JSON codec, such as Schema.instanceOf makes. Give it a toCodecJson annotation, or use a schema with one"
+    )
+  }
   return compileValue(ast)
 }
 
@@ -319,6 +327,29 @@ const hasRule = (ast: SchemaAST.AST, visited: Set<SchemaAST.AST>): boolean => {
       return ast.types.some((type) => hasRule(type, visited))
     case "Suspend":
       return hasRule(ast.thunk(), visited)
+    default:
+      return false
+  }
+}
+
+// Whether a value holds a declaration without a JSON codec, which
+// `Schema.toCodecJson` passes on as it is: an instance, which JSON can't carry.
+const hasNoJson = (ast: SchemaAST.AST, visited: Set<SchemaAST.AST>): boolean => {
+  if (visited.has(ast)) return false
+  visited.add(ast)
+  switch (ast._tag) {
+    case "Declaration":
+      return !Predicate.isFunction(ast.annotations?.toCodecJson ?? ast.annotations?.toCodec) ||
+        ast.typeParameters.some((parameter) => hasNoJson(SchemaAST.toType(parameter), visited))
+    case "Arrays":
+      return [...ast.elements, ...ast.rest].some((element) => hasNoJson(element, visited))
+    case "Objects":
+      return ast.propertySignatures.some((signature) => hasNoJson(signature.type, visited)) ||
+        ast.indexSignatures.some((signature) => hasNoJson(signature.type, visited))
+    case "Union":
+      return ast.types.some((type) => hasNoJson(type, visited))
+    case "Suspend":
+      return hasNoJson(ast.thunk(), visited)
     default:
       return false
   }

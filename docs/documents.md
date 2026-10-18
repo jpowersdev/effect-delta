@@ -183,6 +183,9 @@ Anything without its own rule is written and replaced whole.
 - **Unions** (a block that's a paragraph or an image), `Option`, `Date`, sets and maps are replaced whole.
 - Text and counters can't sit inside a whole value (a union, an array, an `Option`), because they'd be
   replaced whole too. `make` refuses such a schema, as a defect.
+- A value is written as its type's JSON, so one with no JSON form can't be written: `make` refuses a value
+  that holds a declaration without a JSON codec, such as `Schema.instanceOf` makes (Effect's own, such as
+  `Schema.URL`, have one), as a defect.
 
 ### Checks
 
