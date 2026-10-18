@@ -54,7 +54,7 @@ export interface Core {
 
   /** Takes in a delta from the relay or authority this replica syncs through. */
   readonly accept: (delta: Delta.Delta) => Effect.Effect<ReadonlyArray<Replica.Overlap>, Replica.DeltaError>
-  /** This replica's own changes (under any id it has written with) that a replica at `since` lacks. */
+  /** This replica's own applied changes (under any id it has written with) that a replica at `since` lacks. */
   readonly outgoing: (since: VersionVector.VersionVector) => Effect.Effect<Delta.Delta>
   /** Notifies after every change, local or merged. */
   readonly changed: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>

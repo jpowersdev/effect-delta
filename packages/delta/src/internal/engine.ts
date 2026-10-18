@@ -204,7 +204,11 @@ const makeCore = (engine: Engine): InternalReplica.Core => {
         engine,
         Effect.sync(() =>
           InternalDelta.fromChanges(
-            History.since(history(), since).filter((change) => state.writers.has(change.replica))
+            // A change of its own waits only on one it refused, as it loaded,
+            // which no server would take either.
+            History.since(history(), since).filter((change) =>
+              state.writers.has(change.replica) && history().changes.has(key(change))
+            )
           )
         )
       ),
