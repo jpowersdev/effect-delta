@@ -1199,8 +1199,24 @@ const latestTime = 8.64e15
 const check = (
   document: Document,
   change: AnyChange,
-  { parentTime, parentsAreChanges, parts, past }: Context,
+  context: Context,
   mergeOf: (path: Path.Path, strategy: Replica.Strategy) => Text.Merge
+): string | undefined => {
+  const problem = checkChange(document, change, context)
+  if (problem !== undefined) return problem
+  const strategy = document.strategy ?? strategyOf([change])
+  for (const part of context.parts) {
+    const found = mergeOf(part.path, strategy!).check(part)
+    if (found !== undefined) return `Change ${key(change)} ${found}`
+  }
+  return undefined
+}
+
+// Checks all of a change but what its text ops do to their texts.
+const checkChange = (
+  document: Document,
+  change: AnyChange,
+  { parentTime, parentsAreChanges, parts, past }: Context
 ): string | undefined => {
   const name = `Change ${key(change)}`
   if (change.ops.length === 0) return `${name} has no ops`
@@ -1226,10 +1242,6 @@ const check = (
     const k = Path.key(part.path)
     if (textPaths.has(k)) return `${name} edits one text in more than one run of ops`
     textPaths.add(k)
-  }
-  for (const part of parts) {
-    const found = mergeOf(part.path, strategy!).check(part)
-    if (found !== undefined) return `${name} ${found}`
   }
   return undefined
 }
@@ -1613,7 +1625,8 @@ const shownPosition = (document: Document, path: Path.Path): Fugue.Node<Item> =>
  * Starts a replay document from saved history without replaying its texts:
  * `changes` are exactly the ones in `version`, and `texts` are the texts they
  * make. Undefined if they don't fit together, the strategy can't start from
- * texts, or receiving would refuse one of them.
+ * texts, or receiving would refuse one of them for anything but what its
+ * text ops do to their texts, which the texts stand for.
  *
  * @internal
  */
@@ -1630,6 +1643,18 @@ export const load = (
   const parts = new Map<string, { path: Path.Path; parts: Array<Text.Part> }>()
   for (const change of History.takeReady(history)) {
     const past = History.pastOf(history, change.parents)
+    const owner = (id: Id) => History.find(history, id)
+    const parentsOf = (path: Path.Path) => parts.has(Path.key(path)) ? textParents(change, path, owner) : []
+    const ofChange = textParts(change, past, parentsOf)
+    // Its parents are applied.
+    const parentChanges = change.parents.map((parent) => owner(parent)!)
+    const context: Context = {
+      past,
+      parentTime: Math.max(-1, ...parentChanges.map(({ time }) => time)),
+      parentsAreChanges: change.parents.every((parent, i) => lastId(parentChanges[i]!).seq === parent.seq),
+      parts: ofChange
+    }
+    if (checkChange(document, change, context) !== undefined) return undefined
     let seq = change.seq
     for (const op of change.ops) {
       const write: Write = { replica: change.replica, seq, time: change.time, past }
@@ -1637,9 +1662,7 @@ export const load = (
       noteInside(document, op, write, undefined)
       seq += opLength(op)
     }
-    const owner = (id: Id) => History.find(history, id)
-    const parentsOf = (path: Path.Path) => parts.has(Path.key(path)) ? textParents(change, path, owner) : []
-    for (const part of textParts(change, past, parentsOf)) {
+    for (const part of ofChange) {
       const k = Path.key(part.path)
       const entry = parts.get(k) ?? { path: part.path, parts: [] }
       entry.parts.push(part)

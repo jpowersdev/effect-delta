@@ -73,7 +73,7 @@ export const make = Effect.fnUntraced(function*(options: {
   const check = options.check
   const isAuthority = check !== undefined
   const documents = yield* RcMap.make({
-    lookup: (id: Replica.DocumentId) => load(store, id),
+    lookup: (id: Replica.DocumentId) => load(store, id, isAuthority),
     idleTimeToLive: "1 minute"
   })
 
@@ -315,7 +315,11 @@ export const make = Effect.fnUntraced(function*(options: {
   return { subscribe, push }
 })
 
-const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Service"], id: Replica.DocumentId) {
+const load = Effect.fnUntraced(function*(
+  store: HistoryStore.HistoryStore["Service"],
+  id: Replica.DocumentId,
+  isAuthority: boolean
+) {
   const stored = yield* store.load(id).pipe(Effect.mapError(unavailable))
   const updates = yield* PubSub.unbounded<Sync.Update>()
   yield* Effect.addFinalizer(() => PubSub.shutdown(updates))
@@ -342,6 +346,12 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
     // Applied changes were checked before they were stored. One that was
     // stored while it waited, and turns out to be bad, is dropped.
     InternalDocument.integrateReady(state, { overlaps: undefined })
+    // An authority stores only what it applied, so what waits now was made
+    // on top of a change dropped as it loaded, and it can't check it either.
+    if (isAuthority) {
+      for (const [k, change] of state.history.pending) state.history.dropped.set(k, change)
+      state.history.pending.clear()
+    }
   }
   return document
 })
