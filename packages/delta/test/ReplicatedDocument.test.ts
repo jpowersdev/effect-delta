@@ -2171,7 +2171,7 @@ describe("ReplicatedDocument", () => {
         const Entry = Schema.Struct({ name: Schema.String })
         const EntryV2 = Schema.Struct({
           ...Entry.fields,
-          data: Schema.Array(Schema.Json).pipe(Schema.withConstructorDefault(Effect.succeed([])))
+          data: Schema.Unknown.pipe(Schema.withConstructorDefault(Effect.succeed<unknown>([])))
         })
         const old = yield* ReplicatedDocument.make(Schema.Struct({ entries: Schema.Record(Schema.String, Entry) }), {
           initial: { entries: {} },
