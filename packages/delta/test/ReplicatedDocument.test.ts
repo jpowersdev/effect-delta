@@ -2286,6 +2286,43 @@ describe("ReplicatedDocument", () => {
         }
       }))
 
+    it.effect("an update fails for a value nested too deep in a recursive schema, which it checks first", () =>
+      Effect.gen(function*() {
+        interface Tree {
+          readonly children: ReadonlyArray<Tree>
+        }
+        const Tree: Schema.Codec<Tree> = Schema.Struct({
+          children: Schema.Array(Schema.suspend((): Schema.Codec<Tree> => Tree))
+        })
+        interface Nest {
+          readonly inner: Option.Option<Nest>
+        }
+        const Nest: Schema.Codec<Nest, unknown> = Schema.Struct({
+          inner: Schema.Option(Schema.suspend((): Schema.Codec<Nest, unknown> => Nest))
+        })
+        class Link extends Schema.Class<Link>("Link")({
+          next: Schema.NullOr(Schema.suspend((): Schema.Codec<Link, unknown> => Link))
+        }) {}
+        const Notes = Schema.Struct({ tree: Tree, nest: Nest, link: Schema.NullOr(Link) })
+        const notes = yield* ReplicatedDocument.make(Notes, {
+          initial: { tree: { children: [] }, nest: { inner: Option.none() }, link: null },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        let tree: Tree = { children: [] }
+        let nest: Nest = { inner: Option.none() }
+        let link = new Link({ next: null })
+        for (let i = 0; i < 10_000; i++) {
+          tree = { children: [tree] }
+          nest = { inner: Option.some(nest) }
+          link = new Link({ next: link })
+        }
+        for (const change of [{ tree }, { nest }, { link }]) {
+          const failed = yield* Effect.flip(ReplicatedDocument.update(notes, (doc) => ({ ...doc, ...change })))
+          assert.include(failed.message, "nested more than 128 deep")
+        }
+        assert.deepStrictEqual(yield* Replica.version(notes), VersionVector.empty)
+      }))
+
     it.effect("a change that takes no sequence numbers is refused whenever it arrives", () => {
       const first: InternalDocument.AnyChange = {
         replica: "mallory",
