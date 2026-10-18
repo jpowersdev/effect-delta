@@ -238,6 +238,8 @@ describe("ReplicatedDocument", () => {
           replicas: [Replica.ReplicaId.make("ada"), Replica.ReplicaId.make("ben")],
           kept: Replica.ReplicaId.make("ada")
         }])
+        // Its path can't be changed, as the change's it came from can't.
+        assert.isTrue(Object.isFrozen(overlaps[0]!.path))
         assert.strictEqual((yield* converged(ada, ben)).status, "review")
 
         // A replica that had neither write isn't told they met, as a text

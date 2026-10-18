@@ -401,19 +401,21 @@ const reusedId = (replica: string) =>
 
 const toOverlap = (overlap: InternalDocument.Overlap): Replica.Overlap => {
   const replicas = overlap.replicas.map((replica) => Replica.ReplicaId.make(replica))
+  // A copy: the path is an op's, which the change it's in is sent on with.
+  const path = Object.freeze([...overlap.path])
   switch (overlap._tag) {
     case "Text":
       return {
         _tag: "Text",
-        path: overlap.path,
+        path,
         range: { start: overlap.start, end: overlap.end },
         anchors: overlap.anchors,
         replicas
       }
     case "Value":
-      return { _tag: "Value", path: overlap.path, replicas, kept: Replica.ReplicaId.make(overlap.kept) }
+      return { _tag: "Value", path, replicas, kept: Replica.ReplicaId.make(overlap.kept) }
     case "Removed":
-      return { _tag: "Removed", path: overlap.path, replicas }
+      return { _tag: "Removed", path, replicas }
   }
 }
 
