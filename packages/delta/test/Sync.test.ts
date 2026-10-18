@@ -34,7 +34,7 @@ import * as InternalDocument from "effect-delta/internal/document"
 import type * as InternalEngine from "effect-delta/internal/engine"
 import * as InternalShape from "effect-delta/internal/shape"
 import { KeyValueStore } from "effect/persistence"
-import { TestCrypto } from "effect/testing"
+import { TestClock, TestCrypto } from "effect/testing"
 import {
   editProject,
   EditSession,
@@ -81,6 +81,32 @@ const initial: DesignDoc = { title: "", body: "", status: "draft", votes: 0, com
 
 const makeDoc = (replica: string, strategy: Replica.Strategy = "tree") =>
   ReplicatedDocument.make(DesignDoc, { initial, strategy, replica: Replica.ReplicaId.make(replica) })
+
+// A class whose constructor takes only some values of its fields, which a
+// merge combines without asking it.
+class Range extends Schema.Class<Range>("Range")({ start: Schema.Int, end: Schema.Int }) {
+  // Schema advises against overriding it, for reasons such as this.
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+  constructor(fields: { readonly start: number; readonly end: number }) {
+    if (fields.start > fields.end) throw new Error("A range can't end before it starts")
+    super(fields)
+  }
+}
+const Plan = Schema.Struct({ title: ReplicatedDocument.Text, range: Range })
+const plan = { title: "", range: new Range({ start: 0, end: 10 }) }
+const planner = (replica: string) =>
+  ReplicatedDocument.make(Plan, { initial: plan, replica: Replica.ReplicaId.make(replica) })
+
+// Ada moves a range's start up while Ben moves its end down past it, so that
+// together they make a range its constructor won't take.
+const crossing = Effect.gen(function*() {
+  const ada = yield* planner("ada")
+  const ben = yield* planner("ben")
+  yield* ReplicatedDocument.update(ada, (value) => ({ ...value, range: new Range({ start: 5, end: 10 }) }))
+  yield* TestClock.adjust("1 second")
+  yield* ReplicatedDocument.update(ben, (value) => ({ ...value, range: new Range({ start: 0, end: 3 }) }))
+  return { ada, ben }
+})
 
 // Waits until the document shows a value `done` accepts.
 const until = <A>(self: ReplicatedDocument.ReplicatedDocument<A>, done: (value: A) => boolean) =>
@@ -381,6 +407,19 @@ describe("Relay", () => {
     }).pipe(Effect.provide(RelayLive)))
 
   describe("documents", () => {
+    it.effect("goes on syncing a class its constructor won't build from merged fields", () =>
+      Effect.gen(function*() {
+        const { ada, ben } = yield* crossing
+        const fromAda = yield* Relay.connect(ada, { document: notes })
+        const fromBen = yield* Relay.connect(ben, { document: notes })
+        yield* synced(fromAda)
+        yield* synced(fromBen)
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["title"]), 0, "Launch")
+        yield* Effect.raceFirst(until(ben, (value) => value.title === "Launch"), fromBen.await)
+        const { range, title } = yield* ReplicatedDocument.get(ben)
+        assert.deepStrictEqual([title, range.start, range.end], ["Launch", 5, 10])
+      }).pipe(Effect.scoped, Effect.provide(RelayLive)))
+
     it.effect("sends subscribers only changes it has checked", () =>
       Effect.gen(function*() {
         const relay = yield* Relay.Relay
@@ -1654,6 +1693,28 @@ describe("Authority", () => {
           Exit.fail(new Sync.SyncError({ reason: refused }))
         )
       }).pipe(Effect.provide(NoSecrets)))
+
+    it.effect("rejects a change that leaves a class its constructor won't build, which a check can't read", () =>
+      Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const { ada, ben } = yield* crossing
+        const push = (delta: Delta.Delta) => authority.push({ format: Sync.FORMAT, document: spec, delta })
+        assert.strictEqual((yield* push(yield* Replica.delta(ada, VersionVector.empty)))._tag, "Accepted")
+        const ack = yield* push(yield* Replica.delta(ben, VersionVector.empty))
+        if (ack._tag !== "Rejected") return assert.fail("expected Rejected")
+        assert.include(ack.message, "constructor")
+        // And it goes on checking.
+        const accepted = yield* Replica.version(ada)
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["title"]), 0, "Launch")
+        assert.strictEqual((yield* push(yield* Replica.delta(ada, accepted)))._tag, "Accepted")
+      }).pipe(Effect.provide(
+        Authority.layer({
+          check: (proposal) =>
+            proposal._tag === "Text"
+              ? Effect.fail(new Authority.Rejected({ message: "Plans aren't texts" }))
+              : Effect.asVoid(ReplicatedDocument.readProposal(proposal, Plan, { initial: plan }))
+        }).pipe(Layer.provide(HistoryStore.layerMemory))
+      )))
 
     it.effect("rejects a change that doesn't fit the schema, so a check reads what replicas show", () =>
       Effect.gen(function*() {

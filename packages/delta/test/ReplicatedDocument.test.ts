@@ -41,6 +41,25 @@ const converged = Effect.fnUntraced(function*(a: ReplicatedDocument.ReplicatedDo
   return value
 })
 
+// A class whose constructor takes only some values of its fields, which a
+// merge combines without asking it.
+class Range extends Schema.Class<Range>("Range")({ start: Schema.Int, end: Schema.Int }) {
+  // Schema advises against overriding it, for reasons such as this.
+  // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+  constructor(fields: { readonly start: number; readonly end: number }) {
+    if (fields.start > fields.end) throw new Error("A range can't end before it starts")
+    super(fields)
+  }
+}
+
+const Plan = Schema.Struct({ title: ReplicatedDocument.Text, range: Range })
+
+const planner = (replica: string) =>
+  ReplicatedDocument.make(Plan, {
+    initial: { title: "", range: new Range({ start: 0, end: 10 }) },
+    replica: Replica.ReplicaId.make(replica)
+  })
+
 describe("ReplicatedDocument", () => {
   describe("make", () => {
     const refuses = (schema: Schema.Top, start: unknown, message: string) =>
@@ -1089,6 +1108,48 @@ describe("ReplicatedDocument", () => {
         assert.instanceOf(lead, Person)
         assert.instanceOf(members.ben, Person)
         assert.strictEqual(members.ben!.bio, "Reviewer")
+      }))
+
+    it.effect("a class its constructor won't build from merged fields shows them as after the latest write it took", () =>
+      Effect.gen(function*() {
+        // Ada moves the start up, while Ben moves the end down, past it.
+        const ada = yield* planner("ada")
+        const ben = yield* planner("ben")
+        const { edits } = yield* ReplicatedDocument.subscribe(ada)
+        yield* ReplicatedDocument.update(ada, (plan) => ({ ...plan, range: new Range({ start: 5, end: 10 }) }))
+        yield* TestClock.adjust("1 second")
+        yield* ReplicatedDocument.update(ben, (plan) => ({ ...plan, range: new Range({ start: 0, end: 3 }) }))
+        yield* Replica.exchange(ada, ben)
+        // Every replica that has both shows the start Ada wrote, and the end
+        // before Ben's, as it was before his write, which came later.
+        const carol = yield* planner("carol")
+        yield* Replica.receive(carol, yield* Replica.delta(ada, VersionVector.empty))
+        for (const replica of [ada, ben, carol]) {
+          const { range } = yield* ReplicatedDocument.get(replica)
+          assert.instanceOf(range, Range)
+          assert.deepStrictEqual([range.start, range.end], [5, 10])
+        }
+
+        // Edits and merges go on, and are heard.
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ben, ["title"]), 0, "Launch")
+        yield* Replica.exchange(ada, ben)
+        assert.strictEqual((yield* ReplicatedDocument.get(ada)).title, "Launch")
+        const heard = yield* Stream.runCollect(Stream.take(edits, 3))
+        assert.deepStrictEqual(heard.map(({ value }) => value.title), ["", "", "Launch"])
+
+        // An update that leaves the range as it shows doesn't write it, so
+        // Ben's end stays; one that changes it writes it as it's given.
+        const before = yield* Replica.version(ada)
+        yield* ReplicatedDocument.update(ada, (plan) => ({ ...plan, title: "Launch day" }))
+        const delta = (yield* Replica.delta(ada, before)) as InternalDelta.DeltaImpl
+        const ops = [...delta.changes.values()].flatMap((change) => change.ops)
+        assert.deepStrictEqual(ops.map(({ path }) => path), [["title"]])
+        yield* ReplicatedDocument.update(ben, (plan) => ({ ...plan, range: new Range({ start: 5, end: 20 }) }))
+        yield* Replica.exchange(ada, ben)
+        for (const replica of [ada, ben]) {
+          const { range } = yield* ReplicatedDocument.get(replica)
+          assert.deepStrictEqual([range.start, range.end], [5, 20])
+        }
       }))
 
     it.effect("subscribing sees each edit with the value after it", () =>

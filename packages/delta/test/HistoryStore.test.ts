@@ -14,7 +14,7 @@ import {
 import * as InternalDelta from "effect-delta/internal/delta"
 import type * as InternalDocument from "effect-delta/internal/document"
 import { KeyValueStore } from "effect/persistence"
-import { TestCrypto } from "effect/testing"
+import { TestClock, TestCrypto } from "effect/testing"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
 const makeReplay = (replica: string) =>
@@ -262,6 +262,48 @@ describe("HistoryStore", () => {
         const third = yield* Effect.scoped(Effect.flatMap(openDoc("session-3"), ReplicatedDocument.get))
         assert.deepStrictEqual(third, edited)
       }).pipe(Effect.provide(store)), { discard: true }))
+
+  it.effect("persist opens a document whose merged fields a class's constructor won't build", () =>
+    Effect.gen(function*() {
+      // A class whose constructor takes only some values of its fields.
+      class Range extends Schema.Class<Range>("Range")({ start: Schema.Int, end: Schema.Int }) {
+        // Schema advises against overriding it, for reasons such as this.
+        // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+        constructor(fields: { readonly start: number; readonly end: number }) {
+          if (fields.start > fields.end) throw new Error("A range can't end before it starts")
+          super(fields)
+        }
+      }
+      const Plan = Schema.Struct({ title: ReplicatedDocument.Text, range: Range })
+      const open = (replica: string) =>
+        Effect.gen(function*() {
+          const plan = yield* ReplicatedDocument.make(Plan, {
+            initial: { title: "", range: new Range({ start: 0, end: 10 }) },
+            replica: Replica.ReplicaId.make(replica)
+          })
+          yield* HistoryStore.persist(plan, notes)
+          return plan
+        })
+      // Ada moves the start up, then takes in Ben's later end, before it.
+      const ben = yield* ReplicatedDocument.make(Plan, {
+        initial: { title: "", range: new Range({ start: 0, end: 10 }) },
+        replica: Replica.ReplicaId.make("ben")
+      })
+      yield* Effect.scoped(Effect.gen(function*() {
+        const ada = yield* open("ada")
+        yield* ReplicatedDocument.update(ada, (value) => ({ ...value, range: new Range({ start: 5, end: 10 }) }))
+        yield* TestClock.adjust("1 second")
+        yield* ReplicatedDocument.update(ben, (value) => ({ ...value, range: new Range({ start: 0, end: 3 }) }))
+        yield* Replica.exchange(ada, ben)
+      }))
+      // Opened again with both, it shows the range as Ada did.
+      yield* Effect.scoped(Effect.gen(function*() {
+        const again = yield* open("ada-again")
+        assert.deepStrictEqual(yield* Replica.version(again), yield* Replica.version(ben))
+        const { range } = yield* ReplicatedDocument.get(again)
+        assert.deepStrictEqual([range.start, range.end], [5, 10])
+      }))
+    }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
   it.effect("persist opens a document that saved a change which turned out bad", () =>
     Effect.gen(function*() {
