@@ -1103,6 +1103,9 @@ const checkOnArrival = (change: AnyChange): string | undefined => {
   if (change.seq < 0) return `${name} starts before any change`
   if (change.parents.some((parent) => parent.seq < 0)) return `${name} has a parent before any change`
   if (change.ops.some((op) => pathOf(op).length > maxDepth)) return `${name} writes more than ${maxDepth} parts deep`
+  if (change.ops.some((op) => op._tag === "Set" && nestsTooDeep(op.value))) {
+    return `${name} writes a value nested more than ${maxValueDepth} deep`
+  }
   return undefined
 }
 
@@ -1112,6 +1115,32 @@ const checkOnArrival = (change: AnyChange): string | undefined => {
  * @internal
  */
 export const maxDepth = 64
+
+/**
+ * How deep a value written whole can nest. Receivers freeze what's written,
+ * and a frozen value nested a few thousand deep is more than `JSON.stringify`
+ * can send on, or `Equal` compare.
+ *
+ * @internal
+ */
+export const maxValueDepth = 128
+
+/**
+ * Whether a value nests arrays and objects more than `maxValueDepth` deep,
+ * worked out without recursing as deep.
+ *
+ * @internal
+ */
+export const nestsTooDeep = (json: Schema.Json): boolean => {
+  const pending: Array<readonly [Schema.Json, number]> = [[json, 1]]
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [value, depth] = next
+    if (typeof value !== "object" || value === null) continue
+    if (depth > maxValueDepth) return true
+    for (const part of Object.values(value) as Array<Schema.Json>) pending.push([part, depth + 1])
+  }
+  return false
+}
 
 // The last millisecond a `Date` holds. No clock reads later, so a change
 // stamped later is forged, unless it's a millisecond after what it was made on

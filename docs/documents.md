@@ -279,7 +279,8 @@ A change's ops on one text come together, each op takes at least one sequence nu
 last ids of changes. Receivers check all three (`Malformed` otherwise), and check that text ops and positions
 name only characters and positions their author had seen at their path, and put nothing on the left of the
 start, so whether a change is accepted doesn't depend on what else the receiver has. A path has at most 64
-steps: receivers refuse a change that writes deeper, and `make` a schema whose parts are nested deeper.
+steps: receivers refuse a change that writes deeper, and `make` a schema whose parts are nested deeper. A
+value nests at most 128 deep: receivers refuse a change that writes one deeper, and `update` fails for one.
 
 **Servers don't need the schema.** Ops say what they do, so a relay or an authority applies a document's
 changes without the app's code. Values are JSON, texts are texts, counters are numbers. A server checks what
@@ -446,7 +447,7 @@ The whole call is one change. It fails with `Schema.SchemaError` when a new valu
 when it fails a check, or encodes to something JSON can't carry (a value is written as its type's JSON,
 whatever the schema's own encoding, and `Schema.Any`, `Schema.Unknown` and a declaration without a JSON codec
 pass their values on as they are, so an instance such as `Schema.instanceOf` takes can't be written; Effect's
-own declarations, such as `Schema.URL`, have one), or to JSON
+own declarations, such as `Schema.URL`, have one), to JSON nested more than 128 deep, or to JSON
 that reads back as another value (a union of a number and a string writes the string `"NaN"` as the number's
 JSON), and when two items of a list have the same key. Values are
 written as JSON sends them, so `-0` is written as `0`, and a `-0` in JSON text, which other languages send,
@@ -682,6 +683,9 @@ All built, each with tests and an example:
     change after it, so nobody accepted their changes.
 11. **Paths have at most 64 steps.** A change that wrote thousands of steps deep took receivers more stack
     than they had, and a relay that stored it while it waited couldn't load the document again.
+12. **Values nest at most 128 deep.** Receivers freeze what's written, and a value nested a few thousand deep,
+    once frozen, was more than `JSON.stringify` could send on, so a relay that took one stopped serving its
+    document. Every receiver refuses a change that writes one, and `update` fails for one.
 
 ## Later
 

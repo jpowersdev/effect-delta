@@ -345,6 +345,18 @@ const hasRule = (ast: SchemaAST.AST, visited: Set<SchemaAST.AST>): boolean => {
 
 const asJson = Schema.decodeUnknownResult(Schema.Json)
 
+// Every receiver refuses a value nested deeper.
+const shallowEnough = (json: Schema.Json): Result.Result<Schema.Json, Schema.SchemaError> =>
+  InternalDocument.nestsTooDeep(json)
+    ? Result.fail(
+      new Schema.SchemaError(
+        new SchemaIssue.InvalidValue({
+          message: `it's nested more than ${InternalDocument.maxValueDepth} deep, deeper than a change can write`
+        })
+      )
+    )
+    : Result.succeed(json)
+
 const compileValue = (ast: SchemaAST.AST): Value => {
   const schema = Schema.make<Schema.Codec<unknown>>(ast)
   const codec = Schema.toCodecJson(schema)
@@ -360,7 +372,7 @@ const compileValue = (ast: SchemaAST.AST): Value => {
     // string's "NaN", and it reads as the first.
     encode: (value) =>
       Result.flatMap(
-        Result.map(Result.flatMap(encode(value), asJson), InternalDocument.asSent),
+        Result.map(Result.flatMap(Result.flatMap(encode(value), asJson), shallowEnough), InternalDocument.asSent),
         (json) =>
           Result.flatMap(decode(json), (read) =>
             equivalence(read, value)

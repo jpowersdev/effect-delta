@@ -592,10 +592,12 @@ export const subscribe = <A>(self: ReplicatedDocument<A>): Effect.Effect<Subscri
  * the record doesn't take, as decoding does), and lists by which keys appear,
  * disappear and move. Fails with `Schema.SchemaError` if the new value doesn't
  * fit the schema (a class's parts must be its instances, as for its schema),
- * if two items of a list have the same key, or
+ * if two items of a list have the same key, if it changes a class that shows
+ * as `initial` has it in a way it can't write (see `make`), or
  * if a value encodes to something JSON can't carry (a value is written as its
- * type's JSON, whatever the schema's own encoding), or to JSON that reads
- * back as another value (as a union's members can).
+ * type's JSON, whatever the schema's own encoding), to JSON nested more than
+ * 128 deep, or to JSON that reads back as another value (as a union's
+ * members can).
  *
  * Editors should edit text fields through `text`, which says exactly what the
  * user did; `update` has to work it out.
