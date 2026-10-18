@@ -668,6 +668,36 @@ describe("Relay", () => {
         )
       ))
 
+    it.effect("drops what it would refuse on arrival from a store written before it did, and serves the rest", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        // Changes a relay took before it refused paths and values nested
+        // this deep, beside one it takes now.
+        let deep: Schema.Json = "deep"
+        for (let i = 0; i < 129; i++) deep = [deep]
+        const old = (replica: string, op: InternalDocument.Op): InternalDocument.AnyChange => ({
+          replica,
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [op]
+        })
+        yield* store.append(
+          notes,
+          InternalDelta.fromChanges([
+            old("nested", { _tag: "Set", path: ["status"], value: deep }),
+            old("long", { _tag: "Set", path: Array.from({ length: 65 }, (_, i) => `p${i}`), value: 1 }),
+            old("now", { _tag: "Set", path: ["status"], value: "review" })
+          ])
+        )
+        const phone = yield* makeDoc("phone")
+        const connection = yield* Relay.connect(phone, { document: notes })
+        yield* Effect.raceFirst(synced(connection), connection.await)
+        assert.strictEqual((yield* ReplicatedDocument.get(phone)).status, "review")
+        assert.deepStrictEqual(yield* Replica.version(phone), { now: 1 })
+      }).pipe(Effect.scoped, Effect.provide(Relay.layer.pipe(Layer.provideMerge(HistoryStore.layerMemory)))))
+
     it.effect("syncs replicas on two versions of a schema, which it doesn't need", () =>
       Effect.gen(function*() {
         // The newer version adds a field and a status.

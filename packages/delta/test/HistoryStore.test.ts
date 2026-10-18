@@ -599,6 +599,28 @@ describe("HistoryStore", () => {
         assert.strictEqual(reopened, "Chapter one")
       }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
+    it.effect("reopening from a snapshot drops what receiving would refuse, as reopening without one does", () =>
+      Effect.gen(function*() {
+        const store = yield* HistoryStore.HistoryStore
+        // A store written before receivers refused values nested this deep.
+        let deep: Schema.Json = "deep"
+        for (let i = 0; i < 129; i++) deep = [deep]
+        const nested: InternalDocument.AnyChange = {
+          replica: "old",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "Set", path: ["status"], value: deep }]
+        }
+        yield* store.append(notes, InternalDelta.fromChanges([nested]))
+        yield* store.setSnapshot(notes, { version: { old: 1 }, texts: [] })
+        const reopened = yield* Effect.scoped(
+          Effect.flatMap(openDoc("session-1", "replay"), (doc) => Replica.version(doc))
+        )
+        assert.deepStrictEqual(reopened, {})
+      }).pipe(Effect.provide(HistoryStore.layerMemory)))
+
     it.effect("a reopened text still merges concurrent edits like a tree", () =>
       Effect.gen(function*() {
         const results = yield* Effect.forEach(["tree", "replay"] as const, (strategy) =>
