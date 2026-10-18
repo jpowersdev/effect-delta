@@ -212,7 +212,8 @@ export interface Confirmed<in out A> extends ReplicatedDocument<A> {
  *   change. It isn't copied, so never change it in place.
  * - `strategy`: how its texts merge. `"tree"` (the default) or `"replay"`.
  * - `replica`: the replica id to write changes under. Leave it out to get a
- *   fresh random one.
+ *   fresh random one, which is almost always right: a replica id must never be
+ *   shared by two replicas, nor by two sessions of one.
  *
  * @stability unstable
  * @category models
@@ -288,6 +289,11 @@ export type KeyOf<A> = { readonly [K in keyof A]-?: A[K] extends string ? K : ne
  * Without `key`, items are values, compared by value: changing one counts as
  * removing it and inserting another. A list of structs or classes needs a
  * `key`: `make` refuses one without, as a defect.
+ *
+ * A list can't have checks, such as a maximum length, since a merge combines
+ * inserts nobody checked together: `make` refuses them, as a defect. Put the
+ * rule in an authority's check. Nor can a list be inside a value written
+ * whole, such as an `Option`.
  *
  * An array that isn't a `List` is a value, written whole.
  *

@@ -135,16 +135,17 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  *
  * **Details**
  *
- * Changes are checked one at a time, in the order they were made. A push is
- * accepted up to the first change `check` rejects; that change and the rest of
- * the push are dropped, because each was made on top of the one before.
+ * Changes are checked one at a time, each after what it was made on top of. A
+ * push is accepted up to the first change `check` rejects; that change and the
+ * rest of the push are dropped, as the replica that pushed them drops its
+ * unconfirmed changes when one is rejected.
  *
  * Before `check`, the authority refuses changes it can tell are malformed, and
  * refuses a push whole if a change in it is stamped more than a day ahead of
  * its clock. It rejects, as `check` does, changes that would make a path of a
- * document hold two kinds of thing (a text and a value, say), or remove a
- * part of a document nobody added, so a `DocumentProposal` has each part
- * where replicas have it. `ReplicatedDocument.readProposal` rejects whatever
+ * document hold two kinds of thing (a text and a value, say), make a
+ * document's root a value or a list, or remove a part of a document nobody
+ * added, so a `DocumentProposal` has each part where replicas have it. `ReplicatedDocument.readProposal` rejects whatever
  * else doesn't fit the app's schema.
  *
  * **Gotchas**

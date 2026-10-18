@@ -4,8 +4,9 @@
  * version vectors to work out what the other is missing, and a replica sends
  * its version vector to ask for exactly that.
  *
- * Every inserted or removed character consumes one sequence number, so a
- * version vector also says how much of each replica's editing has been seen.
+ * Every inserted or removed character, and every other op of a document's
+ * change, consumes one sequence number, so a version vector also says how
+ * much of each replica's editing has been seen.
  * Version vectors combine by taking the larger count for each replica.
  *
  * @stability unstable

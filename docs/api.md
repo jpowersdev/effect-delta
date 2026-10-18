@@ -395,8 +395,9 @@ class DeltaError extends Schema.TaggedError<DeltaError>()("DeltaError", {
 inside the replica (pending), so it never fails for that.
 
 **`DeltaError` reasons:**
-- `ReplicaIdReused`: the replica received a change under its own id that it didn't make. That's the one
-  mistake that silently corrupts history in Yjs and Loro, so we catch it.
+- `ReplicaIdReused`: two different changes used the same replica id and sequence numbers, as when a replica
+  receives a change under its own id that it didn't make, or a different change under one it dropped as
+  malformed. That's the one mistake that silently corrupts history in Yjs and Loro, so we catch it.
 - `AuthorityOnly`: a confirmed replica was asked to exchange with something other than its authority.
 
 **`id` is an Effect, not a field,** because a confirmed replica switches to a new id after a rejection.
@@ -605,7 +606,7 @@ interface Persisted { readonly await: Effect<never, HistoryStoreError> }
 replay, it writes one when its scope closes and after every 4,096 sequence numbers of history in between
 (one per character, and one per document op). Loading records the history without replaying it, takes the
 texts from the snapshot, and merges only the changes saved after it; a snapshot that doesn't match the
-history is ignored. `writers` lets a replica upload changes it made under earlier ids, and lets servers
+history, or covers a change receiving would refuse for anything but its text ops, is ignored. `writers` lets a replica upload changes it made under earlier ids, and lets servers
 remember who owns each id. When its scope closes,
 `persist` saves once more, so the last edits aren't lost. A confirmed replica's
 unconfirmed changes are stored separately and rewritten after a rejection, so a rejected change never

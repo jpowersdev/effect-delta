@@ -181,8 +181,8 @@ Anything without its own rule is written and replaced whole.
   Comparing two arrays can't tell an edited item from a replaced one, so item-by-item merging needs ids for
   items, which a list provides.
 - **Unions** (a block that's a paragraph or an image), `Option`, `Date`, sets and maps are replaced whole.
-- Text and counters can't sit inside a whole value (a union, an array, an `Option`), because they'd be
-  replaced whole too. `make` refuses such a schema, as a defect.
+- Texts, counters and lists can't sit inside a whole value (a union, an array, an `Option`), because they'd
+  be replaced whole too. `make` refuses such a schema, as a defect.
 
 ### Checks
 
@@ -218,8 +218,8 @@ same starting text and end up with it twice, as Yjs apps sometimes do. And wheth
 optional field exists is then always its latest write, never `initial`, so a server's JSON (which has no
 `initial`) says the same.
 
-Entries, items and optional fields have no initial value. One that's missing a required field (written by an
-older version of the schema) is left out, unless the field has a constructor default
+Entries, items and optional fields have no initial value. One that's missing a required field's value (written
+by an older version of the schema) is left out, unless the field has a constructor default
 (`Schema.withConstructorDefault`), which fills it in. Every replica fills it in as it reads, so the default
 must be a constant: one that reads the clock or makes a random id would show differently on each replica.
 Keep it the same in every version of the schema too: a value equal to it isn't always written, so it shows
@@ -242,9 +242,9 @@ The alternatives:
 ### When the schema changes
 
 Apps upgrade one device at a time, so replicas on different versions of a schema sync with each other.
-- **Adding a field:** documents that never wrote it show its initial value. Add it to `initial`. A field
-  added to an entry's or item's schema should be optional or have a constant constructor default (for a
-  struct, the values in it should).
+- **Adding a field:** documents that never wrote it show its initial value. Add it to `initial`. A value
+  field added to an entry's or item's schema should be optional or have a constant constructor default (for
+  a struct, the values in it should); a text, counter, record or list added there starts empty.
 - **Parts an older schema doesn't describe** (a new field, a value it can't decode, such as a new literal)
   are kept, stored and sent on, but don't show in its value, and merges don't report overlaps in them: a
   value it can't decode meets no other value, though writing it still says an entry, item or optional field
@@ -306,7 +306,7 @@ first text op they store, or from the replica that subscribes first.
 
 ### Example: design review
 
-Covers fields, entries, a text field, an anchor stored in a document, and a `Value` overlap. It becomes
+Covers fields, entries, a text field, an anchor stored in a document, and a `Value` overlap. It's
 `examples/design-review.ts`.
 
 ```ts

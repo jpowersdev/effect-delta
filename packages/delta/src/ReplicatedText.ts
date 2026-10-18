@@ -320,7 +320,7 @@ export interface Editable extends Pipeable, Inspectable.Inspectable {
  * - `strategy`: how concurrent edits merge. `"tree"` (the default) or `"replay"`.
  * - `replica`: the replica id to write changes under. Leave it out to get a
  *   fresh random one, which is almost always right: a replica id must never be
- *   shared by two replicas.
+ *   shared by two replicas, nor by two sessions of one.
  *
  * @stability unstable
  * @category models

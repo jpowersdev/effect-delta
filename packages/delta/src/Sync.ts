@@ -293,7 +293,9 @@ export const layerAuthorizationAllowAll: Layer.Layer<Authorization> = Layer.succ
  * - `Connecting`: opening the connection.
  * - `Syncing`: connected, catching up.
  * - `Synced`: caught up; new changes flow both ways as they happen.
- * - `Offline`: the connection was lost, with the error; it's retrying.
+ * - `Offline`: the connection was lost, with the error. It retries after
+ *   `Disconnected` and `Unavailable`; any other error has ended it (see
+ *   `Connection.await`).
  *
  * @stability unstable
  * @category models
@@ -315,8 +317,8 @@ export type Status =
  *   acknowledged yet, then each new count. An app can show it ("Saving…"),
  *   or wait for 0 before closing a document.
  * - `await`: fails if the connection gives up: retries exhausted, forbidden,
- *   or a protocol error. It never succeeds; the connection lasts as long as its
- *   scope.
+ *   a protocol error, or a change either side refused (a `DeltaError`). It
+ *   never succeeds; the connection lasts as long as its scope.
  *
  * @stability unstable
  * @category models

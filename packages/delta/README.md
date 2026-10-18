@@ -11,8 +11,9 @@ any minor release.
 > Work in progress. Replicated texts and Schema-derived documents (with text
 > fields, counters, records and lists) work with both merge strategies (tree
 > and replay), offline, through relays over any `RpcClient` protocol, and (tree
-> only) through authorities that can reject edits. See `examples/` and the
-> design notes in `docs/`.
+> only) through authorities that can reject edits. See the
+> [examples](https://github.com/jpowersdev/effect-delta/tree/main/packages/delta/examples)
+> and the [design notes](https://github.com/jpowersdev/effect-delta/tree/main/docs).
 
 ## Installation
 
