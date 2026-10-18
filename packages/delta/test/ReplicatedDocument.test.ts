@@ -2026,6 +2026,40 @@ describe("ReplicatedDocument", () => {
         }
       }))
 
+    it.effect("a change that writes a value nested too deep to send on is refused, and an update can't write one", () =>
+      Effect.gen(function*() {
+        const Notes = Schema.Struct({ data: Schema.Json })
+        const notes = yield* ReplicatedDocument.make(Notes, {
+          initial: { data: null },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        const nested = (depth: number) => {
+          let value: Schema.Json = 0
+          for (let i = 0; i < depth; i++) value = [value]
+          return value
+        }
+        const forged = () =>
+          InternalDelta.fromChanges([{
+            replica: "mallory",
+            seq: 0,
+            length: 1,
+            parents: [],
+            time: 1,
+            ops: [{ _tag: "Set", path: ["data"], value: nested(3000) }]
+          }])
+        // Refused before anything changes, however often it comes.
+        for (let i = 0; i < 2; i++) {
+          const refused = yield* Effect.flip(Replica.receive(notes, forged()))
+          assert.strictEqual(refused.reason._tag, "Malformed")
+          assert.include(String(refused.reason), "nested more than 128 deep")
+        }
+        assert.deepStrictEqual(yield* Replica.version(notes), VersionVector.empty)
+        const failed = yield* Effect.flip(ReplicatedDocument.update(notes, () => ({ data: nested(129) })))
+        assert.include(failed.message, "nested more than 128 deep")
+        yield* ReplicatedDocument.update(notes, () => ({ data: nested(128) }))
+        assert.deepStrictEqual((yield* ReplicatedDocument.get(notes)).data, nested(128))
+      }))
+
     it.effect("a change that takes no sequence numbers is refused whenever it arrives", () => {
       const first: InternalDocument.AnyChange = {
         replica: "mallory",
