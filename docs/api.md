@@ -606,7 +606,8 @@ interface Persisted { readonly await: Effect<never, HistoryStoreError> }
 replay, it writes one when its scope closes and after every 4,096 sequence numbers of history in between
 (one per character, and one per document op). Loading records the history without replaying it, takes the
 texts from the snapshot, and merges only the changes saved after it; a snapshot that doesn't match the
-history, or covers a change receiving would refuse for anything but its text ops, is ignored. `writers` lets a replica upload changes it made under earlier ids, and lets servers
+history, or covers a change receiving would refuse for anything but its text ops, is ignored (one taking
+sequence numbers another change took is dropped, as receiving drops it). `writers` lets a replica upload changes it made under earlier ids, and lets servers
 remember who owns each id. When its scope closes,
 `persist` saves once more, so the last edits aren't lost. A confirmed replica's
 unconfirmed changes are stored separately and rewritten after a rejection, so a rejected change never

@@ -314,8 +314,9 @@ export type Status =
  *
  * - `status`: where the connection is up to, then each change of it.
  * - `unconfirmed`: how many of the replica's own changes the server hasn't
- *   acknowledged yet, then each new count. An app can show it ("Saving…"),
- *   or wait for 0 before closing a document.
+ *   acknowledged yet, then each new count, leaving out any that wait on a
+ *   change the replica refused. An app can show it ("Saving…"), or wait for 0
+ *   before closing a document.
  * - `await`: fails if the connection gives up: retries exhausted, forbidden,
  *   a protocol error, or a change either side refused (a `DeltaError`). It
  *   never succeeds; the connection lasts as long as its scope.

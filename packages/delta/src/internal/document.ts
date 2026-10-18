@@ -1727,7 +1727,9 @@ const shownPosition = (document: Document, path: Path.Path): Fugue.Node<Item> =>
  * `changes` are exactly the ones in `version`, and `texts` are the texts they
  * make. Undefined if they don't fit together, the strategy can't start from
  * texts, or receiving would refuse one of them for anything but what its
- * text ops do to their texts, which the texts stand for.
+ * text ops do to their texts, which the texts stand for. One that takes
+ * sequence numbers another of its replica's took is dropped, as receiving
+ * drops it.
  *
  * @internal
  */

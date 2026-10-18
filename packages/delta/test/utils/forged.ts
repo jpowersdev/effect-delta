@@ -867,8 +867,8 @@ const writesOf = (
 
 /**
  * The changes a replica with `version` has applied, of `changes`: each
- * replica's from its first sequence number on, one after another. Changes that
- * wait can be anywhere, even among those.
+ * replica's from its first sequence number on, one after another. The rest,
+ * which wait or were dropped, are left out.
  */
 export const appliedBy = (
   changes: ReadonlyArray<InternalDocument.AnyChange>,
