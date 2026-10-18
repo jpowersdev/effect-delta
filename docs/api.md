@@ -597,7 +597,7 @@ declare const layerKeyValueStore: (options: {
 }) => Layer<HistoryStore, never, KeyValueStore>
 
 // Loads saved history into `replica`, then saves every change for the life of the scope.
-declare const persist: (replica: Replica<unknown>, document: DocumentId) => Effect<Persisted, HistoryStoreError, HistoryStore | Scope>
+declare const persist: (replica: Replica<unknown>, document: DocumentId) => Effect<Persisted, HistoryStoreError | DeltaError, HistoryStore | Scope>
 interface Persisted { readonly await: Effect<never, HistoryStoreError> }
 ```
 
@@ -612,7 +612,7 @@ unconfirmed changes are stored separately and rewritten after a rejection, so a 
 comes back on reload.
 
 **The `KeyValueStore` layer** puts everything under the app's `prefix`, never the library name. It writes
-appended deltas under numbered keys and folds them into the snapshot past a size threshold, because
+appended deltas under numbered keys and folds them into one record past a size threshold, because
 `KeyValueStore` has no range scans. One writer per document per store: two tabs persisting the same
 document to the same store isn't supported yet (sharing a replica across tabs is later).
 

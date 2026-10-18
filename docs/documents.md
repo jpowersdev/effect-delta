@@ -650,10 +650,12 @@ All built, each with tests and an example:
   text parts would fix that.
 - **One long edit is slow to merge.** Trees are one node per character, so inserting or removing a long run
   costs its length times the tree's depth (see the text limits in [`api.md`](./api.md#known-limits)).
-- **An item moved many times is slower to move.** Each move adds a position to the list's tree, and the old
-  one stays there hidden, as a removed character does in a text. A move to where earlier ones went passes
-  them, so an item moved to the top thousands of times takes longer to move again, and loading its history
-  takes time growing with the square of its moves.
+- **An item moved many times is slower to move, and its list slower to read.** Each move adds a position to
+  the list's tree, and the old one stays there hidden, as a removed character does in a text (and a removed
+  item's positions do). Reading the list, as every update and merge does, passes them all, and a move to
+  where earlier ones went passes them too, so an item moved to the top thousands of times makes its document
+  slower to update and itself slower to move again, and loading its history takes time growing with the
+  square of its moves.
 
 ## Changed while building
 
@@ -690,10 +692,10 @@ All built, each with tests and an example:
     than they had, and a relay that stored it while it waited couldn't load the document again.
 12. **Values nest at most 128 deep.** Receivers freeze what's written, and a value nested a few thousand deep,
     once frozen, was more than `JSON.stringify` could send on, so a relay that took one stopped serving its
-    document. Every receiver refuses a change that writes one, and `update` fails for one. Relays and replicas
+    document. Every receiver refuses a change that writes one, and `update` fails for one. Servers and replicas
     loading a store check its changes as receiving does (a replica reopening from a replay snapshot takes its
     texts' ops as the snapshot has them), so a store written before a check was added still loads, and a
-    relay doesn't serve its replicas what they refuse.
+    server doesn't serve its replicas what they refuse.
 
 ## Later
 
