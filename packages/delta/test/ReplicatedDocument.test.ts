@@ -1036,6 +1036,29 @@ describe("ReplicatedDocument", () => {
         assert.strictEqual(after.settings.layout, before.settings.layout)
       }))
 
+    it.effect("a class shows what its constructor makes of merged fields", () =>
+      Effect.gen(function*() {
+        class Rect extends Schema.Class<Rect>("Rect")({ width: Schema.Int, height: Schema.Int, area: Schema.Int }) {
+          // Schema advises against overriding it; this one works out a field.
+          // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+          constructor(fields: { readonly width: number; readonly height: number; readonly area?: number }) {
+            super({ ...fields, area: fields.width * fields.height })
+          }
+        }
+        const Room = Schema.Struct({ floor: Rect })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Room, {
+            initial: { floor: new Rect({ width: 1, height: 1 }) },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* open("ada")
+        const ben = yield* open("ben")
+        yield* ReplicatedDocument.update(ada, ({ floor }) => ({ floor: new Rect({ ...floor, width: 2 }) }))
+        yield* ReplicatedDocument.update(ben, ({ floor }) => ({ floor: new Rect({ ...floor, height: 3 }) }))
+        yield* Replica.exchange(ada, ben)
+        for (const replica of [ada, ben]) assert.strictEqual((yield* ReplicatedDocument.get(replica)).floor.area, 6)
+      }))
+
     it.effect("a list changed in place is written as a new value", () =>
       Effect.gen(function*() {
         const Board = Schema.Struct({ tags: ReplicatedDocument.List(Schema.String) })
@@ -1202,6 +1225,88 @@ describe("ReplicatedDocument", () => {
         assert.include(renamed.message, "can't be changed")
         assert.strictEqual((yield* ReplicatedDocument.get(ada)).status, "planning")
         assert.deepStrictEqual(yield* Replica.version(ada), { ...before, ada: before.ada! + 1 })
+      }))
+
+    it.effect("an update that changes a class shown as it was shows what it's given", () =>
+      Effect.gen(function*() {
+        // A poll's choice is one of its options, or none yet.
+        class Poll extends Schema.Class<Poll>("Poll")({
+          options: ReplicatedDocument.List(Schema.String),
+          chosen: Schema.Int
+        }) {
+          // Schema advises against overriding it, for reasons such as this.
+          // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+          constructor(fields: { readonly options: ReadonlyArray<string>; readonly chosen: number }) {
+            if (fields.chosen > fields.options.length) throw new Error("No such option")
+            super(fields)
+          }
+        }
+        // Spans whose ends are optional, and boxes whose sizes are structs.
+        class Span extends Schema.Class<Span>("Span")({
+          from: Schema.optionalKey(Schema.Int),
+          to: Schema.optionalKey(Schema.Int)
+        }) {
+          // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+          constructor(fields: { readonly from?: number; readonly to?: number }) {
+            if (fields.from !== undefined && fields.to !== undefined && fields.from > fields.to) {
+              throw new Error("A span can't end before it starts")
+            }
+            super(fields)
+          }
+        }
+        class Box extends Schema.Class<Box>("Box")({ size: Schema.Struct({ width: Schema.Int, depth: Schema.Int }) }) {
+          // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+          constructor(fields: { readonly size: { readonly width: number; readonly depth: number } }) {
+            if (fields.size.width > fields.size.depth) throw new Error("A box is deeper than it's wide")
+            super(fields)
+          }
+        }
+        const Survey = Schema.Struct({ poll: Poll, span: Span, box: Box })
+        type Survey = typeof Survey.Type
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Survey, {
+            initial: {
+              poll: new Poll({ options: [], chosen: 0 }),
+              span: new Span({}),
+              box: new Box({ size: { width: 1, depth: 4 } })
+            },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* open("ada")
+        const ben = yield* open("ben")
+        yield* ReplicatedDocument.update(
+          ada,
+          (survey) => ({ ...survey, poll: new Poll({ options: ["a", "b"], chosen: 0 }) })
+        )
+        yield* Replica.exchange(ada, ben)
+        // Ada picks the second option and sets where things start; Ben drops
+        // the second option and sets where things end, before them.
+        yield* ReplicatedDocument.update(ada, (survey) => ({
+          poll: new Poll({ ...survey.poll, chosen: 2 }),
+          span: new Span({ from: 5 }),
+          box: new Box({ size: { width: 3, depth: 4 } })
+        }))
+        yield* TestClock.adjust("1 second")
+        yield* ReplicatedDocument.update(ben, (survey) => ({
+          poll: new Poll({ ...survey.poll, options: ["a"] }),
+          span: new Span({ to: 3 }),
+          box: new Box({ size: { width: 1, depth: 2 } })
+        }))
+        yield* Replica.exchange(ada, ben)
+
+        // Each update, whatever it changes in a class, shows what it gives.
+        const shows = Effect.fnUntraced(function*(f: (survey: Survey) => Survey) {
+          const given = f(yield* ReplicatedDocument.get(ada))
+          yield* ReplicatedDocument.update(ada, () => given)
+          yield* Replica.exchange(ada, ben)
+          for (const replica of [ada, ben]) assert.deepStrictEqual(yield* ReplicatedDocument.get(replica), given)
+        })
+        yield* shows((survey) => ({
+          ...survey,
+          poll: new Poll({ ...survey.poll, options: [...survey.poll.options, "c"] })
+        }))
+        yield* shows((survey) => ({ ...survey, span: new Span({ from: 1, to: 2 }) }))
+        yield* shows((survey) => ({ ...survey, box: new Box({ size: { width: 1, depth: 2 } }) }))
       }))
 
     it.effect("subscribing sees each edit with the value after it", () =>

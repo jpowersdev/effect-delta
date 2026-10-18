@@ -1716,6 +1716,51 @@ describe("Authority", () => {
         }).pipe(Layer.provide(HistoryStore.layerMemory))
       )))
 
+    it.effect("checks changes to a class its constructor no longer takes, but rejects those that write in it", () => {
+      // Written while the authority checked with a range that took any ends.
+      class AnyRange extends Schema.Class<AnyRange>("Range")({ start: Schema.Int, end: Schema.Int }) {}
+      const Loose = Schema.Struct({ title: ReplicatedDocument.Text, range: AnyRange })
+      const loose = { title: "", range: new AnyRange({ start: 0, end: 10 }) }
+      const checking = { strict: false }
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const push = (delta: Delta.Delta) =>
+          Effect.map(authority.push({ format: Sync.FORMAT, document: spec, delta }), (ack) => ack._tag)
+        const old = yield* ReplicatedDocument.make(Loose, { initial: loose, replica: Replica.ReplicaId.make("old") })
+        yield* ReplicatedDocument.update(old, (value) => ({ ...value, range: new AnyRange({ start: 5, end: 3 }) }))
+        assert.strictEqual(yield* push(yield* Replica.delta(old, VersionVector.empty)), "Accepted")
+
+        checking.strict = true
+        const ada = yield* planner("ada")
+        yield* Replica.receive(ada, yield* Replica.delta(old, VersionVector.empty))
+        const before = yield* Replica.version(ada)
+        yield* ReplicatedText.insert(ReplicatedDocument.text(ada, ["title"]), 0, "Launch")
+        assert.strictEqual(yield* push(yield* Replica.delta(ada, before)), "Accepted")
+        // A change that leaves the range as the authority can't read it is
+        // rejected; one that mends it isn't.
+        const writing = (replica: string, field: string, value: number) =>
+          InternalDelta.fromChanges([{
+            replica,
+            seq: 0,
+            length: 1,
+            parents: [{ replica: "ada", seq: 5 }],
+            time: 100,
+            ops: [{ _tag: "Set", path: ["range", field], value }]
+          }])
+        assert.strictEqual(yield* push(writing("ben", "start", 6)), "Rejected")
+        assert.strictEqual(yield* push(writing("cal", "end", 10)), "Accepted")
+      }).pipe(Effect.provide(
+        Authority.layer({
+          check: (proposal) =>
+            proposal._tag === "Text"
+              ? Effect.fail(new Authority.Rejected({ message: "Plans aren't texts" }))
+              : checking.strict
+              ? Effect.asVoid(ReplicatedDocument.readProposal(proposal, Plan, { initial: plan }))
+              : Effect.asVoid(ReplicatedDocument.readProposal(proposal, Loose, { initial: loose }))
+        }).pipe(Layer.provide(HistoryStore.layerMemory))
+      ))
+    })
+
     it.effect("rejects a change that doesn't fit the schema, so a check reads what replicas show", () =>
       Effect.gen(function*() {
         const authority = yield* Authority.Authority
