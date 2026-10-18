@@ -1235,6 +1235,40 @@ describe("ReplicatedDocument", () => {
         assert.deepStrictEqual(yield* Replica.version(ada), { ...before, ada: before.ada! + 1 })
       }))
 
+    it.effect("an update that leaves a class shown as it was alone writes nothing, however it gives its absent fields", () =>
+      Effect.gen(function*() {
+        class Span extends Schema.Class<Span>("Span")({
+          start: Schema.Int,
+          end: Schema.Int,
+          note: Schema.optional(Schema.String)
+        }) {
+          // Schema advises against overriding it, for reasons such as this.
+          // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+          constructor(fields: { readonly start: number; readonly end: number; readonly note?: string | undefined }) {
+            if (fields.start > fields.end) throw new Error("A span can't end before it starts")
+            super(fields)
+          }
+        }
+        const Plan = Schema.Struct({ span: Span })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Plan, {
+            initial: { span: new Span({ start: 0, end: 10 }) },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* open("ada")
+        const ben = yield* open("ben")
+        yield* ReplicatedDocument.update(ada, ({ span }) => ({ span: new Span({ ...span, start: 5 }) }))
+        yield* TestClock.adjust("1 second")
+        yield* ReplicatedDocument.update(ben, ({ span }) => ({ span: new Span({ ...span, end: 3 }) }))
+        yield* Replica.exchange(ada, ben)
+        // The same span, its note given as undefined rather than left out.
+        const before = yield* Replica.version(ada)
+        yield* ReplicatedDocument.update(ada, ({ span }) => ({
+          span: new Span({ start: span.start, end: span.end, note: span.note })
+        }))
+        assert.deepStrictEqual(yield* Replica.version(ada), before)
+      }))
+
     it.effect("an update that changes a class shown as it was shows what it's given", () =>
       Effect.gen(function*() {
         // A poll's choice is one of its options, or none yet.

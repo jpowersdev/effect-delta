@@ -1716,6 +1716,68 @@ describe("Authority", () => {
         }).pipe(Layer.provide(HistoryStore.layerMemory))
       )))
 
+    it.effect("rejects a change to a class around one its constructor no longer takes, which a check can't read", () => {
+      // Written while the authority checked with classes that took any values.
+      class AnyInner extends Schema.Class<AnyInner>("Inner")({ low: Schema.Int, high: Schema.Int }) {}
+      class AnyOuter extends Schema.Class<AnyOuter>("Outer")({ limit: Schema.Int, inner: AnyInner }) {}
+      class Inner extends Schema.Class<Inner>("Inner")({ low: Schema.Int, high: Schema.Int }) {
+        // Schema advises against overriding it, for reasons such as this.
+        // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+        constructor(fields: { readonly low: number; readonly high: number }) {
+          if (fields.low > fields.high) throw new Error("Low can't be above high")
+          super(fields)
+        }
+      }
+      class Outer extends Schema.Class<Outer>("Outer")({ limit: Schema.Int, inner: Inner }) {
+        // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+        constructor(fields: { readonly limit: number; readonly inner: Inner }) {
+          if (fields.limit < fields.inner.low) throw new Error("The limit can't be below low")
+          super(fields)
+        }
+      }
+      const Loose = Schema.Struct({ outer: AnyOuter })
+      const Strict = Schema.Struct({ outer: Outer })
+      const loose = { outer: new AnyOuter({ limit: 100, inner: new AnyInner({ low: 0, high: 10 }) }) }
+      const strict = { outer: new Outer({ limit: 100, inner: new Inner({ low: 0, high: 10 }) }) }
+      const checking = { strict: false }
+      return Effect.gen(function*() {
+        const authority = yield* Authority.Authority
+        const push = (delta: Delta.Delta) =>
+          Effect.map(authority.push({ format: Sync.FORMAT, document: spec, delta }), (ack) => ack._tag)
+        // High goes up, low up past what high then comes down to.
+        const old = yield* ReplicatedDocument.make(Loose, { initial: loose, replica: Replica.ReplicaId.make("old") })
+        for (const [low, high] of [[0, 20], [15, 20], [15, 12]] as const) {
+          yield* ReplicatedDocument.update(old, ({ outer }) => ({
+            outer: new AnyOuter({ ...outer, inner: new AnyInner({ low, high }) })
+          }))
+        }
+        assert.strictEqual(yield* push(yield* Replica.delta(old, VersionVector.empty)), "Accepted")
+
+        // Replicas show the inner one as it was, low 15 and high 20, which a
+        // limit of 5 is below; the authority can't, so it can't check one.
+        checking.strict = true
+        const last = { replica: "old", seq: VersionVector.get(yield* Replica.version(old), "old") - 1 }
+        const limit = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [last],
+          time: 100,
+          ops: [{ _tag: "Set", path: ["outer", "limit"], value: 5 }]
+        }])
+        assert.strictEqual(yield* push(limit), "Rejected")
+      }).pipe(Effect.provide(
+        Authority.layer({
+          check: (proposal) =>
+            proposal._tag === "Text"
+              ? Effect.fail(new Authority.Rejected({ message: "Plans aren't texts" }))
+              : checking.strict
+              ? Effect.asVoid(ReplicatedDocument.readProposal(proposal, Strict, { initial: strict }))
+              : Effect.asVoid(ReplicatedDocument.readProposal(proposal, Loose, { initial: loose }))
+        }).pipe(Layer.provide(HistoryStore.layerMemory))
+      ))
+    })
+
     it.effect("checks changes to a class its constructor no longer takes, but rejects those that write in it", () => {
       // Written while the authority checked with a range that took any ends.
       class AnyRange extends Schema.Class<AnyRange>("Range")({ start: Schema.Int, end: Schema.Int }) {}
