@@ -1152,6 +1152,58 @@ describe("ReplicatedDocument", () => {
         }
       }))
 
+    it.effect("a class its constructor won't build from what merges put in its lists shows as initial, unchanged", () =>
+      Effect.gen(function*() {
+        const Task = Schema.Struct({ id: Schema.String, title: Schema.String })
+        class Board extends Schema.Class<Board>("Board")({
+          name: Schema.String,
+          tasks: ReplicatedDocument.List(Task, { key: "id" })
+        }) {
+          // Schema advises against overriding it, for reasons such as this.
+          // @effect-diagnostics-next-line overriddenSchemaConstructor:off
+          constructor(fields: { readonly name: string; readonly tasks: ReadonlyArray<typeof Task.Type> }) {
+            if (fields.tasks.length > 2) throw new Error("A board holds two tasks at most")
+            super(fields)
+          }
+        }
+        const Team = Schema.Struct({ status: Schema.String, board: Board })
+        const empty = new Board({ name: "", tasks: [] })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Team, {
+            initial: { status: "", board: empty },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* open("ada")
+        const ben = yield* open("ben")
+        const adding = (id: string) => (team: typeof Team.Type) => ({
+          ...team,
+          board: new Board({ ...team.board, tasks: [...team.board.tasks, { id, title: id }] })
+        })
+        yield* ReplicatedDocument.update(ada, adding("t1"))
+        yield* Replica.exchange(ada, ben)
+        // Each adds a task, so the board holds three: no values of its own
+        // make a board of it.
+        yield* ReplicatedDocument.update(ada, adding("t2"))
+        yield* ReplicatedDocument.update(ben, adding("t3"))
+        yield* Replica.exchange(ada, ben)
+        for (const replica of [ada, ben]) assert.strictEqual((yield* ReplicatedDocument.get(replica)).board, empty)
+
+        // What it holds is kept: an update elsewhere leaves it alone, and one
+        // that changes it, from what it doesn't show, fails, writing nothing.
+        const before = yield* Replica.version(ada)
+        yield* ReplicatedDocument.update(ada, (team) => ({ ...team, status: "planning" }))
+        const delta = (yield* Replica.delta(ada, before)) as InternalDelta.DeltaImpl
+        assert.deepStrictEqual([...delta.changes.values()].flatMap(({ ops }) => ops.map(({ path }) => path)), [[
+          "status"
+        ]])
+        const renamed = yield* Effect.flip(
+          ReplicatedDocument.update(ada, (team) => ({ ...team, board: new Board({ ...team.board, name: "Launch" }) }))
+        )
+        assert.include(renamed.message, "can't be changed")
+        assert.strictEqual((yield* ReplicatedDocument.get(ada)).status, "planning")
+        assert.deepStrictEqual(yield* Replica.version(ada), { ...before, ada: before.ada! + 1 })
+      }))
+
     it.effect("subscribing sees each edit with the value after it", () =>
       Effect.gen(function*() {
         const { ada, ben } = yield* pair
