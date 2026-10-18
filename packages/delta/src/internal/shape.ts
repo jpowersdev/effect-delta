@@ -43,8 +43,6 @@ export interface Fields {
    * constructor defaults filled in. Undefined for a struct without defaults.
    */
   readonly make: ((fields: object) => unknown) | undefined
-  /** Where `make` is defined: whether two of its values are the same. */
-  readonly equivalence: Equivalence.Equivalence<unknown> | undefined
 }
 
 /** @internal */
@@ -196,27 +194,13 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
     if (ast.checks !== undefined || fields.checks !== undefined) refuse(path, `a class can't have checks: ${onMerged}`)
     // Its fields are all it's made of.
     if (fields.indexSignatures.length > 0) refuse(path, "a class can't have a rest or entries: give them a field each")
-    const schema = Schema.make<Schema.Codec<unknown>>(ast)
-    return {
-      _tag: "Fields",
-      fields: compileFields(fields, path),
-      make: SchemaParser.make(schema),
-      equivalence: Schema.toEquivalence(schema)
-    }
+    return { _tag: "Fields", fields: compileFields(fields, path), make: SchemaParser.make(Schema.make(ast)) }
   }
   if (SchemaAST.isObjects(ast) && ast.indexSignatures.length === 0) {
     if (ast.checks !== undefined) refuse(path, `a struct can't have checks: ${onMerged}`)
     const compiled = compileFields(ast, path)
-    if (!compiled.some(({ hasDefault }) => hasDefault)) {
-      return { _tag: "Fields", fields: compiled, make: undefined, equivalence: undefined }
-    }
-    const schema = Schema.make<Schema.Codec<unknown>>(ast)
-    return {
-      _tag: "Fields",
-      fields: compiled,
-      make: SchemaParser.make(schema),
-      equivalence: Schema.toEquivalence(schema)
-    }
+    const make = compiled.some(({ hasDefault }) => hasDefault) ? SchemaParser.make(Schema.make(ast)) : undefined
+    return { _tag: "Fields", fields: compiled, make }
   }
   if (SchemaAST.isObjects(ast)) {
     // Schema makes a record's literal keys fields.
@@ -347,15 +331,14 @@ const asJson = Schema.decodeUnknownResult(Schema.Json)
 
 // Every receiver refuses a value nested deeper.
 const shallowEnough = (json: Schema.Json): Result.Result<Schema.Json, Schema.SchemaError> =>
-  InternalDocument.nestsTooDeep(json)
-    ? Result.fail(
-      new Schema.SchemaError(
-        new SchemaIssue.InvalidValue({
-          message: `it's nested more than ${InternalDocument.maxValueDepth} deep, deeper than a change can write`
-        })
-      )
-    )
-    : Result.succeed(json)
+  InternalDocument.nestsTooDeep(json) ? Result.fail(tooDeep()) : Result.succeed(json)
+
+const tooDeep = () =>
+  new Schema.SchemaError(
+    new SchemaIssue.InvalidValue({
+      message: `A value is nested more than ${InternalDocument.maxValueDepth} deep, deeper than a change can write`
+    })
+  )
 
 const compileValue = (ast: SchemaAST.AST): Value => {
   const schema = Schema.make<Schema.Codec<unknown>>(ast)
@@ -386,6 +369,17 @@ const compileValue = (ast: SchemaAST.AST): Value => {
     decode: (json) => decode(json),
     equivalence
   }
+}
+
+/**
+ * Whether the part at `path` is built by a constructor: a class's, or a
+ * struct's that fills in defaults.
+ *
+ * @internal
+ */
+export const isClass = (shape: Shape, path: Path.Path): boolean => {
+  const found = at(shape, path)
+  return typeof found !== "string" && found.shape._tag === "Fields" && found.shape.make !== undefined
 }
 
 /**
@@ -972,6 +966,8 @@ const planAt = (
       return
     }
     case "Value": {
+      // Comparing recurses into it, deeper than encoding would let it be.
+      if (InternalDocument.nestsTooDeep(after as Schema.Json)) throw tooDeep()
       if (!force) {
         const before = readAt(shape, documentAt(document, path), initial, memo)
         if (before !== Missing && shape.equivalence(before, after)) return
@@ -988,7 +984,7 @@ const planAt = (
       const rolledBack = initial !== undefined && shape.make !== undefined
         ? rolledBackAt(shape, document, path, initial, memo)
         : undefined
-      if (rolledBack !== undefined && shape.equivalence!(rolledBack, after)) return
+      if (rolledBack !== undefined && sameFields(shape, rolledBack, after as Record<string, unknown>)) return
       if (rolledBack !== undefined && rolledBack === initial!.value) {
         if (writeValues(shape, document, path, path, after, rolledBack, initial, intents, memo) === Missing) {
           throw cantChange(path, "with the values given, its constructor won't take what's in it")
@@ -1109,10 +1105,7 @@ const writeValues = (
       if (inner === Missing) return Missing
       fields.push([field.name, inner])
     } else {
-      if (
-        Object.hasOwn(given, field.name) !== Object.hasOwn(was, field.name) ||
-        !field.equivalence(given[field.name], was[field.name])
-      ) {
+      if (!sameField(field, given, was)) {
         throw cantChange(at, "it shows as the initial value has it, since its constructor won't take what's in it")
       }
       if (field.optional && !InternalDocument.exists(document, fieldPath)) continue
@@ -1121,6 +1114,20 @@ const writeValues = (
     }
   }
   return build(shape, fields)
+}
+
+// Whether two values of a struct or class hold the same, where an optional
+// field that's undefined is absent, as it is for writing.
+const sameFields = (shape: Fields, a: Record<string, unknown>, b: Record<string, unknown>): boolean =>
+  shape.fields.every((field) => sameField(field, a, b))
+
+const sameField = (field: Field, a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
+  const inA = Object.hasOwn(a, field.name) && a[field.name] !== undefined
+  const inB = Object.hasOwn(b, field.name) && b[field.name] !== undefined
+  if (field.optional && (inA !== inB || !inA)) return inA === inB
+  return field.shape._tag === "Fields"
+    ? sameFields(field.shape, a[field.name] as Record<string, unknown>, b[field.name] as Record<string, unknown>)
+    : field.equivalence(a[field.name], b[field.name])
 }
 
 const cantChange = (path: Path.Path, why: string) =>

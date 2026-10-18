@@ -2088,8 +2088,10 @@ describe("ReplicatedDocument", () => {
           assert.include(String(refused.reason), "nested more than 128 deep")
         }
         assert.deepStrictEqual(yield* Replica.version(notes), VersionVector.empty)
-        const failed = yield* Effect.flip(ReplicatedDocument.update(notes, () => ({ data: nested(129) })))
-        assert.include(failed.message, "nested more than 128 deep")
+        for (const depth of [129, 5000]) {
+          const failed = yield* Effect.flip(ReplicatedDocument.update(notes, () => ({ data: nested(depth) })))
+          assert.include(failed.message, "nested more than 128 deep")
+        }
         yield* ReplicatedDocument.update(notes, () => ({ data: nested(128) }))
         assert.deepStrictEqual((yield* ReplicatedDocument.get(notes)).data, nested(128))
       }))

@@ -200,9 +200,9 @@ Anything without its own rule is written and replaced whole.
   show stay; one that changes it writes it as given, so it shows that. Shown as `initial` has it, though,
   its texts, counters, records and lists don't show what they hold, so an `update` writes only its values,
   and fails if it changes anything else or the class won't build from what those hold. `readProposal`
-  rejects a change that leaves a class so, or writes in one that already was (the JSON it reads has only
-  each value's latest write, so it can't say how replicas show one); a class the change leaves alone reads
-  as `initial` has it.
+  rejects a change that leaves a class so: the JSON it reads has only each value's latest write, so it can't
+  say how replicas show one. One that already was reads as `initial` has it, and so do the classes around
+  it, so `readProposal` rejects a change that writes in any of those too.
 
 ### The initial value
 

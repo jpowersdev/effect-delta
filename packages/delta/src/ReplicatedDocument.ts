@@ -769,11 +769,12 @@ export interface Proposed<A> {
  * writes a part with an op its rule doesn't take, writes a value the schema
  * can't read, gives a list item a key field that names another item, or adds
  * a list item without placing it in its list. It also fails when the change
- * leaves a class that's always there with fields its constructor won't take,
- * or writes in one that already had them: replicas show it as it was, which
- * JSON can't say. One the change leaves alone reads as `initial` has it. A
- * change that fits reads as replicas will show it: entries, items and
- * optional fields only where they exist, and each value as its latest write.
+ * leaves a class that's always there with fields its constructor won't take:
+ * replicas show it as it was, which JSON can't say. One that had them already
+ * reads as `initial` has it, and so do the classes around it, so it fails too
+ * when the change writes in one of those. A change that fits reads as
+ * replicas will show it: entries, items and optional fields only where they
+ * exist, and each value as its latest write.
  *
  * **Gotchas**
  *
@@ -823,19 +824,28 @@ export const readProposal = <A>(
     const before = InternalShape.readJson(shape, proposal.before, options.initial, existsIn(proposal.exists.before))
     const after = InternalShape.readJson(shape, proposal.after, options.initial, existsIn(proposal.exists.after))
     // Replicas show a class its constructor won't take the fields of as it
-    // was, which JSON can't say: a change can't leave one so, nor write in one
-    // that was so already, which reads as `initial` has it.
+    // was, which JSON can't say: a change can't leave one so. One that was so
+    // already reads as `initial` has it, as do the classes around it, so
+    // nor can a change write in those.
     const unbuiltBefore = new Set(before.unbuilt.map(InternalPath.key))
-    const unbuilt = after.unbuilt.find((at) =>
-      !unbuiltBefore.has(InternalPath.key(at)) ||
-      proposal.paths.some((path) => at.every((step, i) => path[i] === step))
-    )
-    if (unbuilt !== undefined) {
-      return Effect.fail(
-        new Authority.Rejected({
-          message: `The change leaves the class at ${InternalPath.key(unbuilt)} with fields its constructor won't take`
-        })
-      )
+    for (const at of after.unbuilt) {
+      if (!unbuiltBefore.has(InternalPath.key(at))) {
+        return Effect.fail(
+          new Authority.Rejected({
+            message: `The change leaves the class at ${InternalPath.key(at)} with fields its constructor won't take`
+          })
+        )
+      }
+      const around = [...InternalPath.prefixes(at).filter((prefix) => InternalShape.isClass(shape, prefix)), at]
+      if (around.some((part) => proposal.paths.some((path) => part.every((step, i) => path[i] === step)))) {
+        return Effect.fail(
+          new Authority.Rejected({
+            message: `The change writes in or around the class at ${
+              InternalPath.key(at)
+            }, whose constructor won't take its fields, so it can't be read as replicas show it`
+          })
+        )
+      }
     }
     return Effect.succeed({ before: before.value as A, after: after.value as A, paths: proposal.paths })
   }))

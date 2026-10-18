@@ -222,8 +222,8 @@ export interface Slot {
    * op under it, or on the text or counter it holds.
    */
   readonly inside: Record<string, number>
-  /** Per replica, its writes of each kind here, in the order it made them. */
-  readonly writers: { readonly [K in WriteKind]: Map<string, Array<WritesOf[K]>> }
+  /** Per replica, its writes of each kind here, in the order it made them, once there are any. */
+  readonly writers: { [K in WriteKind]?: Map<string, Array<WritesOf[K]>> }
   /** For a list: its items' positions. */
   list: Fugue.Tree<Item> | undefined
   /** For a list item: every position it was given, earliest write first. */
@@ -278,7 +278,7 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
       presences: [],
       presence: undefined,
       inside: {},
-      writers: { values: new Map(), presences: new Map(), places: new Map() },
+      writers: {},
       list: undefined,
       places: []
     }
@@ -303,7 +303,7 @@ type WriteKind = keyof WritesOf
 // looking at the rest: usually there are none.
 const unseenBy = <K extends WriteKind>(at: Slot, write: Write, kind: K): Array<WritesOf[K]> => {
   const unseen: Array<WritesOf[K]> = []
-  for (const [replica, writes] of at.writers[kind]) {
+  for (const [replica, writes] of at.writers[kind] ?? []) {
     if (replica === write.replica) continue
     const seen = VersionVector.get(write.past, replica)
     for (let i = writes.length - 1; i >= 0 && writes[i]!.seq >= seen; i--) unseen.push(writes[i]!)
@@ -326,8 +326,9 @@ const addWrite = <K extends WriteKind>(at: Slot, kind: K, write: WritesOf[K]): v
   let i = writes.length
   while (i > 0 && compareWrites(writes[i - 1]!, write) > 0) i--
   writes.splice(i, 0, write)
-  const ofReplica = at.writers[kind].get(write.replica)
-  if (ofReplica === undefined) at.writers[kind].set(write.replica, [write])
+  const byReplica: Map<string, Array<WritesOf[K]>> = at.writers[kind] ??= new Map()
+  const ofReplica = byReplica.get(write.replica)
+  if (ofReplica === undefined) byReplica.set(write.replica, [write])
   else ofReplica.push(write)
 }
 
@@ -1426,7 +1427,7 @@ const noteInside = (document: Document, op: Op, write: Write, found: Found | und
 const reportRemovals = (found: Found, at: Slot, write: Write): void => {
   // Once per remover, whose latest such removal is enough: what's noted names
   // only who removed it.
-  for (const [replica, presences] of at.writers.presences) {
+  for (const [replica, presences] of at.writers.presences ?? []) {
     if (replica === write.replica) continue
     const seen = VersionVector.get(write.past, replica)
     for (let i = presences.length - 1; i >= 0 && presences[i]!.seq >= seen; i--) {
