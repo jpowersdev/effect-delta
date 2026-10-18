@@ -11,6 +11,7 @@ import {
   Scheduler,
   Schema,
   SchemaGetter,
+  SchemaTransformation,
   Stream
 } from "effect"
 import { Delta, HistoryStore, Replica, ReplicatedDocument, ReplicatedText, VersionVector } from "effect-delta"
@@ -2226,6 +2227,63 @@ describe("ReplicatedDocument", () => {
           assert.include(failed.message, "nested more than 128 deep")
         }
         assert.deepStrictEqual(yield* ReplicatedDocument.get(notes), start)
+      }))
+
+    it.effect("a value read as nested too deep to compare merges with one it meets, as it shows everywhere", () =>
+      Effect.gen(function*() {
+        // A list linked node by node, written as an array of its items.
+        class Node {
+          constructor(readonly head: number, readonly tail: Node | undefined) {}
+        }
+        class Chain {
+          constructor(readonly first: Node | undefined) {}
+        }
+        const fromArray = (items: ReadonlyArray<number>) => {
+          let node: Node | undefined
+          for (let i = items.length - 1; i >= 0; i--) node = new Node(items[i]!, node)
+          return new Chain(node)
+        }
+        const toArray = (chain: Chain) => {
+          const items: Array<number> = []
+          for (let node = chain.first; node !== undefined; node = node.tail) items.push(node.head)
+          return items
+        }
+        const ChainSchema = Schema.declare<Chain>((u): u is Chain => u instanceof Chain, {
+          toCodecJson: () =>
+            Schema.link<Chain>()(
+              Schema.Array(Schema.Number),
+              SchemaTransformation.transform<Chain, ReadonlyArray<number>>({ decode: fromArray, encode: toArray })
+            )
+        })
+        const Notes = Schema.Struct({ title: Schema.String, chain: ChainSchema })
+        const open = (replica: string) =>
+          ReplicatedDocument.make(Notes, {
+            initial: { title: "", chain: new Chain(undefined) },
+            replica: Replica.ReplicaId.make(replica)
+          })
+        const ada = yield* open("ada")
+        const ben = yield* open("ben")
+        yield* ReplicatedDocument.update(ada, (notes) => ({ ...notes, chain: fromArray([1, 2, 3]) }))
+        // A chain thousands of nodes deep, written by a change that hadn't
+        // seen Ada's: comparing them recurses deeper than the stack goes.
+        const forged = InternalDelta.fromChanges([{
+          replica: "mallory",
+          seq: 0,
+          length: 1,
+          parents: [],
+          time: 1,
+          ops: [{ _tag: "Set", path: ["chain"], value: Array.from({ length: 5000 }, (_, i) => i) }]
+        }])
+        const overlaps = yield* Replica.receive(ada, forged)
+        assert.deepStrictEqual(overlaps.map(({ _tag }) => _tag), ["Value"])
+        yield* ReplicatedDocument.update(ada, (notes) => ({ ...notes, title: "Linked" }))
+        yield* Replica.receive(ben, yield* Replica.delta(ada, VersionVector.empty))
+        assert.deepStrictEqual(yield* Replica.version(ben), yield* Replica.version(ada))
+        for (const replica of [ada, ben]) {
+          const { chain, title } = yield* ReplicatedDocument.get(replica)
+          assert.strictEqual(title, "Linked")
+          assert.strictEqual(toArray(chain).length, 5000)
+        }
       }))
 
     it.effect("a change that takes no sequence numbers is refused whenever it arrives", () => {
