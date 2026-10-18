@@ -1173,14 +1173,20 @@ export const arrive = (
 /**
  * The first of `changes` under the key of another change the history has,
  * even one dropped as bad: a store keeps one change per key, so the other is
- * another change too.
+ * another change too. One that the checks on arrival refuse, under the key
+ * of another they refuse too, as a server's load can drop, isn't: it's
+ * refused as it arrives, as receivers without the other refuse it.
  *
  * @internal
  */
 export const reusing = (history: History.History<Op>, changes: Iterable<AnyChange>): AnyChange | undefined => {
   for (const change of changes) {
     const existing = History.get(history, key(change))
-    if (existing !== undefined && !Equal.equals(existing, change)) return change
+    if (existing === undefined) continue
+    // Compared only if both pass the checks on arrival, which bound how deep
+    // comparing recurses: one that fails them isn't one that passed.
+    const bad = checkOnArrival(change) !== undefined
+    if (bad !== (checkOnArrival(existing) !== undefined) || (!bad && !Equal.equals(existing, change))) return change
   }
   return undefined
 }
