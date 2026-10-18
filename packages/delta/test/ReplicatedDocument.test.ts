@@ -2189,10 +2189,43 @@ describe("ReplicatedDocument", () => {
         const failed = yield* Effect.flip(
           ReplicatedDocument.update(
             updated,
-            () => ({ entries: { e: { name: "e", data: nested(8000) as ReadonlyArray<Schema.Json> } } })
+            () => ({ entries: { e: { name: "e", data: nested(8000) } } })
           )
         )
         assert.include(failed.message, "nested more than 128 deep")
+      }))
+
+    it.effect("an update fails for a value nested too deep inside an Option or a class, which it compares first", () =>
+      Effect.gen(function*() {
+        const nested = (depth: number) => {
+          let value: Schema.Json = 0
+          for (let i = 0; i < depth; i++) value = [value]
+          return value
+        }
+        class Note extends Schema.Class<Note>("Note")({ data: Schema.Json }) {}
+        const Notes = Schema.Struct({
+          maybe: Schema.Option(Schema.Json),
+          note: Schema.NullOr(Note),
+          items: ReplicatedDocument.List(Schema.Option(Schema.Json))
+        })
+        const notes = yield* ReplicatedDocument.make(Notes, {
+          initial: { maybe: Option.none(), note: null, items: [] },
+          replica: Replica.ReplicaId.make("ada")
+        })
+        const start = { maybe: Option.some([1]), note: new Note({ data: [1] }), items: [Option.some([1])] }
+        yield* ReplicatedDocument.update(notes, () => start)
+        const deep = nested(8000)
+        for (
+          const change of [
+            { maybe: Option.some(deep) },
+            { note: new Note({ data: deep }) },
+            { items: [Option.some(deep)] }
+          ]
+        ) {
+          const failed = yield* Effect.flip(ReplicatedDocument.update(notes, (doc) => ({ ...doc, ...change })))
+          assert.include(failed.message, "nested more than 128 deep")
+        }
+        assert.deepStrictEqual(yield* ReplicatedDocument.get(notes), start)
       }))
 
     it.effect("a change that takes no sequence numbers is refused whenever it arrives", () => {
