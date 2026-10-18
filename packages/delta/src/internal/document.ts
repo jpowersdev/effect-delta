@@ -167,6 +167,11 @@ export interface ValueWrite extends Write {
 
 interface PresenceWrite extends Write {
   readonly exists: boolean
+  /**
+   * How many of its replica's writes of whether this path exists, up to and
+   * including this one, say it doesn't.
+   */
+  readonly removals: number
 }
 
 interface PlaceWrite extends Write {
@@ -332,6 +337,10 @@ const anyIn = <W>({ from, to, writes }: Run<W>, is: (write: W) => boolean): bool
   for (let i = from; i < to; i++) if (is(writes[i]!)) return true
   return false
 }
+
+// How many writes in a run say the part doesn't exist.
+const removalsIn = ({ from, to, writes }: Run<PresenceWrite>): number =>
+  writes[to - 1]!.removals - (from === 0 ? 0 : writes[from - 1]!.removals)
 
 // A value is history: every reader shares it, so nobody may change it in place.
 const freeze = (json: Schema.Json): Schema.Json => {
@@ -1378,15 +1387,15 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
           found.add(op.path, [value.replica, ...differing.map(({ replica }) => replica)], "value")
         }
       }
-      setPresence(document, at, { ...write, exists: true }, found)
+      setPresence(document, at, write, true, found)
       break
     }
     case "Add":
       at.added = true
-      setPresence(document, at, { ...write, exists: true }, found)
+      setPresence(document, at, write, true, found)
       break
     case "Unset":
-      setPresence(document, at, { ...write, exists: false }, found)
+      setPresence(document, at, write, false, found)
       break
     case "Increment":
       at.counted = true
@@ -1419,14 +1428,24 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
   }
 }
 
-const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: Found | undefined): void => {
+const setPresence = (
+  document: Document,
+  at: Slot,
+  made: Write,
+  exists: boolean,
+  found: Found | undefined
+): void => {
+  const removals = (at.writers.presences?.get(made.replica)?.at(-1)?.removals ?? 0) + (exists ? 0 : 1)
+  const write: PresenceWrite = { ...made, exists, removals }
   addWrite(at, "presences", write, found)
   at.presence = at.presences.at(-1)
   if (found !== undefined) {
     // Where the part is always there, whether it exists is nothing the
-    // replica shows.
+    // replica shows. Counted, so a run is never looked through.
     const differing = found.reading.comesAndGoes(at.path)
-      ? metBy(found, at, write, "presences").filter((run) => anyIn(run, (other) => other.exists !== write.exists))
+      ? metBy(found, at, write, "presences").filter((run) =>
+        exists ? removalsIn(run) > 0 : removalsIn(run) < run.to - run.from
+      )
       : []
     if (differing.length > 0) {
       found.add(at.path, [write.replica, ...differing.map(({ replica }) => replica)], "presence")
@@ -1479,7 +1498,7 @@ const reportRemovals = (found: Found, at: Slot, write: Write): void => {
   // Once per remover, for whom any such removal is enough: what's noted names
   // only who removed it.
   for (const run of metBy(found, at, write, "presences")) {
-    if (anyIn(run, (presence) => !presence.exists)) {
+    if (removalsIn(run) > 0) {
       found.removed(at.path, { remover: run.replica, editor: write.replica, from: write.seq, next: write.seq + 1 })
     }
   }
