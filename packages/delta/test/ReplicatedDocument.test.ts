@@ -131,6 +131,18 @@ describe("ReplicatedDocument", () => {
           { tasks: [] },
           `required "id" field that's a string`
         )
+        yield* refuses(
+          Schema.Struct({
+            tasks: ReplicatedDocument.List(Schema.Struct({ id: ReplicatedDocument.Text }), { key: "id" as never })
+          }),
+          { tasks: [] },
+          `field that's a string, written whole rather than a text`
+        )
+        yield* refuses(
+          Schema.Struct({ drafts: ReplicatedDocument.List(ReplicatedDocument.Text) }),
+          { drafts: [] },
+          "a list without a key holds values written whole, not texts"
+        )
         // To Schema, a record with literal keys among others is a struct with
         // a rest: its literal keys are fields.
         yield* refuses(

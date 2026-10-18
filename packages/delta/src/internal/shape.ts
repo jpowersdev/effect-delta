@@ -168,7 +168,12 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
       const item = compileAst(ast.rest[0]!, [...path, "*"])
       if (rule.key === undefined) {
         if (item._tag !== "Value") {
-          refuse(path, "a list without a key holds values written whole: give a list of structs or classes a key")
+          refuse(
+            path,
+            item._tag === "Fields"
+              ? "a list without a key holds values written whole: give a list of structs or classes a key"
+              : `a list without a key holds values written whole, not ${describe(item)}s`
+          )
         }
         return { _tag: "List", item, key: undefined }
       }
@@ -177,11 +182,14 @@ const compileAst = (ast: SchemaAST.AST, path: Path.Path): Shape => {
         item._tag !== "Fields" || field === undefined || field.optional || field.shape._tag !== "Value" ||
         !holdsStrings(ast.rest[0]!, rule.key)
       ) {
+        const whole = field === undefined || field.shape._tag === "Value"
+          ? ""
+          : `, written whole rather than a ${describe(field.shape)}`
         return refuse(
           path,
           SchemaAST.isSuspend(ast.rest[0]!)
             ? `a list with a key holds structs or classes, and ${recursive}`
-            : `a list's items must be structs or classes with a required "${rule.key}" field that's a string`
+            : `a list's items must be structs or classes with a required "${rule.key}" field that's a string${whole}`
         )
       }
       // An item's key is never made up: one without it can't be read.
