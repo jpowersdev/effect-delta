@@ -733,11 +733,13 @@ export const editProject = Effect.fnUntraced(function*(
       return yield* update((project) => ({ ...project, status: command.status }))
     case "Vote":
       return yield* update((project) => ({ ...project, votes: safely(project.votes + command.by) }))
-    case "Type": {
-      const title = ReplicatedDocument.text(doc, ["title"])
-      const before = yield* ReplicatedText.get(title)
-      return yield* Effect.orDie(ReplicatedText.insert(title, gapAt(command.at, before.length), command.text))
-    }
+    case "Type":
+      // In one step: a rollback landing between reading the title and typing
+      // in it could leave the place past its end.
+      return yield* ReplicatedText.update(ReplicatedDocument.text(doc, ["title"]), (title) => {
+        const at = gapAt(command.at, title.length)
+        return title.slice(0, at) + command.text + title.slice(at)
+      })
     case "Note":
       return yield* update(({ notes: { a, ...notes }, ...project }) => ({
         ...project,
