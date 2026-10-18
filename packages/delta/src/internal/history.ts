@@ -15,8 +15,10 @@ export interface History<Op> {
   readonly pasts: Map<string, VersionVector.VersionVector>
   readonly pending: Map<string, Change<Op>>
   /**
-   * Changes that waited and turned out bad, by key. They may have been
-   * stored while they waited, and a store keeps one change per key.
+   * Changes that waited and turned out bad, by key, and ones among sequence
+   * numbers their replica's applied changes took, which would have waited
+   * had they come sooner. They may have been stored while they waited, and a
+   * store keeps one change per key.
    */
   readonly dropped: Map<string, Change<Op>>
   readonly version: Record<string, number>
@@ -56,7 +58,7 @@ export const get = <Op>(history: History<Op>, key: string): Change<Op> | undefin
  */
 export const has = (history: History<unknown>, change: Change<unknown>): boolean => {
   const k = key(change)
-  return history.changes.has(k) || history.pending.has(k) || change.seq + change.length <= seen(history, change.replica)
+  return history.changes.has(k) || history.pending.has(k)
 }
 
 /**

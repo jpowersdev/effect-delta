@@ -277,11 +277,12 @@ they do now, plus `time`.
 | `Increment { path, by }`                                | 1                | Adds to the counter at the path.                                          |
 | `Place { path, parent, side, rightOrigin? }`            | 1                | Gives the list item at the path a new position, placed as a tree `Insert` places a character. |
 
-A change's ops on one text come together, each op takes at least one sequence number, and its parents are the
-last ids of changes. Receivers check all three (`Malformed` otherwise), and check that text ops and positions
-name only characters and positions their author had seen at their path, and put nothing on the left of the
-start, so whether a change is accepted doesn't depend on what else the receiver has. A path has at most 64
-steps: receivers refuse a change that writes deeper, and `make` a schema whose parts are nested deeper. A
+A change's ops on one text come together, each op takes at least one sequence number, its parents are the last
+ids of changes, and it takes no sequence number an applied change of its replica's took. Receivers check all
+four (`Malformed` otherwise, whether it arrives before the other change or after), and check that text ops and
+positions name only characters and positions their author had seen at their path, and put nothing on the left
+of the start, so whether a change is accepted doesn't depend on what else the receiver has. A path has at most
+64 steps: receivers refuse a change that writes deeper, and `make` a schema whose parts are nested deeper. A
 value nests at most 128 deep: receivers refuse a change that writes one deeper, and `update` fails for one.
 
 **Servers don't need the schema.** Ops say what they do, so a relay or an authority applies a document's
@@ -669,9 +670,9 @@ All built, each with tests and an example:
    item by the id of the write that added it.
 4. **Existence is `Set` for values and `Add` for everything else,** texts and counters included: an
    optional text field is added, then edited.
-5. **Changes must keep one text's ops together, take a sequence number or more for each op, and name the
-   last ids of changes as parents.** All three hold for every change a replica makes; receivers refuse others
-   as `Malformed`.
+5. **Changes must keep one text's ops together, take a sequence number or more for each op, name the last
+   ids of changes as parents, and take no sequence number another of their replica's changes took.** All four
+   hold for every change a replica makes; receivers refuse others as `Malformed`.
 6. **A replay text's parents are found by walking the change graph,** not from version vectors. The
    Eg-walker conformance data has replica ids whose changes aren't in sequence order, which version vectors
    can't describe.

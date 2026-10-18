@@ -873,10 +873,11 @@ export const integrate = (
 /**
  * Applies every pending change that's ready, as `integrate` does, in one
  * merge: a bad change is dropped, the changes ready behind it are applied,
- * and the ones made on top of it keep waiting. So what a document shows
- * doesn't depend on how its changes arrived, and replicas and relays drop the
- * same changes. With `overlaps`, how the replica reads what's written, it
- * collects the overlaps it's told of.
+ * and the ones made on top of it keep waiting. A change left waiting among
+ * sequence numbers its replica's applied changes took is dropped too. So what
+ * a document shows doesn't depend on how its changes arrived, and replicas
+ * and relays drop the same changes. With `overlaps`, how the replica reads
+ * what's written, it collects the overlaps it's told of.
  *
  * @internal
  */
@@ -891,11 +892,19 @@ export const integrateReady = (
   const { applied, bad, textOverlaps, texts, waiting } = applyChanges(document, History.takeReady(history), found)
   for (const { change } of bad) history.dropped.set(key(change), change)
   for (const change of waiting) history.pending.set(key(change), change)
+  const problems = bad.map(({ change, message }) => ({ key: key(change), message }))
+  for (const [k, change] of history.pending) {
+    const message = takenBefore(history, change)
+    if (message === undefined) continue
+    history.pending.delete(k)
+    history.dropped.set(k, change)
+    problems.push({ key: k, message })
+  }
   return {
     applied,
     texts,
     overlaps: [...(found?.list(document) ?? []), ...textOverlaps],
-    problems: bad.map(({ change, message }) => ({ key: key(change), message }))
+    problems
   }
 }
 
@@ -1142,8 +1151,9 @@ const endsCache = new WeakMap<AnyChange, ReadonlyMap<string, Id>>()
  * Takes in changes as they arrive, the same way for every receiver, before
  * any is applied. A change under the key of another the document has, even
  * one dropped as bad, reuses its replica id, and nothing is taken: `reused`
- * says whose. Otherwise a change that's bad on its own is refused, and
- * `refused` says why; the rest that are new wait as pending, for
+ * says whose. Otherwise a change that's bad on its own is refused, as is one
+ * among sequence numbers its replica's applied changes took, which is
+ * dropped; `refused` says why. The rest that are new wait as pending, for
  * `integrateReady`, and are `fresh`.
  *
  * @internal
@@ -1162,13 +1172,26 @@ export const arrive = (
   let refused: string | undefined
   const fresh: Array<AnyChange> = []
   for (const change of changes) {
+    if (History.has(history, change)) continue
     const problem = checkOnArrival(change)
-    if (problem !== undefined) refused ??= problem
-    else if (!History.has(history, change)) fresh.push(change)
+    const taken = takenBefore(history, change)
+    if (problem === undefined && taken === undefined) fresh.push(change)
+    else refused ??= problem ?? taken
+    // Dropped as it is once it has waited, so a change under its key is
+    // refused alike.
+    if (problem === undefined && taken !== undefined) history.dropped.set(key(change), change)
   }
   for (const change of fresh) history.pending.set(key(change), change)
   return { reused: undefined, refused, fresh }
 }
+
+// What's wrong with a change, not one the history has applied, that starts
+// among the sequence numbers its replica's applied changes took: it can never
+// be applied.
+const takenBefore = (history: History.History<Op>, change: AnyChange): string | undefined =>
+  change.seq < History.seen(history, change.replica)
+    ? `Change ${key(change)} takes sequence numbers its replica's earlier changes took`
+    : undefined
 
 /**
  * The first of `changes` under the key of another change the history has,
@@ -1749,9 +1772,12 @@ export const load = (
     History.record(history, change, past)
   }
   // Changes that don't make up the version can't go with its texts. Any left
-  // waiting once they do are behind their replica's sequence numbers, as
-  // forged ones can be, so they could never be applied: they wait here too.
+  // waiting once they do are among sequence numbers their replica's applied
+  // changes took, as forged ones can be, so they're dropped, as receiving
+  // drops them.
   if (VersionVector.compare(history.version, version) !== "equal") return undefined
+  for (const [k, change] of history.pending) history.dropped.set(k, change)
+  history.pending.clear()
   const byPath = new Map(saved.map(({ path, text }) => [Path.key(path), text]))
   for (const [k, entry] of parts) {
     const text = byPath.get(k)
