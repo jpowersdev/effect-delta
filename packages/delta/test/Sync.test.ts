@@ -1647,6 +1647,64 @@ describe("Authority", () => {
         assert.strictEqual(first._tag, "Local")
       }).pipe(Effect.scoped, Effect.provide([ownerApproves(), CryptoTest])))
 
+    it.effect("a replica that made a change on top of one its authority drops as it loads still syncs", () =>
+      Effect.gen(function*() {
+        // Saved by the authority, and by Bob's replica, before receivers
+        // refused values nested this deep: a change writing one, and Bob's
+        // made on top of it.
+        let deep: Schema.Json = "deep"
+        for (let i = 0; i < 129; i++) deep = [deep]
+        const history = InternalDelta.fromChanges([
+          {
+            replica: "r",
+            seq: 0,
+            length: 1,
+            parents: [],
+            time: 1,
+            ops: [{ _tag: "Set", path: ["status"], value: deep }]
+          },
+          {
+            replica: "s",
+            seq: 0,
+            length: 1,
+            parents: [{ replica: "r", seq: 0 }],
+            time: 2,
+            ops: [{ _tag: "Increment", path: ["votes"], by: 1 }]
+          }
+        ])
+        const stores = yield* Effect.forEach(
+          ["authority", "bob"],
+          () => Effect.map(Layer.build(HistoryStore.layerMemory), Context.get(HistoryStore.HistoryStore))
+        )
+        for (const [store, owner] of [[stores[0]!, "bob"], [stores[1]!, ""]] as const) {
+          yield* store.append(spec, history)
+          yield* store.addWriter(spec, Replica.ReplicaId.make("s"), owner)
+        }
+        const authority = Context.get(
+          yield* Layer.build(
+            Authority.layer({ check: () => Effect.void }).pipe(
+              Layer.provide(Layer.succeed(HistoryStore.HistoryStore, stores[0]!))
+            )
+          ),
+          Authority.Authority
+        )
+        yield* Effect.gen(function*() {
+          const bob = yield* ReplicatedDocument.makeConfirmed(DesignDoc, { initial, document: spec })
+          yield* HistoryStore.persist(bob, spec)
+          yield* ReplicatedDocument.update(bob, (doc) => ({ ...doc, status: "review" }))
+          // Its new change is confirmed, and the connection carries on.
+          yield* Effect.raceFirst(
+            Stream.runHead(Stream.filter(bob.connection.unconfirmed, (count) => count === 0)),
+            bob.connection.await
+          )
+        }).pipe(
+          Effect.scoped,
+          Effect.provideService(HistoryStore.HistoryStore, stores[1]!),
+          Effect.provideService(Authority.Authority, authority),
+          asUser("bob")
+        )
+      }).pipe(Effect.scoped, Effect.provide(CryptoTest)))
+
     it.effect("checks documents with their schema, and rolls back what it rejects", () => {
       const proposals: Array<ReplicatedDocument.Proposed<DesignDoc>> = []
       const open = (user: string) =>
