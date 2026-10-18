@@ -96,6 +96,25 @@ describe("ReplicatedDocument", () => {
     expect(ReplicatedDocument.text).type.not.toBeCallableWith(notes, ["missing"])
   })
 
+  it("text takes paths up to 16 steps long", () => {
+    // A string nested as many fields deep as `Steps` has elements.
+    type Nested<Steps extends ReadonlyArray<0>> = Steps extends readonly [0, ...infer Rest extends ReadonlyArray<0>]
+      ? { readonly a: Nested<Rest> }
+      : string
+    type Sixteen = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    const sixteen = {} as ReplicatedDocument.ReplicatedDocument<Nested<Sixteen>>
+    const seventeen = {} as ReplicatedDocument.ReplicatedDocument<Nested<[0, ...Sixteen]>>
+    const steps = (count: number) => Array.from({ length: count }, () => "a" as const)
+    expect(ReplicatedDocument.text).type.toBeCallableWith(
+      sixteen,
+      steps(16) as ["a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a"]
+    )
+    expect(ReplicatedDocument.text).type.not.toBeCallableWith(
+      seventeen,
+      steps(17) as ["a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a", "a"]
+    )
+  })
+
   it("text rejects paths that don't end at a string", () => {
     expect(ReplicatedDocument.text).type.not.toBeCallableWith(doc, ["votes"])
     expect(ReplicatedDocument.text).type.not.toBeCallableWith(doc, ["missing"])
