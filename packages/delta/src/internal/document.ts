@@ -222,8 +222,8 @@ export interface Slot {
    * op under it, or on the text or counter it holds.
    */
   readonly inside: Record<string, number>
-  /** Per replica, its writes of values, presences and positions here, in the order it made them. */
-  readonly writers: Map<string, Array<SlotWrite>>
+  /** Per replica, its writes of each kind here, in the order it made them. */
+  readonly writers: { readonly [K in WriteKind]: Map<string, Array<WritesOf[K]>> }
   /** For a list: its items' positions. */
   list: Fugue.Tree<Item> | undefined
   /** For a list item: every position it was given, earliest write first. */
@@ -278,7 +278,7 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
       presences: [],
       presence: undefined,
       inside: {},
-      writers: new Map(),
+      writers: { values: new Map(), presences: new Map(), places: new Map() },
       list: undefined,
       places: []
     }
@@ -288,25 +288,25 @@ const ensureSlot = (document: Document, path: Path.Path): Slot => {
   return found
 }
 
-type SlotWrite = ValueWrite | PresenceWrite | PlaceWrite
+// The writes a slot keeps, by kind.
+interface WritesOf {
+  readonly values: ValueWrite
+  readonly presences: PresenceWrite
+  readonly places: PlaceWrite
+}
 
-const isValue = (write: SlotWrite): write is ValueWrite => "value" in write
-const isPresence = (write: SlotWrite): write is PresenceWrite => "exists" in write
-const isPlace = (write: SlotWrite): write is PlaceWrite => "node" in write
+type WriteKind = keyof WritesOf
 
-// The writes at `at` that `is` picks out and `write` hadn't seen: the ones it
-// met. Its own replica's it had seen, and another's come in the order that
-// replica made them, so those it hadn't seen are that replica's latest, found
-// without looking at the rest: usually there are none.
-const unseenBy = <W extends SlotWrite>(at: Slot, write: Write, is: (other: SlotWrite) => other is W): Array<W> => {
-  const unseen: Array<W> = []
-  for (const [replica, writes] of at.writers) {
+// The writes of a kind at `at` that `write` hadn't seen: the ones it met. Its
+// own replica's it had seen, and another's come in the order that replica
+// made them, so those it hadn't seen are that replica's latest, found without
+// looking at the rest: usually there are none.
+const unseenBy = <K extends WriteKind>(at: Slot, write: Write, kind: K): Array<WritesOf[K]> => {
+  const unseen: Array<WritesOf[K]> = []
+  for (const [replica, writes] of at.writers[kind]) {
     if (replica === write.replica) continue
     const seen = VersionVector.get(write.past, replica)
-    for (let i = writes.length - 1; i >= 0 && writes[i]!.seq >= seen; i--) {
-      const other = writes[i]!
-      if (is(other)) unseen.push(other)
-    }
+    for (let i = writes.length - 1; i >= 0 && writes[i]!.seq >= seen; i--) unseen.push(writes[i]!)
   }
   return unseen
 }
@@ -320,13 +320,14 @@ const freeze = (json: Schema.Json): Schema.Json => {
   return json
 }
 
-// Adds a write to `writes`, at `at`, in order.
-const addWrite = <W extends SlotWrite>(at: Slot, writes: Array<W>, write: W): void => {
+// Adds a write of a kind at `at`, in order.
+const addWrite = <K extends WriteKind>(at: Slot, kind: K, write: WritesOf[K]): void => {
+  const writes = at[kind] as Array<WritesOf[K]>
   let i = writes.length
   while (i > 0 && compareWrites(writes[i - 1]!, write) > 0) i--
   writes.splice(i, 0, write)
-  const ofReplica = at.writers.get(write.replica)
-  if (ofReplica === undefined) at.writers.set(write.replica, [write])
+  const ofReplica = at.writers[kind].get(write.replica)
+  if (ofReplica === undefined) at.writers[kind].set(write.replica, [write])
   else ofReplica.push(write)
 }
 
@@ -1274,13 +1275,13 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
   switch (op._tag) {
     case "Set": {
       const value: ValueWrite = { ...write, value: freeze(op.value) }
-      addWrite(at, at.values, value)
+      addWrite(at, "values", value)
       if (found !== undefined) {
         found.wrote(value)
         // Only values the replica reads meet, as it reads them.
         const { reading } = found
         const differing = reading.reads(op.path, value.value)
-          ? unseenBy(at, value, isValue).filter((other) =>
+          ? unseenBy(at, value, "values").filter((other) =>
             found.had(other) && reading.reads(op.path, other.value) &&
             reading.differ(op.path, other.value, value.value)
           )
@@ -1312,13 +1313,13 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
         key: op.path[op.path.length - 1]!
       })
       const place: PlaceWrite = { ...write, node }
-      addWrite(at, at.places, place)
+      addWrite(at, "places", place)
       // Where the part isn't a list item, its positions are nothing the
       // replica shows.
       if (found !== undefined) {
         found.wrote(place)
         if (found.reading.moves(op.path)) {
-          const moved = unseenBy(at, place, isPlace).filter((other) => found.had(other))
+          const moved = unseenBy(at, place, "places").filter((other) => found.had(other))
           if (moved.length > 0) {
             found.add(op.path, [place.replica, ...moved.map((other) => other.replica)], "place")
           }
@@ -1332,14 +1333,14 @@ const applyOp = (document: Document, op: Exclude<Op, Text.Op>, write: Write, fou
 }
 
 const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: Found | undefined): void => {
-  addWrite(at, at.presences, write)
+  addWrite(at, "presences", write)
   at.presence = at.presences.at(-1)
   if (found !== undefined) {
     found.wrote(write)
     // Where the part is always there, whether it exists is nothing the
     // replica shows.
     const differing = found.reading.comesAndGoes(at.path)
-      ? unseenBy(at, write, isPresence).filter((other) => found.had(other) && other.exists !== write.exists)
+      ? unseenBy(at, write, "presences").filter((other) => found.had(other) && other.exists !== write.exists)
       : []
     if (differing.length > 0) {
       found.add(at.path, [write.replica, ...differing.map((other) => other.replica)], "presence")
@@ -1353,15 +1354,22 @@ const setPresence = (document: Document, at: Slot, write: PresenceWrite, found: 
           found.removed(at.path, { remover: write.replica, editor, from, next })
         }
       }
-      for (const place of found.reading.moves(at.path) ? unseenBy(at, write, isPlace) : []) {
-        if (found.had(place)) {
-          found.removed(at.path, {
-            remover: write.replica,
-            editor: place.replica,
-            from: place.seq,
-            next: place.seq + 1
-          })
+      // A span per mover, from its first move the removal hadn't seen to its
+      // last: what it did between, inside the item, the merge asks about in
+      // any case.
+      const moves = new Map<string, { from: number; next: number }>()
+      for (const place of found.reading.moves(at.path) ? unseenBy(at, write, "places") : []) {
+        if (!found.had(place)) continue
+        const span = moves.get(place.replica)
+        if (span === undefined) {
+          moves.set(place.replica, { from: place.seq, next: place.seq + 1 })
+        } else {
+          span.from = Math.min(span.from, place.seq)
+          span.next = Math.max(span.next, place.seq + 1)
         }
+      }
+      for (const [editor, { from, next }] of moves) {
+        found.removed(at.path, { remover: write.replica, editor, from, next })
       }
     }
   }
@@ -1387,9 +1395,17 @@ const noteInside = (document: Document, op: Op, write: Write, found: Found | und
 // seen, whichever is latest now: the merge lists it if `at` ends removed by a
 // removal made concurrently with it.
 const reportRemovals = (found: Found, at: Slot, write: Write): void => {
-  for (const removal of unseenBy(at, write, isPresence)) {
-    if (!removal.exists && found.had(removal)) {
-      found.removed(at.path, { remover: removal.replica, editor: write.replica, from: write.seq, next: write.seq + 1 })
+  // Once per remover, whose latest such removal is enough: what's noted names
+  // only who removed it.
+  for (const [replica, presences] of at.writers.presences) {
+    if (replica === write.replica) continue
+    const seen = VersionVector.get(write.past, replica)
+    for (let i = presences.length - 1; i >= 0 && presences[i]!.seq >= seen; i--) {
+      const removal = presences[i]!
+      if (!removal.exists && found.had(removal)) {
+        found.removed(at.path, { remover: replica, editor: write.replica, from: write.seq, next: write.seq + 1 })
+        break
+      }
     }
   }
 }
