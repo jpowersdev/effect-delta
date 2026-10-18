@@ -195,8 +195,13 @@ Anything without its own rule is written and replaced whole.
   across a struct's fields, a text's length, a record's size, or a counter's range. `make` refuses such a
   schema, as a defect. Rules like these belong in an authority's check, which sees every change before anyone
   else does. A class's constructor that throws for some values of its fields is such a check, one `make`
-  can't see: an entry, item or optional field holding one is left out, and while a required field holds one,
-  the document shows its earlier value, and merges and updates fail as a defect.
+  can't see: an entry, item or optional field holding one is left out. A class that's always there can't be,
+  so it shows as it was after the latest write to its values that its constructor took (or as `initial` has
+  it): its values' writes are taken back, latest first, until it builds. That depends only on the writes, so
+  every replica that has them shows the same, and merges, syncing and reloading go on. An `update` that
+  leaves it as it shows doesn't write it, so the writes it doesn't show stay; one that changes a value in it
+  writes all its values as given, so it shows them. `readProposal` rejects a change that leaves one so,
+  because the JSON it reads has only each value's latest write.
 
 ### The initial value
 

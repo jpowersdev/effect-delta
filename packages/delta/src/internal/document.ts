@@ -335,7 +335,10 @@ export const textAt = (document: Document, path: Path.Path): string => slot(docu
  * @internal
  */
 export const valuesAt = (document: Document, path: Path.Path): ReadonlyArray<ValueWrite> =>
-  slot(document, path)?.values ?? []
+  slot(document, path)?.values ?? noValues
+
+// One for every path nothing was written to, so it's the same each time.
+const noValues: ReadonlyArray<ValueWrite> = Object.freeze([])
 
 /**
  * Whether the record entry, optional field or list item at `path` exists.

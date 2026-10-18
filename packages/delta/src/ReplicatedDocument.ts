@@ -334,10 +334,11 @@ export const List: {
  * A class's constructor is given fields that merges combine, which nobody
  * checked together, so it must take any values its fields can hold. One that
  * throws for some, as a check would, is a check `make` can't see: an entry,
- * item or optional field holding such values is left out. While a required
- * field holds them, the document shows its earlier value, updates fail as a
- * defect before writing anything, and merges and text edits fail as a defect
- * after they're applied, until a change gives the class values it takes.
+ * item or optional field holding such values is left out. A class that's
+ * always there shows as it was after the latest write to its values that its
+ * constructor took (or as `initial` has it), on every replica alike, and an
+ * update writes its values only if it changes one from what shows, then all
+ * of them, as given. `readProposal` rejects a change that leaves one so.
  *
  * **Example** (Two copies of a document)
  *
@@ -763,9 +764,11 @@ export interface Proposed<A> {
  * `Authority.Rejected` when the change writes where the schema has no part,
  * writes a part with an op its rule doesn't take, writes a value the schema
  * can't read, gives a list item a key field that names another item, or adds
- * a list item without placing it in its list. A change that fits reads as
- * replicas will show it: entries, items and optional fields only where they
- * exist, and each value as its latest write.
+ * a list item without placing it in its list. It also fails when a class
+ * that's always there has fields its constructor won't take, before or after
+ * the change: replicas show it as it was, which JSON can't say. A change that
+ * fits reads as replicas will show it: entries, items and optional fields only
+ * where they exist, and each value as its latest write.
  *
  * **Gotchas**
  *
@@ -812,11 +815,20 @@ export const readProposal = <A>(
       const misfit = InternalShape.misfit(shape, change)
       if (misfit !== undefined) return Effect.fail(new Authority.Rejected({ message: misfit }))
     }
-    return Effect.succeed({
-      before: InternalShape.readJson(shape, proposal.before, options.initial, existsIn(proposal.exists.before)) as A,
-      after: InternalShape.readJson(shape, proposal.after, options.initial, existsIn(proposal.exists.after)) as A,
-      paths: proposal.paths
-    })
+    const before = InternalShape.readJson(shape, proposal.before, options.initial, existsIn(proposal.exists.before))
+    const after = InternalShape.readJson(shape, proposal.after, options.initial, existsIn(proposal.exists.after))
+    // Replicas show such a class as it was, which JSON can't say.
+    const unbuilt = (when: string, path: Replica.Path) =>
+      Effect.fail(
+        new Authority.Rejected({
+          message: `The document ${when} the change has a class at ${
+            InternalPath.key(path)
+          } whose constructor won't take its fields`
+        })
+      )
+    if (Result.isFailure(after)) return unbuilt("after", after.failure)
+    if (Result.isFailure(before)) return unbuilt("before", before.failure)
+    return Effect.succeed({ before: before.success as A, after: after.success as A, paths: proposal.paths })
   }))
 
 const existsIn = (paths: ReadonlyArray<Replica.Path>): (path: Replica.Path) => boolean => {

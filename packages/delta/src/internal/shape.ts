@@ -7,7 +7,7 @@ import * as SchemaAST from "effect/SchemaAST"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaParser from "effect/SchemaParser"
 import * as TextPatch from "../TextPatch.ts"
-import { key as changeKey } from "./change.ts"
+import { compareWrites, key as changeKey } from "./change.ts"
 import * as InternalDocument from "./document.ts"
 import * as Path from "./path.ts"
 import * as Text from "./text.ts"
@@ -599,7 +599,9 @@ export type Memo = Map<string, { readonly parts: ReadonlyArray<unknown>; readonl
 
 /**
  * Reads the document's value. Parts nobody wrote come from `initial`; parts
- * that can't be read, such as an entry missing a field, are left out.
+ * that can't be read, such as an entry missing a field, are left out. A class
+ * whose constructor won't take what its fields hold, where it can't be left
+ * out, reads as it was after the latest write to its values it takes.
  *
  * @internal
  */
@@ -608,11 +610,13 @@ export const read = (
   document: InternalDocument.Document,
   initial: unknown,
   memo: Memo
-): unknown => readRoot(shape, documentAt(document, Path.root), initial, memo)
+): unknown => readAt(shape, documentAt(document, Path.root), { value: initial }, memo)
 
 /**
  * Reads a document's value from the JSON a server shows it as, by the same
- * rules.
+ * rules. JSON has only each value's latest write, so a class whose
+ * constructor won't take them, where it can't be left out, can't be read as
+ * replicas show it: fails with its path.
  *
  * @internal
  */
@@ -623,7 +627,18 @@ export const readJson = (
   // Which optional fields and entries exist, by their paths in `json`, where
   // JSON alone can't say.
   exists: (path: Path.Path) => boolean
-): unknown => readRoot(shape, jsonAt(json, Path.root, exists), initial, new Map())
+): Result.Result<unknown, Path.Path> => {
+  let unbuilt: Path.Path | undefined
+  const value = readAt(
+    shape,
+    jsonAt(json, Path.root, exists, (path) => {
+      unbuilt ??= path
+    }),
+    { value: initial },
+    new Map()
+  )
+  return unbuilt === undefined ? Result.succeed(value) : Result.fail(unbuilt)
+}
 
 // What reading needs from one part of a document: a replica's state, or the
 // JSON a server shows it as.
@@ -635,6 +650,10 @@ interface Source {
   readonly counter: () => number
   /** The values written here, latest first. */
   readonly values: () => Iterable<Schema.Json>
+  /** Every write of a value here, earliest first, where they're known. */
+  readonly writes: () => ReadonlyArray<InternalDocument.ValueWrite>
+  /** Told that a class here won't build from what its fields hold. */
+  readonly unbuilt: () => void
   /** Whether the optional field or record entry here exists. */
   readonly exists: () => boolean
   readonly at: (name: string) => Source
@@ -653,6 +672,9 @@ const documentAt = (document: InternalDocument.Document, path: Path.Path): Sourc
     const writes = InternalDocument.valuesAt(document, path)
     for (let i = writes.length - 1; i >= 0; i--) yield writes[i]!.value
   },
+  writes: () => InternalDocument.valuesAt(document, path),
+  // It reads as it was, which is what a replica shows.
+  unbuilt: () => {},
   exists: () => InternalDocument.exists(document, path),
   at: (name) => documentAt(document, [...path, name]),
   keys: () => InternalDocument.childrenAt(document, path),
@@ -661,15 +683,22 @@ const documentAt = (document: InternalDocument.Document, path: Path.Path): Sourc
 
 // A server's JSON has only each value's latest write, and leaves out what was
 // removed, but not what was never added.
-const jsonAt = (json: Schema.Json | undefined, path: Path.Path, exists: (path: Path.Path) => boolean): Source => ({
+const jsonAt = (
+  json: Schema.Json | undefined,
+  path: Path.Path,
+  exists: (path: Path.Path) => boolean,
+  unbuilt: (path: Path.Path) => void
+): Source => ({
   path,
   itemKey: undefined,
   text: () => Predicate.isString(json) ? json : "",
   counter: () => Predicate.isNumber(json) ? json : 0,
   values: () => json === undefined ? [] : [json],
+  writes: () => [],
+  unbuilt: () => unbuilt(path),
   exists: () => json !== undefined && exists(path),
   at: (name) =>
-    jsonAt(isJsonObject(json) && Object.hasOwn(json, name) ? json[name] : undefined, [...path, name], exists),
+    jsonAt(isJsonObject(json) && Object.hasOwn(json, name) ? json[name] : undefined, [...path, name], exists, unbuilt),
   keys: () => isJsonObject(json) ? Object.keys(json) : [],
   // A list's items are the ones that show, so they exist. They're at paths by
   // key, as what's in them that exists is.
@@ -677,21 +706,13 @@ const jsonAt = (json: Schema.Json | undefined, path: Path.Path, exists: (path: P
     Array.isArray(json)
       ? json.map((item, i) => {
         const name = key !== undefined && isJsonObject(item) ? item[key] : undefined
-        return jsonAt(item, [...path, Predicate.isString(name) ? name : String(i)], exists)
+        return jsonAt(item, [...path, Predicate.isString(name) ? name : String(i)], exists, unbuilt)
       })
       : []
 })
 
 const isJsonObject = (json: Schema.Json | undefined): json is Schema.JsonObject =>
   Predicate.isObject(json) && !Array.isArray(json)
-
-const readRoot = (shape: Shape, source: Source, initial: unknown, memo: Memo): unknown => {
-  const value = readAt(shape, source, { value: initial }, memo)
-  // Only a constructor that throws leaves it so: a class's, given fields a
-  // merge combined, or a constructor default's.
-  if (value === Missing) throw new Error("A document's value couldn't be read: a constructor threw for its fields")
-  return value
-}
 
 const readAt = (
   shape: Shape,
@@ -738,23 +759,13 @@ const readAt = (
         parts.push(value)
         if (value !== Missing && !(field.optional && value === undefined)) fields.push([field.name, value])
       }
-      return share(memo, source.path, parts, () => {
-        // Defined rather than assigned, so a field such as `__proto__` is a field.
-        const value = Object.fromEntries(fields)
-        if (shape.make === undefined) return value
-        let made: object
-        try {
-          made = shape.make(value) as object
-        } catch {
-          return Missing
-        }
-        // Making copies the parts it's given. The ones read go back in, so
-        // those that didn't change keep their identity.
-        for (const [name, part] of fields) {
-          if (Object.getOwnPropertyDescriptor(made, name)?.writable) (made as Record<string, unknown>)[name] = part
-        }
-        return made
-      })
+      const built = share(memo, source.path, parts, () => build(shape, fields))
+      // Only a constructor that throws leaves it so: a class's, given fields
+      // a merge combined, or a constructor default's. An entry, item or
+      // optional field is left out; a part always there can't be.
+      if (built !== Missing || initial === undefined) return built
+      source.unbuilt()
+      return rollBack(shape, source, initial.value as Record<string, unknown>, fields, memo)
     }
     case "Entries": {
       const parts: Array<unknown> = []
@@ -781,6 +792,95 @@ const readAt = (
       return share(memo, source.path, items, () => [...items])
     }
   }
+}
+
+// The struct or class made of `fields`, or Missing if its constructor throws.
+const build = (shape: Fields, fields: ReadonlyArray<readonly [string, unknown]>): unknown => {
+  // Defined rather than assigned, so a field such as `__proto__` is a field.
+  const value = Object.fromEntries(fields)
+  if (shape.make === undefined) return value
+  let made: object
+  try {
+    made = shape.make(value) as object
+  } catch {
+    return Missing
+  }
+  // Making copies the parts it's given. The ones read go back in, so those
+  // that didn't change keep their identity.
+  for (const [name, part] of fields) {
+    if (Object.getOwnPropertyDescriptor(made, name)?.writable) (made as Record<string, unknown>)[name] = part
+  }
+  return made
+}
+
+// A class its constructor won't build from what its fields hold, always there,
+// as it was after the latest write to its values that it takes: the writes are
+// taken back, latest first, until it builds. Worked out from the writes
+// alone, so every replica that has them shows the same. Otherwise, or where
+// the writes aren't known, as `initial` has it.
+const rollBack = (
+  shape: Fields,
+  source: Source,
+  initial: Record<string, unknown>,
+  fields: ReadonlyArray<readonly [string, unknown]>,
+  memo: Memo
+): unknown => {
+  const values = shape.fields.filter(isValueField)
+  const writes = values.map((field) => source.at(field.name).writes())
+  // The writes, and how many of each field's still count, are what it's made
+  // from.
+  const k = rolledBackKey(source.path)
+  const parts = [...fields.flat(), ...writes, ...writes.map(({ length }) => length)]
+  const previous = memo.get(k)
+  if (previous !== undefined && previous.parts.length === parts.length) {
+    if (previous.parts.every((part, i) => Object.is(part, parts[i]))) return previous.value
+  }
+  const current = new Map(fields)
+  const counted = writes.map(({ length }) => length)
+  // Where each field's latest write it can read is, among those that count.
+  const reading = writes.map((all, i) => latestRead(values[i]!.shape as Value, all, all.length))
+  let rolled: unknown = initial
+  for (;;) {
+    let latest = -1
+    for (let i = 0; i < values.length; i++) {
+      if (
+        counted[i]! > 0 &&
+        (latest < 0 || compareWrites(writes[i]![counted[i]! - 1]!, writes[latest]![counted[latest]! - 1]!) > 0)
+      ) {
+        latest = i
+      }
+    }
+    if (latest < 0) break
+    counted[latest]!--
+    // Taking back a write it couldn't read changes nothing.
+    if (reading[latest]!.index < counted[latest]!) continue
+    const field = values[latest]!
+    reading[latest] = latestRead(field.shape as Value, writes[latest]!, counted[latest]!)
+    current.set(field.name, reading[latest]!.index < 0 ? initial[field.name] : reading[latest]!.value)
+    const made = build(shape, [...current])
+    if (made !== Missing) {
+      rolled = made
+      break
+    }
+  }
+  memo.set(k, { parts, value: rolled })
+  return rolled
+}
+
+const rolledBackKey = (path: Path.Path): string => `${Path.key(path)} rolled back`
+
+// The latest of the first `count` writes that `shape` can read, and its index,
+// or -1.
+const latestRead = (
+  shape: Value,
+  writes: ReadonlyArray<InternalDocument.ValueWrite>,
+  count: number
+): { readonly index: number; readonly value: unknown } => {
+  for (let i = count - 1; i >= 0; i--) {
+    const decoded = shape.decode(writes[i]!.value)
+    if (Result.isSuccess(decoded)) return { index: i, value: decoded.success }
+  }
+  return { index: -1, value: undefined }
 }
 
 // A list item, or Missing if it can't be read or its key field names another
@@ -878,9 +978,26 @@ const planAt = (
     case "Fields": {
       // What the struct shows, once a field that shows its default needs it.
       let shownValue: unknown
+      // A class shown as it was, since its constructor won't take what its
+      // fields hold, is left as it is but for what the update changes from
+      // that: its values all at once, so it shows what it's given, and its
+      // other parts one by one.
+      const rolledBack = initial !== undefined && shape.make !== undefined
+        ? rolledBackAt(shape, document, path, initial, memo)
+        : undefined
+      const changesValues = rolledBack !== undefined && shape.fields.some((field) =>
+        isValueField(field) &&
+        !(field.shape as Value).equivalence(rolledBack[field.name], (after as Record<string, unknown>)[field.name])
+      )
       for (const field of shape.fields) {
         const fieldPath = [...path, field.name]
         const fieldAfter = (after as Record<string, unknown>)[field.name]
+        if (
+          rolledBack !== undefined && (isValueField(field)
+            ? !changesValues
+            : Object.is(rolledBack[field.name], fieldAfter) &&
+              Object.hasOwn(rolledBack, field.name) === Object.hasOwn(after as object, field.name))
+        ) continue
         // Inside an entry or item, a field that nothing this schema can read
         // was written to shows its default. Left as it shows, it's left
         // unwritten, so it doesn't write over what a newer schema wrote there,
@@ -932,6 +1049,21 @@ const planAt = (
         : planItems(shape, shape.key, document, path, after as ReadonlyArray<Record<string, unknown>>, intents, memo)
   }
 }
+
+// The class at `path`, always there, if it shows as it was because its
+// constructor won't take what its fields hold.
+const rolledBackAt = (
+  shape: Fields,
+  document: InternalDocument.Document,
+  path: Path.Path,
+  initial: { readonly value: unknown },
+  memo: Memo
+): Record<string, unknown> | undefined => {
+  const shows = readAt(shape, documentAt(document, path), initial, memo)
+  return shows === memo.get(rolledBackKey(path))?.value ? shows as Record<string, unknown> : undefined
+}
+
+const isValueField = (field: Field): boolean => field.shape._tag === "Value" && !field.optional
 
 // Whether the part at `path` exists and this schema can read it.
 const shown = (shape: Shape, document: InternalDocument.Document, path: Path.Path, memo: Memo, isKey = true) =>
