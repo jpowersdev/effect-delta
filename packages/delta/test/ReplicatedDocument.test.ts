@@ -905,6 +905,25 @@ describe("ReplicatedDocument", () => {
         assert.throws(() => ReplicatedDocument.text(doc, ["status"]), "isn't a text field")
       }))
 
+    it.effect("a path with a step that isn't a string is a defect, though the step names a list item", () =>
+      Effect.gen(function*() {
+        const Item = Schema.Struct({ id: Schema.String, text: ReplicatedDocument.Text })
+        const doc = yield* ReplicatedDocument.make(
+          Schema.Struct({ items: ReplicatedDocument.List(Item, { key: "id" }) }),
+          {
+            initial: { items: [] },
+            replica: Replica.ReplicaId.make("ada")
+          }
+        )
+        yield* ReplicatedDocument.update(doc, () => ({ items: [{ id: "0", text: "Hi" }] }))
+        // As a cast lets through, such as one for a path longer than its type
+        // takes: a change can't carry it.
+        assert.throws(
+          () => ReplicatedDocument.text(doc, ["items", 0 as unknown as string, "text"]),
+          "isn't a text field"
+        )
+      }))
+
     it.effect("a handle keeps its path, though the array it was given changes", () =>
       Effect.gen(function*() {
         const ada = yield* make("ada")
