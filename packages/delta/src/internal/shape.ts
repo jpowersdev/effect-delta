@@ -337,14 +337,16 @@ const asJson = Schema.decodeUnknownResult(Schema.Json)
 const shallowEnough = (json: Schema.Json): Result.Result<Schema.Json, Schema.SchemaError> =>
   InternalDocument.nestsTooDeep(json) ? Result.fail(tooDeep()) : Result.succeed(json)
 
-// Whether a part shows the value an update gives it, as the part's
-// equivalence says. Comparing recurses into them, and a value nested deeper
-// than the stack goes, as it can be inside an `Option` or a class, where
-// looking for values nested too deep doesn't go, counts as another: writing
-// it then fails, as encoding finds it nested too deep.
-const sameValue = (shape: Value, shown: unknown, given: unknown): boolean => {
+// Whether two values a part can hold are the same, as the part's equivalence
+// says. Comparing recurses into them, and a value nested deeper than the
+// stack goes counts as another. One an update gives can be, inside an
+// `Option` or a class, where looking for values nested too deep doesn't go:
+// writing it then fails, as encoding finds it nested too deep. One a merge
+// meets can be too, read from JSON shallow enough to write, as a linked list
+// is from an array: they're then told of as differing.
+const sameValue = (shape: Value, a: unknown, b: unknown): boolean => {
   try {
-    return shape.equivalence(shown, given)
+    return shape.equivalence(a, b)
   } catch (error) {
     if (error instanceof RangeError) return false
     throw error
@@ -478,7 +480,7 @@ export const reading = (shape: Shape): InternalDocument.Reading => {
     },
     differ: (path, a, b) => {
       const value = valueAt(path)!
-      return !value.equivalence(Result.getOrThrow(value.decode(a)), Result.getOrThrow(value.decode(b)))
+      return !sameValue(value, Result.getOrThrow(value.decode(a)), Result.getOrThrow(value.decode(b)))
     },
     comesAndGoes: (path) => {
       const found = at(shape, path)
@@ -1145,7 +1147,7 @@ const same = (shape: Shape, a: unknown, b: unknown): boolean => {
     case "Counter":
       return false
     case "Value":
-      return shape.equivalence(a, b)
+      return sameValue(shape, a, b)
     case "Fields":
       return Predicate.isObject(a) && Predicate.isObject(b) &&
         sameFields(shape, a as Record<string, unknown>, b as Record<string, unknown>)
