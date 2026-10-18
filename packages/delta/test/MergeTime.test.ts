@@ -457,6 +457,55 @@ describe("merge time", { concurrent: false }, () => {
   )
 
   it.effect(
+    "writes merge about as fast however many values the other replica wrote that read as none or as the same",
+    () =>
+      Effect.gen(function*() {
+        const Status = Schema.Struct({ note: Schema.String, label: Schema.String })
+        // Ada writes values this schema can't read, as a newer one's replica
+        // can, and the same value again and again, `times` times each; then
+        // Ben's 200 writes of each, which hadn't seen hers, arrive.
+        const writing = (replica: string, notes: ReadonlyArray<Schema.Json>): InternalDocument.AnyChange => ({
+          replica,
+          seq: 0,
+          length: 2 * notes.length,
+          parents: [],
+          time: 1,
+          ops: notes.flatMap((note): ReadonlyArray<InternalDocument.Op> => [
+            { _tag: "Set", path: ["note"], value: note },
+            { _tag: "Set", path: ["label"], value: "same" }
+          ])
+        })
+        // How long a replica with Ada's writes takes in Ben's.
+        const merging = Effect.fnUntraced(function*(times: number) {
+          const carol = yield* ReplicatedDocument.make(Status, {
+            initial: { note: "", label: "" },
+            replica: Replica.ReplicaId.make("carol")
+          })
+          yield* Replica.receive(
+            carol,
+            InternalDelta.fromChanges([writing("ada", Array.from({ length: times }, (_, i) => i))])
+          )
+          // The test clock stands still, so this is the time on the wall.
+          const start = performance.now()
+          const overlaps = yield* Replica.receive(
+            carol,
+            InternalDelta.fromChanges([writing("ben", Array.from({ length: 200 }, (_, i) => `ben ${i}`))])
+          )
+          const took = performance.now() - start
+          assert.deepStrictEqual(overlaps, [])
+          return took
+        })
+        // The least of a few, so a pause elsewhere doesn't count.
+        const least = (times: number) =>
+          Effect.map(Effect.all([merging(times), merging(times), merging(times)]), (took) => Math.min(...took))
+        const seldom = yield* least(250)
+        const often = yield* least(8000)
+        assert.isBelow(often / seldom, 8)
+      }),
+    120_000
+  )
+
+  it.effect(
     "edits and moves inside a part merge about as fast however many times it was removed that they hadn't seen",
     () =>
       Effect.gen(function*() {
