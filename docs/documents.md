@@ -183,9 +183,6 @@ Anything without its own rule is written and replaced whole.
 - **Unions** (a block that's a paragraph or an image), `Option`, `Date`, sets and maps are replaced whole.
 - Text and counters can't sit inside a whole value (a union, an array, an `Option`), because they'd be
   replaced whole too. `make` refuses such a schema, as a defect.
-- A value is written as its type's JSON, so one with no JSON form can't be written: `make` refuses a value
-  that holds a declaration without a JSON codec, such as `Schema.instanceOf` makes (Effect's own, such as
-  `Schema.URL`, have one), as a defect.
 
 ### Checks
 
@@ -447,7 +444,9 @@ interface Proposed<A> { readonly before: A; readonly after: A; readonly paths: R
 
 The whole call is one change. It fails with `Schema.SchemaError` when a new value doesn't encode, for example
 when it fails a check, or encodes to something JSON can't carry (a value is written as its type's JSON,
-whatever the schema's own encoding, and `Schema.Any` passes anything on), or to JSON
+whatever the schema's own encoding, and `Schema.Any`, `Schema.Unknown` and a declaration without a JSON codec
+pass their values on as they are, so an instance such as `Schema.instanceOf` takes can't be written; Effect's
+own declarations, such as `Schema.URL`, have one), or to JSON
 that reads back as another value (a union of a number and a string writes the string `"NaN"` as the number's
 JSON), and when two items of a list have the same key. Values are
 written as JSON sends them, so `-0` is written as `0`, and a `-0` in JSON text, which other languages send,
