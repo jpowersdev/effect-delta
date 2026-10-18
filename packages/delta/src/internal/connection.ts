@@ -77,6 +77,9 @@ export const connect = Effect.fnUntraced(function*(
         yield* core.accept(update.delta).pipe(
           Effect.mapError((reason) => new Sync.SyncError({ reason }))
         )
+        // An authority has only what it accepted, so what it has is
+        // confirmed, even if the answer to the push that sent it was lost.
+        if (core.confirmed !== undefined) yield* core.confirmed.acknowledge(update.version)
         if (caughtUp) {
           yield* setServerVersion(VersionVector.combine(serverVersion, update.version))
         } else {
