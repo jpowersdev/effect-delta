@@ -1120,14 +1120,20 @@ export const reusing = (history: History.History<Op>, changes: Iterable<AnyChang
   return undefined
 }
 
-// What's wrong with a change that the change alone shows: it takes no sequence
-// numbers, which version vectors can't say whether anyone has, or more than
-// they can count, or it starts, or names a parent, before any change, or it
-// writes deeper than a document goes, which would take a receiver more stack
-// than it has. It's refused before it can wait or be saved: nothing checks a
-// waiting change's ops against its length, and servers count changes that
-// wait as held.
-const checkOnArrival = (change: AnyChange): string | undefined => {
+/**
+ * What's wrong with a change that the change alone shows: it takes no
+ * sequence numbers, which version vectors can't say whether anyone has, or
+ * more than they can count, or it starts, or names a parent, before any
+ * change, or it writes deeper than a document goes, which would take a
+ * receiver more stack than it has. It's refused before it can wait or be
+ * saved: nothing checks a waiting change's ops against its length, and
+ * servers count changes that wait as held. Loading checks stored changes the
+ * same way, since a store written before a check was added can hold ones it
+ * refuses.
+ *
+ * @internal
+ */
+export const checkOnArrival = (change: AnyChange): string | undefined => {
   const name = `Change ${key(change)}`
   if (change.length < 1) return `${name} takes no sequence numbers`
   if (!Number.isSafeInteger(change.seq + change.length)) {
@@ -1606,8 +1612,8 @@ const shownPosition = (document: Document, path: Path.Path): Fugue.Node<Item> =>
 /**
  * Starts a replay document from saved history without replaying its texts:
  * `changes` are exactly the ones in `version`, and `texts` are the texts they
- * make. Undefined if they don't fit together, or the strategy can't start
- * from texts.
+ * make. Undefined if they don't fit together, the strategy can't start from
+ * texts, or receiving would refuse one of them.
  *
  * @internal
  */
@@ -1617,7 +1623,7 @@ export const load = (
   version: VersionVector.VersionVector,
   saved: ReadonlyArray<{ readonly path: Path.Path; readonly text: string }>
 ): Document | undefined => {
-  if (strategy !== "replay") return undefined
+  if (strategy !== "replay" || changes.some((change) => checkOnArrival(change) !== undefined)) return undefined
   const document = make(strategy)
   const { history } = document
   for (const change of changes) history.pending.set(key(change), change)

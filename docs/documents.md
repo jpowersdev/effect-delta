@@ -690,7 +690,9 @@ All built, each with tests and an example:
     than they had, and a relay that stored it while it waited couldn't load the document again.
 12. **Values nest at most 128 deep.** Receivers freeze what's written, and a value nested a few thousand deep,
     once frozen, was more than `JSON.stringify` could send on, so a relay that took one stopped serving its
-    document. Every receiver refuses a change that writes one, and `update` fails for one.
+    document. Every receiver refuses a change that writes one, and `update` fails for one. Relays and replicas
+    loading a store drop what receiving would refuse, so a store written before a check was added still loads,
+    and a relay doesn't serve its replicas what they refuse.
 
 ## Later
 

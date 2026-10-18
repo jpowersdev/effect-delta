@@ -329,8 +329,14 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
   }
   if (Option.isSome(stored)) {
     for (const [replica, owner] of Object.entries(stored.value.writers)) document.owners.set(replica, owner)
-    const changes = [...(stored.value.history as InternalDelta.DeltaImpl).changes.values()]
     const { state } = document
+    // Checked as they were on arrival, since a store written before a check
+    // was added can hold changes it refuses, which no replica would take.
+    const changes: Array<InternalDocument.AnyChange> = []
+    for (const change of (stored.value.history as InternalDelta.DeltaImpl).changes.values()) {
+      if (InternalDocument.checkOnArrival(change) === undefined) changes.push(change)
+      else state.history.dropped.set(key(change), change)
+    }
     state.strategy = InternalDocument.strategyOf(changes)
     for (const change of changes) state.history.pending.set(key(change), change)
     // Applied changes were checked before they were stored. One that was
