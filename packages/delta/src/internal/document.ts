@@ -619,6 +619,10 @@ class Edits {
   private walked = 0
   private readonly parts: Part = { children: new Map(), key: undefined }
   private readonly byPart = new Map<string, Array<AnyChange>>()
+  // Per part, where its changes are known to have all seen the removal it's
+  // asked about, from wherever the asks so far started: every ask about a
+  // part is about the removal it ends removed by.
+  private readonly seenUpTo = new Map<string, number>()
   private readonly history: History.History<Op>
   private readonly editor: string
   private readonly reading: Reading
@@ -648,8 +652,11 @@ class Edits {
   missed(path: Path.Path, start: number, next: number, removal: Write): boolean {
     // Changes walked now are looked up only if it's asked again.
     const again = --this.asked > 0
-    if (start >= next) return false
     const k = Path.key(path)
+    // Asked in the order their spans start, what an earlier one found had
+    // seen the removal needn't be looked at again.
+    start = Math.max(start, this.seenUpTo.get(k) ?? 0)
+    if (start >= next) return false
     // Each change says what it was made on top of, which needn't include
     // what its replica's earlier ones had seen.
     const unseen = (change: AnyChange) =>
@@ -676,6 +683,7 @@ class Edits {
         return true
       }
     }
+    this.seenUpTo.set(k, next)
     return false
   }
   // Notes a change under each part it's asked about that the change edits
