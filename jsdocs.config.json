@@ -1,0 +1,14 @@
+{
+  "tsconfig": "tsconfig.packages.json",
+  "include": [
+    "packages/**/src/*.ts",
+    "packages/**/src/**/*.ts"
+  ],
+  "exclude": [
+    "**/node_modules/**",
+    "packages/tools/**",
+    "packages/**/src/internal/**",
+    "packages/**/src/**/internal/**"
+  ],
+  "output": ".data/jsdocs.json"
+}
