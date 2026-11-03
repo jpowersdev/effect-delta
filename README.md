@@ -31,7 +31,8 @@ const RelayLive = Relay.layer.pipe(Layer.provide(HistoryStore.layerMemory))
 await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive)))
 ```
 
-[`examples/`](examples) has fuller cases, including a server that rejects edits.
+[`examples/`](examples) has fuller cases, including a server that rejects edits. [`docs/`](docs) explains the concepts,
+how to choose a strategy, and the API.
 
 ## Modules
 
@@ -54,7 +55,7 @@ histories: about 3 s at 50 small edits to a 47 KB text.
 
 ## Status
 
-Unstable: every module may change in any minor release. Design notes are in [`docs/`](docs).
+Unstable: every module may change in any minor release.
 
 ## License
 
