@@ -105,7 +105,7 @@ const RelayRemote = Relay.layerRemote.pipe(
   Layer.provide(RpcSerialization.layerNdjson)
 )
 
-const notes = Replica.DocumentId.make("notes")
+const notes = Replica.RoomId.make("notes")
 
 const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
@@ -115,10 +115,10 @@ const program = Effect.gen(function*() {
     replica: Replica.ReplicaId.make("phone")
   })
   yield* Relay.connect(laptop, {
-    document: notes
+    room: notes
   })
   yield* Relay.connect(phone, {
-    document: notes
+    room: notes
   })
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
@@ -142,7 +142,7 @@ and `RelayRemote` another. For peer-to-peer, one peer runs the relay and the oth
 ## Say who's connecting
 
 `Sync.Authorization` runs on every request. `identify` decides who it's from, from its headers, so cookies and tokens work.
-`authorize` decides read and write access per document. A replica id belongs to the first user who writes with it, and a push
+`authorize` decides read and write access per room. A replica id belongs to the first user who writes with it, and a push
 with changes under an id owned by someone else is `Forbidden`.
 
 ```ts import.meta.vitest
@@ -187,7 +187,7 @@ const program = Effect.gen(function*() {
   )
   yield* authorization.authorize({
     user,
-    document: Replica.DocumentId.make("notes"),
+    room: Replica.RoomId.make("notes"),
     access: "read"
   })
   yield* Effect.log(user)
@@ -227,7 +227,7 @@ const EditorsOnly = Authority.layer({
 
 const program = Effect.gen(function*() {
   const spec = yield* ReplicatedText.makeConfirmed({
-    document: Replica.DocumentId.make("spec")
+    room: Replica.RoomId.make("spec")
   })
   const { edits } = yield* ReplicatedText.subscribe(spec)
 
@@ -272,7 +272,7 @@ const program = Effect.gen(function*() {
     replica: Replica.ReplicaId.make("laptop")
   })
   const connection = yield* Relay.connect(notes, {
-    document: Replica.DocumentId.make("notes")
+    room: Replica.RoomId.make("notes")
   })
   yield* connection.status.pipe(
     Stream.filter((status) => status._tag === "Synced"),
@@ -295,12 +295,12 @@ await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive)))
 ## What servers guarantee
 
 - **They save before they share.** A pushed change is checked, stored, then sent to subscribers. If storing fails, the push
-  fails with `Unavailable`, every subscription to that document ends with it, and the document is loaded again from the store.
+  fails with `Unavailable`, every subscription to that room ends with it, and the room is loaded again from the store.
 - **A push that has started finishes,** even if its client goes away, so a store or `check` that never returns holds up that
-  document's other pushes.
+  room's other pushes.
 - **A change that builds on something the server doesn't have yet** waits on a relay. An authority can't check it, so it
   refuses the push as `Malformed`.
-- **A document has one strategy,** taken from what's stored, or else from the first replica to subscribe or push. The other
+- **A room has one strategy,** taken from what's stored, or else from the first replica to subscribe or push. The other
   strategy is refused.
 
 ## Encoding

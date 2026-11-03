@@ -10,7 +10,7 @@ import * as ReplayText from "./replayText.ts"
 import * as TreeText from "./treeText.ts"
 
 // A text and its history, under one strategy. Replicas and servers keep one per
-// document and go through this, so neither depends on how the strategy works.
+// room and go through this, so neither depends on how the strategy works.
 
 /** @internal */
 export type Op = TreeText.Op | ReplayText.Op

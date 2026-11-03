@@ -8,8 +8,8 @@ import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"
 
 // A server and its clients talking over a real WebSocket, with JSON framing.
 
-const spec = Replica.DocumentId.make("spec")
-const drafts = Replica.DocumentId.make("drafts")
+const spec = Replica.RoomId.make("spec")
+const drafts = Replica.RoomId.make("drafts")
 
 // Users sign in with a header. Only editors may edit, and only editors may
 // read drafts.
@@ -19,8 +19,8 @@ const Users = Layer.succeed(Sync.Authorization)({
       onNone: () => Effect.fail(new Sync.Forbidden({ message: "Sign in first" })),
       onSome: Effect.succeed
     }),
-  authorize: ({ document, user }) =>
-    document === drafts && !user.startsWith("editor")
+  authorize: ({ room, user }) =>
+    room === drafts && !user.startsWith("editor")
       ? Effect.fail(new Sync.Forbidden({ message: "Drafts are for editors" }))
       : Effect.void
 })
@@ -75,10 +75,10 @@ const showing = (self: ReplicatedText.ReplicatedText, text: string) =>
 describe("over a WebSocket", () => {
   it.live("an authority accepts editors' changes and rejects reviewers'", () =>
     Effect.gen(function*() {
-      const editor = yield* ReplicatedText.makeConfirmed({ document: spec }).pipe(
+      const editor = yield* ReplicatedText.makeConfirmed({ room: spec }).pipe(
         Effect.provideContext(yield* authorityFor("editor-1"))
       )
-      const reviewer = yield* ReplicatedText.makeConfirmed({ document: spec }).pipe(
+      const reviewer = yield* ReplicatedText.makeConfirmed({ room: spec }).pipe(
         Effect.provideContext(yield* authorityFor("reviewer-1"))
       )
       const { edits } = yield* ReplicatedText.subscribe(reviewer)
@@ -98,7 +98,7 @@ describe("over a WebSocket", () => {
 
   it.live("a connection the server forbids gives up", () =>
     Effect.gen(function*() {
-      const reviewer = yield* ReplicatedText.makeConfirmed({ document: drafts }).pipe(
+      const reviewer = yield* ReplicatedText.makeConfirmed({ room: drafts }).pipe(
         Effect.provideContext(yield* authorityFor("reviewer-1"))
       )
       const error = yield* Effect.flip(reviewer.connection.await)
@@ -111,8 +111,8 @@ describe("over a WebSocket", () => {
       const bob = yield* relayFor("bob")
       const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
       const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
-      yield* Relay.connect(laptop, { document: spec }).pipe(Effect.provideContext(alice))
-      yield* Relay.connect(phone, { document: spec }).pipe(Effect.provideContext(bob))
+      yield* Relay.connect(laptop, { room: spec }).pipe(Effect.provideContext(alice))
+      yield* Relay.connect(phone, { room: spec }).pipe(Effect.provideContext(bob))
 
       yield* ReplicatedText.insert(laptop, 0, "Hello")
       yield* showing(phone, "Hello")
@@ -122,7 +122,7 @@ describe("over a WebSocket", () => {
       // Bob can't push changes under Alice's replica id.
       const relay = yield* Effect.provideContext(Effect.service(Relay.Relay), bob)
       const delta = yield* Replica.delta(laptop, { phone: 7 })
-      const error = yield* Effect.flip(relay.push({ format: Sync.FORMAT, document: spec, delta }))
+      const error = yield* Effect.flip(relay.push({ format: Sync.FORMAT, room: spec, delta }))
       assert.strictEqual(error.reason._tag, "Forbidden")
     }).pipe(Effect.scoped, Effect.provide(RelayServer)))
 })

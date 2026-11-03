@@ -13,8 +13,8 @@ import { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Stream } fro
 import { layerSeeded } from "./utils/secureRandom.ts"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
-const notes = Replica.DocumentId.make("notes")
-const spec = Replica.DocumentId.make("spec")
+const notes = Replica.RoomId.make("notes")
+const spec = Replica.RoomId.make("spec")
 
 // Waits until the replica shows `text`.
 const showing = (self: ReplicatedText.ReplicatedText, text: string) =>
@@ -42,8 +42,8 @@ const failingOnce = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*
   let failed = false
   return {
     ...store,
-    append: (document, delta) => {
-      if (failed) return store.append(document, delta)
+    append: (room, delta) => {
+      if (failed) return store.append(room, delta)
       failed = true
       return Effect.fail(new HistoryStore.HistoryStoreError({ message: "Disk full", cause: undefined }))
     }
@@ -57,8 +57,8 @@ describe("Relay", () => {
     Effect.gen(function*() {
       const laptop = yield* make("laptop")
       const phone = yield* make("phone")
-      yield* Relay.connect(laptop, { document: notes })
-      yield* Relay.connect(phone, { document: notes })
+      yield* Relay.connect(laptop, { room: notes })
+      yield* Relay.connect(phone, { room: notes })
 
       yield* ReplicatedText.insert(laptop, 0, "Hello")
       yield* showing(phone, "Hello")
@@ -70,10 +70,10 @@ describe("Relay", () => {
     Effect.gen(function*() {
       const laptop = yield* make("laptop")
       const phone = yield* make("phone")
-      yield* Relay.connect(phone, { document: notes })
+      yield* Relay.connect(phone, { room: notes })
 
       yield* Effect.scoped(Effect.gen(function*() {
-        yield* Relay.connect(laptop, { document: notes })
+        yield* Relay.connect(laptop, { room: notes })
         yield* ReplicatedText.insert(laptop, 0, "Sessions last 24 hours.")
         yield* showing(phone, "Sessions last 24 hours.")
       }))
@@ -82,7 +82,7 @@ describe("Relay", () => {
       yield* ReplicatedText.update(laptop, (text) => text.replace("24", "8"))
       yield* ReplicatedText.update(phone, (text) => text.replace("24", "12"))
 
-      const connection = yield* Relay.connect(laptop, { document: notes })
+      const connection = yield* Relay.connect(laptop, { room: notes })
       yield* synced(connection)
       const merged = yield* ReplicatedText.get(laptop)
       assert.include(["Sessions last 812 hours.", "Sessions last 128 hours."], merged)
@@ -93,14 +93,14 @@ describe("Relay", () => {
   it.effect("counts changes the relay hasn't acknowledged", () =>
     Effect.gen(function*() {
       const laptop = yield* make("laptop")
-      const connection = yield* Relay.connect(laptop, { document: notes })
+      const connection = yield* Relay.connect(laptop, { room: notes })
       yield* synced(connection)
       yield* ReplicatedText.insert(laptop, 0, "Hello")
       // Counted at once, before the push goes out.
       assert.strictEqual(yield* unconfirmed(connection), 1)
       yield* connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)
       const phone = yield* make("phone")
-      yield* synced(yield* Relay.connect(phone, { document: notes }))
+      yield* synced(yield* Relay.connect(phone, { room: notes }))
       assert.strictEqual(yield* ReplicatedText.get(phone), "Hello")
     }).pipe(Effect.scoped, Effect.provide(RelayLive)))
 
@@ -108,8 +108,8 @@ describe("Relay", () => {
     Effect.gen(function*() {
       const laptop = yield* make("laptop")
       const phone = yield* make("phone")
-      const a = yield* Relay.connect(laptop, { document: notes })
-      const b = yield* Relay.connect(phone, { document: notes })
+      const a = yield* Relay.connect(laptop, { room: notes })
+      const b = yield* Relay.connect(phone, { room: notes })
       yield* ReplicatedText.insert(laptop, 0, "abc")
       yield* showing(phone, "abc")
       yield* b.sync
@@ -120,7 +120,7 @@ describe("Relay", () => {
       yield* ReplicatedText.remove(tablet, 0, 1)
       yield* ReplicatedText.remove(laptop, 0, 1)
       yield* Stream.runHead(a.unconfirmed.pipe(Stream.filter((count) => count === 0)))
-      yield* Relay.connect(tablet, { document: notes }).pipe(Effect.flatMap((c) => c.sync))
+      yield* Relay.connect(tablet, { room: notes }).pipe(Effect.flatMap((c) => c.sync))
       yield* a.sync
       yield* b.sync
       assert.deepStrictEqual(yield* Replica.version(phone), yield* Replica.version(laptop))
@@ -137,23 +137,23 @@ describe("Relay", () => {
       yield* ReplicatedText.insert(alice, 0, "Hello")
       yield* Replica.exchange(alice, bob)
       yield* ReplicatedText.insert(bob, 5, ", world")
-      const fromBob = yield* Relay.connect(bob, { document: notes })
+      const fromBob = yield* Relay.connect(bob, { room: notes })
       yield* synced(fromBob)
       // The relay holds Bob's change, so Bob doesn't push it again.
       assert.strictEqual(yield* unconfirmed(fromBob), 0)
 
-      yield* Relay.connect(carol, { document: notes })
-      yield* Relay.connect(alice, { document: notes })
+      yield* Relay.connect(carol, { room: notes })
+      yield* Relay.connect(alice, { room: notes })
       yield* showing(carol, "Hello, world")
     }).pipe(Effect.scoped, Effect.provide(RelayLive)))
 
-  it.effect("keeps documents in the history store", () =>
+  it.effect("keeps rooms in the history store", () =>
     Effect.gen(function*() {
       yield* Effect.scoped(
         Effect.gen(function*() {
           const laptop = yield* make("laptop")
           yield* ReplicatedText.insert(laptop, 0, "Saved")
-          yield* synced(yield* Relay.connect(laptop, { document: notes }))
+          yield* synced(yield* Relay.connect(laptop, { room: notes }))
         }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
       )
 
@@ -161,13 +161,13 @@ describe("Relay", () => {
       yield* Effect.scoped(
         Effect.gen(function*() {
           const phone = yield* make("phone")
-          yield* synced(yield* Relay.connect(phone, { document: notes }))
+          yield* synced(yield* Relay.connect(phone, { room: notes }))
           assert.strictEqual(yield* ReplicatedText.get(phone), "Saved")
         }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
       )
     }).pipe(Effect.provide(HistoryStore.layerMemory)))
 
-  it.effect("syncs replay replicas, and keeps their document", () =>
+  it.effect("syncs replay replicas, and keeps their room", () =>
     Effect.gen(function*() {
       const makeReplay = (replica: string) =>
         ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
@@ -176,8 +176,8 @@ describe("Relay", () => {
           const laptop = yield* makeReplay("laptop")
           const phone = yield* makeReplay("phone")
           yield* ReplicatedText.insert(laptop, 0, "Sessions last 24 hours.")
-          yield* synced(yield* Relay.connect(laptop, { document: notes }))
-          yield* synced(yield* Relay.connect(phone, { document: notes }))
+          yield* synced(yield* Relay.connect(laptop, { room: notes }))
+          yield* synced(yield* Relay.connect(phone, { room: notes }))
           // Both edit at once, while connected.
           yield* ReplicatedText.update(laptop, (text) => text.replace("24", "8"))
           yield* ReplicatedText.update(phone, (text) => text.replace("hours", "minutes"))
@@ -186,14 +186,14 @@ describe("Relay", () => {
         }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
       )
 
-      // A new relay loads the document as a replay document.
+      // A new relay loads the room as a replay room.
       yield* Effect.scoped(
         Effect.gen(function*() {
           const tablet = yield* makeReplay("tablet")
-          yield* synced(yield* Relay.connect(tablet, { document: notes }))
+          yield* synced(yield* Relay.connect(tablet, { room: notes }))
           assert.strictEqual(yield* ReplicatedText.get(tablet), "Sessions last 8 minutes.")
           const tree = yield* make("tree")
-          const error = yield* Effect.flip((yield* Relay.connect(tree, { document: notes })).await)
+          const error = yield* Effect.flip((yield* Relay.connect(tree, { room: notes })).await)
           assert.strictEqual(error.reason._tag, "ProtocolViolation")
         }).pipe(Effect.provide(Layer.fresh(Relay.layer)))
       )
@@ -204,8 +204,8 @@ describe("Relay", () => {
       const laptop = yield* make("laptop")
       const phone = yield* make("phone")
       const retry = Schedule.forever
-      yield* synced(yield* Relay.connect(phone, { document: notes, retry }))
-      yield* Relay.connect(laptop, { document: notes, retry })
+      yield* synced(yield* Relay.connect(phone, { room: notes, retry }))
+      yield* Relay.connect(laptop, { room: notes, retry })
       yield* ReplicatedText.insert(laptop, 0, "Hello")
       yield* showing(phone, "Hello")
     }).pipe(
@@ -217,12 +217,12 @@ describe("Relay", () => {
     Effect.gen(function*() {
       const laptop = yield* make("laptop")
       const retry = Schedule.forever
-      yield* synced(yield* Relay.connect(laptop, { document: notes, retry }))
+      yield* synced(yield* Relay.connect(laptop, { room: notes, retry }))
       // Failing the save ends this replica's subscription, which interrupts the push
       // that's reporting the failure.
       yield* ReplicatedText.insert(laptop, 0, "Hello")
       const phone = yield* make("phone")
-      yield* Relay.connect(phone, { document: notes, retry })
+      yield* Relay.connect(phone, { room: notes, retry })
       yield* showing(phone, "Hello")
     }).pipe(
       Effect.scoped,
@@ -231,7 +231,7 @@ describe("Relay", () => {
 
   it.effect("uploads everything again to a relay that lost it", () =>
     Effect.gen(function*() {
-      // A relay that keeps documents only in memory, restarted.
+      // A relay that keeps rooms only in memory, restarted.
       const before = Context.get(yield* Layer.build(Layer.fresh(RelayLive)), Relay.Relay)
       const after = Context.get(yield* Layer.build(Layer.fresh(RelayLive)), Relay.Relay)
       let current = before
@@ -244,7 +244,7 @@ describe("Relay", () => {
 
       const laptop = yield* make("laptop")
       yield* ReplicatedText.insert(laptop, 0, "Hello")
-      const connection = yield* Relay.connect(laptop, { document: notes, retry: Schedule.forever }).pipe(
+      const connection = yield* Relay.connect(laptop, { room: notes, retry: Schedule.forever }).pipe(
         Effect.provideService(Relay.Relay, restarting)
       )
       yield* synced(connection)
@@ -255,7 +255,7 @@ describe("Relay", () => {
       yield* Deferred.fail(disconnected, new Sync.SyncError({ reason: new Sync.Disconnected({ cause: "restart" }) }))
 
       const phone = yield* make("phone")
-      yield* Relay.connect(phone, { document: notes }).pipe(Effect.provideService(Relay.Relay, after))
+      yield* Relay.connect(phone, { room: notes }).pipe(Effect.provideService(Relay.Relay, after))
       yield* showing(phone, "Hello")
     }).pipe(Effect.scoped))
 
@@ -265,7 +265,7 @@ describe("Relay", () => {
       const laptop = yield* make("laptop")
       const push = Effect.gen(function*() {
         const delta = yield* Replica.delta(laptop, VersionVector.empty)
-        return yield* relay.push({ format: Sync.FORMAT, document: notes, delta })
+        return yield* relay.push({ format: Sync.FORMAT, room: notes, delta })
       })
 
       yield* ReplicatedText.insert(laptop, 0, "Mine")
@@ -282,7 +282,7 @@ describe("Relay", () => {
       const relay = yield* Relay.Relay
       const error = yield* relay.subscribe({
         format: Sync.FORMAT,
-        document: notes,
+        room: notes,
         strategy: "tree",
         version: VersionVector.empty,
         authority: true
@@ -303,20 +303,20 @@ describe("Authority", () => {
             : Effect.void
         const Held = Layer.effect(HistoryStore.HistoryStore)(Effect.map(HistoryStore.HistoryStore, (store) => ({
           ...store,
-          append: (document, delta) => Effect.andThen(holding("append"), store.append(document, delta)),
-          addWriter: (document, replica, owner) =>
-            Effect.andThen(holding("addWriter"), store.addWriter(document, replica, owner))
+          append: (room, delta) => Effect.andThen(holding("append"), store.append(room, delta)),
+          addWriter: (room, replica, owner) =>
+            Effect.andThen(holding("addWriter"), store.addWriter(room, replica, owner))
         }))).pipe(Layer.provideMerge(HistoryStore.layerMemory))
 
         yield* Effect.gen(function*() {
-          const reviewer = yield* ReplicatedText.makeConfirmed({ document: spec })
+          const reviewer = yield* ReplicatedText.makeConfirmed({ room: spec })
           yield* synced(reviewer.connection)
           const authority = yield* Authority.Authority
           const writer = yield* make("writer")
           yield* ReplicatedText.insert(writer, 0, "Spec v1")
           const pushing = yield* authority.push({
             format: Sync.FORMAT,
-            document: spec,
+            room: spec,
             delta: yield* Replica.delta(writer, {})
           }).pipe(asUser("editor"), Effect.forkChild)
 
@@ -345,7 +345,7 @@ describe("Authority", () => {
     Effect.gen(function*() {
       const answer = yield* Deferred.make<void>()
       const authority = yield* Authority.Authority
-      const replica = yield* ReplicatedText.makeConfirmed({ document: spec }).pipe(
+      const replica = yield* ReplicatedText.makeConfirmed({ room: spec }).pipe(
         Effect.provideService(Authority.Authority, {
           ...authority,
           // The server has saved and published it, and the answer is still on its way.
@@ -361,8 +361,8 @@ describe("Authority", () => {
 
   it.effect("shares what it accepts and rolls back what it rejects", () =>
     Effect.gen(function*() {
-      const editor = yield* ReplicatedText.makeConfirmed({ document: spec })
-      const reviewer = yield* ReplicatedText.makeConfirmed({ document: spec })
+      const editor = yield* ReplicatedText.makeConfirmed({ room: spec })
+      const reviewer = yield* ReplicatedText.makeConfirmed({ room: spec })
       yield* synced(reviewer.connection)
       const before = yield* Replica.id(reviewer)
       const { edits } = yield* ReplicatedText.subscribe(reviewer)
@@ -397,7 +397,7 @@ describe("Authority", () => {
       })).pipe(Layer.provide(NoSecrets))
 
       yield* Effect.gen(function*() {
-        const notes = yield* ReplicatedText.makeConfirmed({ document: spec })
+        const notes = yield* ReplicatedText.makeConfirmed({ room: spec })
         yield* synced(notes.connection)
         // Held at the gate, then rejected.
         yield* ReplicatedText.insert(notes, 0, "a secret")
@@ -407,7 +407,7 @@ describe("Authority", () => {
         yield* showing(notes, "")
         yield* ReplicatedText.insert(notes, 0, "a plan")
         yield* showing(notes, "a plan")
-        const other = yield* ReplicatedText.makeConfirmed({ document: spec })
+        const other = yield* ReplicatedText.makeConfirmed({ room: spec })
         yield* showing(other, "a plan")
       }).pipe(Effect.provide(Gated))
     }).pipe(Effect.scoped, Effect.provide(CryptoTest)))
@@ -420,7 +420,7 @@ describe("Authority", () => {
       yield* ReplicatedText.insert(laptop, 1, " secret")
       yield* ReplicatedText.insert(laptop, 0, "b")
       const delta = yield* Replica.delta(laptop, VersionVector.empty)
-      const ack = yield* authority.push({ format: Sync.FORMAT, document: spec, delta })
+      const ack = yield* authority.push({ format: Sync.FORMAT, room: spec, delta })
       assert.deepStrictEqual(ack, new Sync.PushRejected({ confirmed: { laptop: 1 }, message: "No secrets" }))
     }).pipe(Effect.provide(NoSecrets)))
 
@@ -433,13 +433,13 @@ describe("Authority", () => {
       yield* Replica.exchange(alice, bob)
       yield* ReplicatedText.insert(bob, 5, "!")
       const delta = yield* Replica.delta(bob, yield* Replica.version(alice))
-      const error = yield* Effect.flip(authority.push({ format: Sync.FORMAT, document: spec, delta }))
+      const error = yield* Effect.flip(authority.push({ format: Sync.FORMAT, room: spec, delta }))
       assert.strictEqual(error.reason._tag, "DeltaError")
     }).pipe(Effect.provide(NoSecrets)))
 
   it.effect("a confirmed replica syncs with nothing else", () =>
     Effect.gen(function*() {
-      const confirmed = yield* ReplicatedText.makeConfirmed({ document: spec })
+      const confirmed = yield* ReplicatedText.makeConfirmed({ room: spec })
       const peer = yield* make("peer")
       const exchanged = yield* Effect.flip(Replica.exchange(peer, confirmed))
       assert.strictEqual(exchanged.reason._tag, "AuthorityOnly")
@@ -449,7 +449,7 @@ describe("Authority", () => {
 
   it.effect("refuses replicas that don't expect an authority", () =>
     Effect.gen(function*() {
-      const connection = yield* Relay.connect(yield* make("laptop"), { document: spec })
+      const connection = yield* Relay.connect(yield* make("laptop"), { room: spec })
       const error = yield* Effect.flip(connection.await)
       assert.strictEqual(error.reason._tag, "ProtocolViolation")
     }).pipe(

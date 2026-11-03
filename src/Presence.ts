@@ -1,5 +1,5 @@
 /**
- * Presence is who else has a document open, and where: cursors, selections and
+ * Presence is who else is in a room, and where: cursors, selections and
  * anything else that matters only while someone is here. Unlike a text's changes,
  * it's never stored or merged. It lives on the server for as long as a client stays
  * connected, and everyone's view of it is simply the latest.
@@ -18,14 +18,14 @@
  * import { Presence, Replica, Sync } from "@jpowersdev/effect-delta"
  * import { Effect, Option, Stream } from "effect"
  *
- * const notes = Replica.DocumentId.make("notes")
+ * const notes = Replica.RoomId.make("notes")
  *
  * const program = Effect.gen(function*() {
  *   const ada = yield* Presence.join({
- *     document: notes
+ *     room: notes
  *   }).pipe(Effect.provideService(Sync.CurrentUser, "ada"))
  *   const ben = yield* Presence.join({
- *     document: notes
+ *     room: notes
  *   }).pipe(Effect.provideService(Sync.CurrentUser, "ben"))
  *   yield* ada.set({
  *     selection: Option.none(),
@@ -89,7 +89,7 @@ export const State = Schema.Struct({
 export type State = typeof State.Type
 
 /**
- * One connection to a document. A person with two tabs open is two peers with the
+ * One connection to a room. A person with two tabs open is two peers with the
  * same `user`, which the server sets, so a client can't claim to be someone else.
  *
  * @stability unstable
@@ -103,7 +103,7 @@ export const Peer = Schema.Struct({
 })
 
 /**
- * One connection to a document.
+ * One connection to a room.
  *
  * @stability unstable
  * @category models
@@ -112,7 +112,7 @@ export const Peer = Schema.Struct({
 export type Peer = typeof Peer.Type
 
 /**
- * Who's in a document now, and which of them is the connection receiving this.
+ * Who's in a room now, and which of them is the connection receiving this.
  *
  * @stability unstable
  * @category schemas
@@ -124,7 +124,7 @@ export const Update = Schema.Struct({
 })
 
 /**
- * Who's in a document now.
+ * Who's in a room now.
  *
  * @stability unstable
  * @category models
@@ -133,7 +133,7 @@ export const Update = Schema.Struct({
 export type Update = typeof Update.Type
 
 /**
- * Joins a document: streams who's in it, now and after each change, and removes this
+ * Joins a room: streams who's in it, now and after each change, and removes this
  * connection from it when the stream ends.
  *
  * @stability unstable
@@ -141,7 +141,7 @@ export type Update = typeof Update.Type
  * @since 0.1.0
  */
 export class Join extends Rpc.make("Presence.Join", {
-  payload: { document: Replica.DocumentId },
+  payload: { room: Replica.RoomId },
   success: Update,
   error: Sync.SyncError,
   stream: true
@@ -155,7 +155,7 @@ export class Join extends Rpc.make("Presence.Join", {
  * @since 0.1.0
  */
 export class Set extends Rpc.make("Presence.Set", {
-  payload: { document: Replica.DocumentId, session: Schema.Int, state: State },
+  payload: { room: Replica.RoomId, session: Schema.Int, state: State },
   error: Sync.SyncError
 }) {}
 
@@ -170,16 +170,16 @@ export class Set extends Rpc.make("Presence.Set", {
 export class Rpcs extends RpcGroup.make(Join, Set) {}
 
 /**
- * Joining a document and saying what your state is.
+ * Joining a room and saying what your state is.
  *
  * @stability unstable
  * @category services
  * @since 0.1.0
  */
 export class Presence extends Context.Service<Presence, {
-  readonly join: (request: { readonly document: Replica.DocumentId }) => Stream.Stream<Update, Sync.SyncError>
+  readonly join: (request: { readonly room: Replica.RoomId }) => Stream.Stream<Update, Sync.SyncError>
   readonly set: (request: {
-    readonly document: Replica.DocumentId
+    readonly room: Replica.RoomId
     readonly session: number
     readonly state: State
   }) => Effect.Effect<void, Sync.SyncError>
@@ -195,27 +195,27 @@ const initial: State = { selection: Option.none(), data: null }
  * @since 0.1.0
  */
 export const layer: Layer.Layer<Presence> = Layer.effect(Presence)(Effect.gen(function*() {
-  const documents = yield* RcMap.make({
-    lookup: (_: Replica.DocumentId) => SubscriptionRef.make<ReadonlyArray<Peer>>([]),
+  const rooms = yield* RcMap.make({
+    lookup: (_: Replica.RoomId) => SubscriptionRef.make<ReadonlyArray<Peer>>([]),
     idleTimeToLive: 0
   })
   let sessions = 0
   return Presence.of({
-    join: ({ document }) =>
+    join: ({ room }) =>
       Stream.unwrap(Effect.gen(function*() {
         const user = yield* Sync.CurrentUser
         const session = ++sessions
-        const peers = yield* RcMap.get(documents, document)
+        const peers = yield* RcMap.get(rooms, room)
         yield* Effect.acquireRelease(
           SubscriptionRef.update(peers, (all) => [...all, { session, user, state: initial }]),
           () => SubscriptionRef.update(peers, (all) => all.filter((peer) => peer.session !== session))
         )
         return Stream.map(SubscriptionRef.changes(peers), (all) => ({ session, peers: all }))
       })),
-    set: ({ document, session, state }) =>
+    set: ({ room, session, state }) =>
       Effect.gen(function*() {
         const user = yield* Sync.CurrentUser
-        const peers = yield* RcMap.get(documents, document)
+        const peers = yield* RcMap.get(rooms, room)
         const mine = (yield* SubscriptionRef.get(peers)).find((peer) => peer.session === session)
         // Whoever's connection this was has gone, and this was on its way.
         if (mine === undefined) return
@@ -256,7 +256,7 @@ export const layerRemote: Layer.Layer<Presence, never, RpcClient.Protocol> = Lay
 
 /**
  * Serves `Presence` over `Rpcs`. Each request is identified and authorized for reading
- * with `Sync.Authorization`: someone who can see a document can be seen in it.
+ * with `Sync.Authorization`: someone who can see a room can be seen in it.
  *
  * @stability unstable
  * @category layers
@@ -269,27 +269,27 @@ export const layerHandlers: Layer.Layer<
 > = Rpcs.toLayer(Effect.gen(function*() {
   const presence = yield* Presence
   const authorization = yield* Sync.Authorization
-  const enter = (headers: Parameters<Sync.Authorization["Service"]["identify"]>[0], document: Replica.DocumentId) =>
+  const enter = (headers: Parameters<Sync.Authorization["Service"]["identify"]>[0], room: Replica.RoomId) =>
     authorization.identify(headers).pipe(
-      Effect.tap((user) => authorization.authorize({ user, document, access: "read" })),
+      Effect.tap((user) => authorization.authorize({ user, room, access: "read" })),
       Effect.mapError((reason) => new Sync.SyncError({ reason }))
     )
   return Rpcs.of({
     "Presence.Join": (request, { headers }) =>
       Stream.unwrap(Effect.map(
-        enter(headers, request.document),
+        enter(headers, request.room),
         (user) => Stream.provideService(presence.join(request), Sync.CurrentUser, user)
       )),
     "Presence.Set": (request, { headers }) =>
       Effect.flatMap(
-        enter(headers, request.document),
+        enter(headers, request.room),
         (user) => Effect.provideService(presence.set(request), Sync.CurrentUser, user)
       )
   })
 }))
 
 /**
- * A client in a document.
+ * A client in a room.
  *
  * **Details**
  *
@@ -310,7 +310,7 @@ export interface Joined {
 const defaultRetry = Schedule.min([Schedule.exponential("200 millis", 1.5), Schedule.spaced("10 seconds")])
 
 /**
- * Joins a document for the life of the scope. A lost connection is retried, and others
+ * Joins a room for the life of the scope. A lost connection is retried, and others
  * see this client leave and come back.
  *
  * @stability unstable
@@ -318,12 +318,12 @@ const defaultRetry = Schedule.min([Schedule.exponential("200 millis", 1.5), Sche
  * @since 0.1.0
  */
 export const join = Effect.fnUntraced(function*(options: {
-  readonly document: Replica.DocumentId
+  readonly room: Replica.RoomId
   readonly retry?: Schedule.Schedule<unknown, Sync.SyncError> | undefined
 }): Effect.fn.Return<Joined, never, Presence | Scope.Scope> {
   const presence = yield* Presence
   const user = yield* Sync.CurrentUser
-  const { document } = options
+  const { room } = options
   const peers = yield* SubscriptionRef.make<ReadonlyArray<Peer>>([])
   const session = yield* Ref.make(Option.none<number>())
   const latest = yield* Ref.make(Option.none<State>())
@@ -332,10 +332,10 @@ export const join = Effect.fnUntraced(function*(options: {
     const current = yield* Ref.get(session)
     const state = yield* Ref.get(latest)
     if (Option.isNone(current) || Option.isNone(state)) return
-    yield* presence.set({ document, session: current.value, state: state.value })
+    yield* presence.set({ room, session: current.value, state: state.value })
   }).pipe(Effect.provideService(Sync.CurrentUser, user))
 
-  yield* presence.join({ document }).pipe(
+  yield* presence.join({ room }).pipe(
     Stream.runForEach((update) =>
       Effect.gen(function*() {
         const changed = Option.getOrUndefined(yield* Ref.get(session)) !== update.session

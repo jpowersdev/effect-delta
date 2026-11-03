@@ -28,7 +28,7 @@ export const connect = Effect.fnUntraced(function*(
   replica: Replica.Replica<unknown>,
   server: Sync.Server,
   options: {
-    readonly document: Replica.DocumentId
+    readonly room: Replica.RoomId
     readonly authority: boolean
     readonly retry?: Schedule.Schedule<unknown, Sync.SyncError> | undefined
   }
@@ -49,7 +49,7 @@ export const connect = Effect.fnUntraced(function*(
   const push = pushing.withPermit(Effect.gen(function*() {
     const delta = yield* core.outgoing(serverVersion)
     if (Delta.isEmpty(delta)) return
-    const ack = yield* server.push({ format: Sync.FORMAT, document: options.document, delta })
+    const ack = yield* server.push({ format: Sync.FORMAT, room: options.room, delta })
     if (core.confirmed !== undefined) {
       yield* ack._tag === "Accepted"
         ? core.confirmed.acknowledge(ack.confirmed)
@@ -63,7 +63,7 @@ export const connect = Effect.fnUntraced(function*(
     const changes = yield* core.changed
     const updates = server.subscribe({
       format: Sync.FORMAT,
-      document: options.document,
+      room: options.room,
       strategy: replica.strategy,
       version: yield* core.version,
       authority: options.authority
@@ -123,7 +123,7 @@ export const connect = Effect.fnUntraced(function*(
     const moved = yield* PubSub.subscribe(acknowledged)
     const answer = yield* server.subscribe({
       format: Sync.FORMAT,
-      document: options.document,
+      room: options.room,
       strategy: replica.strategy,
       version: yield* core.version,
       authority: options.authority

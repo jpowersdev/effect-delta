@@ -24,7 +24,7 @@ in a package with `"type": "module"`. An example that needs another package says
 import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Layer, Stream } from "effect"
 
-const notes = Replica.DocumentId.make("notes")
+const notes = Replica.RoomId.make("notes")
 
 const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
@@ -36,10 +36,10 @@ const program = Effect.gen(function*() {
 
   // Each syncs through the relay for as long as the scope is open
   yield* Relay.connect(laptop, {
-    document: notes
+    room: notes
   })
   yield* Relay.connect(phone, {
-    document: notes
+    room: notes
   })
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")

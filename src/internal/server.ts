@@ -24,17 +24,17 @@ import * as InternalDelta from "./delta.ts"
 import * as History from "./history.ts"
 import * as InternalText from "./text.ts"
 
-// The core shared by relays and authorities. Each document is held in memory
+// The core shared by relays and authorities. Each room is held in memory
 // while it's in use: loaded from the history store when first asked for, and
 // released a minute after its last use. Pushed changes are checked, stored and
 // only then sent to subscribers, so no subscriber sees a change the store
 // doesn't have.
 
-interface Document {
-  readonly id: Replica.DocumentId
+interface Room {
+  readonly id: Replica.RoomId
   readonly lock: Semaphore.Semaphore
   /**
-   * Undefined until the document's strategy is known: from what's stored, or
+   * Undefined until the room's strategy is known: from what's stored, or
    * else from the first replica to subscribe or push.
    */
   text: InternalText.Text | undefined
@@ -42,7 +42,7 @@ interface Document {
   readonly owners: Map<string, string>
   readonly updates: PubSub.PubSub<Sync.Update>
   /**
-   * Fails if saving fails. That ends every subscription, and the document is
+   * Fails if saving fails. That ends every subscription, and the room is
    * loaded again from the store, so nothing in memory gets ahead of it.
    */
   readonly failed: Deferred.Deferred<never, Sync.SyncError>
@@ -66,17 +66,17 @@ export const make = Effect.fnUntraced(function*(options: {
   const store = yield* HistoryStore.HistoryStore
   const check = options.check
   const isAuthority = check !== undefined
-  const documents = yield* RcMap.make({
-    lookup: (id: Replica.DocumentId) => load(store, id),
+  const rooms = yield* RcMap.make({
+    lookup: (id: Replica.RoomId) => load(store, id),
     idleTimeToLive: "1 minute"
   })
 
-  const open = Effect.fnUntraced(function*(id: Replica.DocumentId) {
-    const document = yield* RcMap.get(documents, id)
-    if (yield* Deferred.isDone(document.failed)) {
-      return yield* syncError(new Sync.Unavailable({ message: `Document ${id} is reloading` }))
+  const open = Effect.fnUntraced(function*(id: Replica.RoomId) {
+    const room = yield* RcMap.get(rooms, id)
+    if (yield* Deferred.isDone(room.failed)) {
+      return yield* syncError(new Sync.Unavailable({ message: `Room ${id} is reloading` }))
     }
-    return document
+    return room
   })
 
   const subscribe = (request: Sync.SubscribeRequest): Stream.Stream<Sync.Update, Sync.SyncError> =>
@@ -95,24 +95,24 @@ export const make = Effect.fnUntraced(function*(options: {
           })
         )
       }
-      const document = yield* open(request.document)
-      return yield* document.lock.withPermit(Effect.gen(function*() {
-        document.text ??= InternalText.make(request.strategy)
-        const { history, strategy } = document.text
+      const room = yield* open(request.room)
+      return yield* room.lock.withPermit(Effect.gen(function*() {
+        room.text ??= InternalText.make(request.strategy)
+        const { history, strategy } = room.text
         if (strategy !== request.strategy) {
           return yield* syncError(
-            new Sync.ProtocolViolation({ message: `Document ${document.id} uses the ${strategy} strategy` })
+            new Sync.ProtocolViolation({ message: `Room ${room.id} uses the ${strategy} strategy` })
           )
         }
         // Subscribed under the lock, so no update lands between the first one
         // and the rest.
-        const subscription = yield* PubSub.subscribe(document.updates)
+        const subscription = yield* PubSub.subscribe(room.updates)
         const first = new Sync.Update({
           delta: InternalDelta.fromChanges(History.since(history, request.version)),
           version: held(history)
         })
         return Stream.concat(Stream.succeed(first), Stream.fromSubscription(subscription)).pipe(
-          Stream.interruptWhen(Deferred.await(document.failed))
+          Stream.interruptWhen(Deferred.await(room.failed))
         )
       }))
     }))
@@ -120,13 +120,13 @@ export const make = Effect.fnUntraced(function*(options: {
   const push = (request: Sync.PushRequest): Effect.Effect<Sync.Ack, Sync.SyncError> =>
     Effect.gen(function*() {
       const user = yield* Sync.CurrentUser
-      const document = yield* open(request.document)
+      const room = yield* open(request.room)
       // Uninterruptible once it has the lock: a client going away partway mustn't leave
       // a change in memory that isn't stored, or stored that subscribers weren't told of.
-      return yield* document.lock.withPermit(Effect.uninterruptible(Effect.gen(function*() {
+      return yield* room.lock.withPermit(Effect.uninterruptible(Effect.gen(function*() {
         const incoming = [...(request.delta as InternalDelta.DeltaImpl).changes.values()]
         for (const change of incoming) {
-          const owner = document.owners.get(change.replica)
+          const owner = room.owners.get(change.replica)
           if (owner !== undefined && owner !== user) {
             return yield* syncError(
               new Sync.Forbidden({ message: `Replica id ${change.replica} belongs to another user` })
@@ -134,9 +134,9 @@ export const make = Effect.fnUntraced(function*(options: {
           }
         }
 
-        if (incoming.length === 0) return new Sync.Accepted({ confirmed: held(document.text?.history) })
-        // A document's strategy is its first change's.
-        const strategy = document.text?.strategy ?? (isAuthority ? "tree" : InternalText.strategyOf(incoming[0]!))
+        if (incoming.length === 0) return new Sync.Accepted({ confirmed: held(room.text?.history) })
+        // A room's strategy is its first change's.
+        const strategy = room.text?.strategy ?? (isAuthority ? "tree" : InternalText.strategyOf(incoming[0]!))
         for (const change of incoming) {
           if (strategy === undefined || InternalText.strategyOf(change) !== strategy) {
             return yield* syncError(
@@ -144,7 +144,7 @@ export const make = Effect.fnUntraced(function*(options: {
             )
           }
         }
-        const text = document.text ??= InternalText.make(strategy!)
+        const text = room.text ??= InternalText.make(strategy!)
 
         // Changes that are new here wait as pending until what they build on
         // is here, then they're checked and applied in causal order.
@@ -180,12 +180,12 @@ export const make = Effect.fnUntraced(function*(options: {
               break
             }
             const verdict = yield* Effect.result(
-              check({ document: document.id, user, patch, before, after: text.value })
+              check({ room: room.id, user, patch, before, after: text.value })
             )
             if (Result.isFailure(verdict)) {
               // Start over without it. An authority keeps nothing pending, so
               // nothing else is lost.
-              document.text = InternalText.rebuild(
+              room.text = InternalText.rebuild(
                 text.strategy,
                 [...text.history.changes.values()].filter((c) => c !== change)
               )
@@ -194,7 +194,7 @@ export const make = Effect.fnUntraced(function*(options: {
             }
           }
         }
-        const { history } = document.text
+        const { history } = room.text
 
         // A relay keeps changes that wait for something they build on; an
         // authority can't check those, so it drops them.
@@ -209,14 +209,14 @@ export const make = Effect.fnUntraced(function*(options: {
 
         const kept = fresh.filter((change) => history.changes.has(key(change)) || history.pending.has(key(change)))
         if (kept.length > 0) {
-          yield* save(store, document, kept, user).pipe(
+          yield* save(store, room, kept, user).pipe(
             // Dropped as well as failed, or it says it's reloading forever.
             Effect.tapError((error) =>
-              Effect.andThen(Deferred.fail(document.failed, error), RcMap.invalidate(documents, document.id))
+              Effect.andThen(Deferred.fail(room.failed, error), RcMap.invalidate(rooms, room.id))
             )
           )
           yield* PubSub.publish(
-            document.updates,
+            room.updates,
             new Sync.Update({ delta: InternalDelta.fromChanges(kept), version: held(history) })
           )
         }
@@ -234,11 +234,11 @@ export const make = Effect.fnUntraced(function*(options: {
   return { subscribe, push }
 })
 
-const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Service"], id: Replica.DocumentId) {
+const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Service"], id: Replica.RoomId) {
   const stored = yield* store.load(id).pipe(Effect.mapError(unavailable))
   const updates = yield* PubSub.unbounded<Sync.Update>()
   yield* Effect.addFinalizer(() => PubSub.shutdown(updates))
-  const document: Document = {
+  const room: Room = {
     id,
     lock: yield* Semaphore.make(1),
     text: undefined,
@@ -247,18 +247,18 @@ const load = Effect.fnUntraced(function*(store: HistoryStore.HistoryStore["Servi
     failed: yield* Deferred.make<never, Sync.SyncError>()
   }
   if (Option.isSome(stored)) {
-    for (const [replica, owner] of Object.entries(stored.value.writers)) document.owners.set(replica, owner)
+    for (const [replica, owner] of Object.entries(stored.value.writers)) room.owners.set(replica, owner)
     const changes = [...(stored.value.history as InternalDelta.DeltaImpl).changes.values()]
     const strategy = changes.length === 0 ? undefined : InternalText.strategyOf(changes[0]!)
     if (strategy !== undefined) {
-      const text = document.text = InternalText.make(strategy)
+      const text = room.text = InternalText.make(strategy)
       for (const change of changes) text.history.pending.set(key(change), change)
       // Applied changes were checked before they were stored. One that was
       // stored while it waited, and turns out to be bad, is dropped.
       integrateAll(text)
     }
   }
-  return document
+  return room
 })
 
 // Applies every pending change that can be applied, dropping bad ones (and
@@ -279,19 +279,19 @@ const integrateAll = (text: InternalText.Text): Array<{ readonly key: string; re
 // Stores changes, and claims their replica ids for `user`.
 const save = Effect.fnUntraced(function*(
   store: HistoryStore.HistoryStore["Service"],
-  document: Document,
+  room: Room,
   changes: ReadonlyArray<InternalText.AnyChange>,
   user: string
 ) {
-  yield* store.append(document.id, InternalDelta.fromChanges(changes)).pipe(Effect.mapError(unavailable))
+  yield* store.append(room.id, InternalDelta.fromChanges(changes)).pipe(Effect.mapError(unavailable))
   for (const replica of new Set(changes.map((change) => change.replica))) {
-    if (document.owners.has(replica)) continue
-    yield* store.addWriter(document.id, Replica.ReplicaId.make(replica), user).pipe(Effect.mapError(unavailable))
-    document.owners.set(replica, user)
+    if (room.owners.has(replica)) continue
+    yield* store.addWriter(room.id, Replica.ReplicaId.make(replica), user).pipe(Effect.mapError(unavailable))
+    room.owners.set(replica, user)
   }
 })
 
-// What a document holds: its version vector, moved past changes that wait for
+// What a room holds: its version vector, moved past changes that wait for
 // something they build on, so their authors don't push them again.
 const held = (history: History.History<unknown> | undefined): VersionVector.VersionVector => {
   if (history === undefined) return {}
@@ -322,22 +322,22 @@ export const layerHandlers = <I>(
     const authorization = yield* Sync.Authorization
     const enter = (
       headers: Parameters<Sync.Authorization["Service"]["identify"]>[0],
-      document: Replica.DocumentId,
+      room: Replica.RoomId,
       access: "read" | "write"
     ) =>
       authorization.identify(headers).pipe(
-        Effect.tap((user) => authorization.authorize({ user, document, access })),
+        Effect.tap((user) => authorization.authorize({ user, room, access })),
         Effect.mapError((reason) => new Sync.SyncError({ reason }))
       )
     return Sync.Rpcs.of({
       "Sync.Subscribe": (request, { headers }) =>
         Stream.unwrap(Effect.map(
-          enter(headers, request.document, "read"),
+          enter(headers, request.room, "read"),
           (user) => Stream.provideService(server.subscribe(request), Sync.CurrentUser, user)
         )),
       "Sync.Push": (request, { headers }) =>
         Effect.flatMap(
-          enter(headers, request.document, "write"),
+          enter(headers, request.room, "write"),
           (user) => Effect.provideService(server.push(request), Sync.CurrentUser, user)
         )
     })

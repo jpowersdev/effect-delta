@@ -1,27 +1,27 @@
 ---
 title: "Presence"
-description: "Who's in a document, and what they've selected."
+description: "Who's in a room, and what they've selected."
 sidebar:
   order: 6
 ---
 
-`Presence.join` joins a document for the life of the scope. `set` publishes this session's selection and any JSON you like,
-and `peers` streams everyone in the document.
+`Presence.join` joins a room for the life of the scope. `set` publishes this session's selection and any JSON you like,
+and `peers` streams everyone in the room.
 
 ```ts import.meta.vitest
 import { Presence, Replica, Sync } from "@jpowersdev/effect-delta"
 import { Effect, Option, Stream } from "effect"
 
-const notes = Replica.DocumentId.make("notes")
+const notes = Replica.RoomId.make("notes")
 
 const program = Effect.gen(function*() {
   const ada = yield* Presence.join({
-    document: notes
+    room: notes
   }).pipe(
     Effect.provideService(Sync.CurrentUser, "ada")
   )
   const ben = yield* Presence.join({
-    document: notes
+    room: notes
   }).pipe(
     Effect.provideService(Sync.CurrentUser, "ben")
   )

@@ -13,7 +13,7 @@ import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Layer } from "effect"
 import { KeyValueStore } from "effect/persistence"
 
-const notes = Replica.DocumentId.make("notes")
+const notes = Replica.RoomId.make("notes")
 
 const open = (session: string) =>
   Effect.gen(function*() {
@@ -52,7 +52,7 @@ await Effect.runPromise(program.pipe(Effect.provide(StoreLive)))
   [`manuscript.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/manuscript.ts) uses files.
 - For anything else, implement the `HistoryStore` service.
 
-Each document can have one writer per store, so two tabs can't persist the same document to the same store.
+Each room can have one writer per store, so two tabs can't persist the same room to the same store.
 
 ## Replay snapshots
 

@@ -10,7 +10,7 @@
  * - `layer` runs an authority in this process: on a server, or given straight
  *   to replicas in tests.
  * - `layerRemote` reaches an authority on a server, over any `RpcClient`
- *   protocol. One connection carries every document.
+ *   protocol. One connection carries every room.
  * - `layerHandlers` serves an authority over `Sync.Rpcs`, checking each request
  *   with `Sync.Authorization`.
  *
@@ -31,7 +31,7 @@ import type * as Sync from "./Sync.ts"
 import type * as TextPatch from "./TextPatch.ts"
 
 /**
- * An authority: subscribing to a document, and pushing changes to it, which it
+ * An authority: subscribing to a room, and pushing changes to it, which it
  * may reject.
  *
  * @stability unstable
@@ -42,7 +42,7 @@ export class Authority extends Context.Service<Authority, Sync.Server>()("effect
 
 /**
  * A change an authority is asked to accept: who made it, and what it does to
- * the document as the authority has it.
+ * the text as the authority has it.
  *
  * **Details**
  *
@@ -56,7 +56,7 @@ export class Authority extends Context.Service<Authority, Sync.Server>()("effect
  * @since 0.1.0
  */
 export interface Proposal {
-  readonly document: Replica.DocumentId
+  readonly room: Replica.RoomId
   readonly user: string
   readonly patch: TextPatch.TextPatch
   readonly before: string
@@ -76,7 +76,7 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
 }) {}
 
 /**
- * An authority in this process, keeping documents in the `HistoryStore` and
+ * An authority in this process, keeping rooms in the `HistoryStore` and
  * accepting each change that `check` succeeds for.
  *
  * **Details**
@@ -86,7 +86,7 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  * the push are dropped, because each was made on top of the one before.
  *
  * A push that has started finishes even if its client goes away, so a `check`
- * that never returns holds up that document's other pushes.
+ * that never returns holds up that room's other pushes.
  *
  * **Example** (Only editors may edit)
  *
@@ -108,7 +108,7 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  *
  * const program = Effect.gen(function*() {
  *   const spec = yield* ReplicatedText.makeConfirmed({
- *     document: Replica.DocumentId.make("spec")
+ *     room: Replica.RoomId.make("spec")
  *   })
  *   yield* ReplicatedText.insert(spec, 0, "Spec v1")
  *   yield* spec.connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)

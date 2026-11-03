@@ -1,6 +1,6 @@
 /**
  * A relay is a server that passes changes between replicas and keeps them:
- * every change pushed to a document goes to the `HistoryStore` and then to
+ * every change pushed to a room goes to the `HistoryStore` and then to
  * every replica subscribed to it. A relay never rejects a change; for a server
  * that decides which changes count, see `Authority`.
  *
@@ -9,7 +9,7 @@
  * - `layer` runs a relay in this process: on a server, or given straight to
  *   replicas in tests and single-process apps.
  * - `layerRemote` reaches a relay on a server, over any `RpcClient` protocol.
- *   One connection carries every document.
+ *   One connection carries every room.
  * - `layerHandlers` serves a relay over `Sync.Rpcs`, checking each request with
  *   `Sync.Authorization`.
  *
@@ -35,7 +35,7 @@ import type * as Replica from "./Replica.ts"
 import type * as Sync from "./Sync.ts"
 
 /**
- * A relay: subscribing to a document, and pushing changes to it.
+ * A relay: subscribing to a room, and pushing changes to it.
  *
  * @stability unstable
  * @category services
@@ -44,8 +44,8 @@ import type * as Sync from "./Sync.ts"
 export class Relay extends Context.Service<Relay, Sync.Server>()("effect-delta/Relay") {}
 
 /**
- * A relay in this process, keeping documents in the `HistoryStore`. Each
- * document is loaded when first asked for, and released a minute after its
+ * A relay in this process, keeping rooms in the `HistoryStore`. Each
+ * room is loaded when first asked for, and released a minute after its
  * last use.
  *
  * @stability unstable
@@ -86,7 +86,7 @@ export const layerHandlers: Layer.Layer<
  *
  * **Details**
  *
- * - `document`: which document on the relay the replica is a copy of.
+ * - `room`: which room on the relay the replica syncs in.
  * - `retry`: how to retry a lost connection. The default backs off from 200
  *   milliseconds to every 10 seconds, indefinitely.
  *
@@ -95,7 +95,7 @@ export const layerHandlers: Layer.Layer<
  * @since 0.1.0
  */
 export interface ConnectOptions {
-  readonly document: Replica.DocumentId
+  readonly room: Replica.RoomId
   readonly retry?: Schedule.Schedule<unknown, Sync.SyncError> | undefined
 }
 
@@ -116,7 +116,7 @@ export interface ConnectOptions {
  * import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  * import { Effect, Layer, Option, Stream } from "effect"
  *
- * const notes = Replica.DocumentId.make("notes")
+ * const notes = Replica.RoomId.make("notes")
  *
  * const program = Effect.gen(function*() {
  *   const laptop = yield* ReplicatedText.make({
@@ -126,10 +126,10 @@ export interface ConnectOptions {
  *     replica: Replica.ReplicaId.make("phone")
  *   })
  *   yield* Relay.connect(laptop, {
- *     document: notes
+ *     room: notes
  *   })
  *   yield* Relay.connect(phone, {
- *     document: notes
+ *     room: notes
  *   })
  *
  *   yield* ReplicatedText.insert(laptop, 0, "Hello")
@@ -157,7 +157,7 @@ export const connect: {
   (replica: Replica.Replica<unknown>, options: ConnectOptions) =>
     Relay.use((relay) =>
       InternalConnection.connect(replica, relay, {
-        document: options.document,
+        room: options.room,
         authority: false,
         retry: options.retry
       })

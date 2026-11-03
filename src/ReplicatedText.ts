@@ -123,7 +123,7 @@ const makeConfirmedImpl = Effect.fnUntraced(function*(options: ConfirmedOptions)
     confirmed: { version: {}, freshId }
   })
   const connection = yield* InternalConnection.connect(self, yield* Authority.Authority, {
-    document: options.document,
+    room: options.room,
     authority: true,
     retry: options.retry
   })
@@ -554,7 +554,7 @@ export interface Confirmed extends ReplicatedText {
  *
  * **Details**
  *
- * - `document`: which document on the authority this is a replica of.
+ * - `room`: which room on the authority this replica syncs in.
  * - `replica`: the replica id to start with. Leave it out to get a fresh
  *   random one.
  * - `retry`: how to retry a lost connection. The default backs off from 200
@@ -565,7 +565,7 @@ export interface Confirmed extends ReplicatedText {
  * @since 0.1.0
  */
 export interface ConfirmedOptions {
-  readonly document: Replica.DocumentId
+  readonly room: Replica.RoomId
   readonly replica?: Replica.ReplicaId | undefined
   readonly retry?: Schedule.Schedule<unknown, Sync.SyncError> | undefined
 }
@@ -605,7 +605,7 @@ export interface ConfirmedOptions {
  *
  * const program = Effect.gen(function*() {
  *   const spec = yield* ReplicatedText.makeConfirmed({
- *     document: Replica.DocumentId.make("spec")
+ *     room: Replica.RoomId.make("spec")
  *   })
  *   const { edits } = yield* ReplicatedText.subscribe(spec)
  *   yield* ReplicatedText.insert(spec, 0, "LGTM")

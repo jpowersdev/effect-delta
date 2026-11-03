@@ -21,7 +21,7 @@ export interface Stored {
   readonly history: Delta.Delta
   /** A confirmed replica's own changes its authority hadn't acknowledged. */
   readonly unconfirmed: Delta.Delta
-  /** Every replica id this document's replicas have written under here. */
+  /** Every replica id this room's replicas have written under here. */
   readonly writers: ReadonlyArray<Replica.ReplicaId>
   /** The text at a version, for strategies that can start from it. */
   readonly snapshot: Snapshot | undefined

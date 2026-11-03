@@ -13,11 +13,11 @@ There are two separate choices:
 
 Where replicas sync doesn't depend on the merge strategy. Both work over any transport.
 
-| Use               | When                                                                       | Runnable example                                                                                     |
-| ----------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `tree`            | The default. Local-first apps, syncing directly or through a relay.        | [`offline-notes.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/offline-notes.ts) |
-| `tree`, authority | A server must be able to refuse edits, and clients sync only with it.      | [`spec-review.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/spec-review.ts)     |
-| `replay`          | Large documents, many documents loaded at once, or long offline stretches. | [`manuscript.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/manuscript.ts)       |
+| Use               | When                                                                  | Runnable example                                                                                     |
+| ----------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `tree`            | The default. Local-first apps, syncing directly or through a relay.   | [`offline-notes.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/offline-notes.ts) |
+| `tree`, authority | A server must be able to refuse edits, and clients sync only with it. | [`spec-review.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/spec-review.ts)     |
+| `replay`          | Large texts, many texts loaded at once, or long offline stretches.    | [`manuscript.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/manuscript.ts)       |
 
 `tree` and `replay` produce the same text for the same edits.
 
@@ -39,7 +39,7 @@ and prosemirror-collab.
 1. A client is made with `ReplicatedText.makeConfirmed`, which requires an `Authority` service. It applies its own edits
    immediately. They're unconfirmed until the server acknowledges them, and the replica refuses to exchange with anything
    else, so a change that might be rejected never reaches other replicas.
-2. The server checks each change with a check the app supplies, such as "this user can edit" or "the document stays under
+2. The server checks each change with a check the app supplies, such as "this user can edit" or "the room stays under
    its size limit". It stores accepted changes and sends them to everyone.
 3. A rejected change is dropped by the client, along with its later unconfirmed changes, since those were made on top of
    it. The client reports what was rejected, and continues under a new replica id.

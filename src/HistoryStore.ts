@@ -1,11 +1,11 @@
 /**
- * A history store is where replicas and servers keep each document's history
+ * A history store is where replicas and servers keep each room's history
  * between sessions. `persist` connects a replica to it: it loads what was saved
  * and then saves every change for as long as its scope lasts.
  *
  * The store itself only appends deltas and remembers a few small records, so
  * it's easy to back with anything. For the replay strategy it also keeps a
- * snapshot of the text, so reopening a document reads the text instead of
+ * snapshot of the text, so reopening one reads the text instead of
  * replaying its history. `layerMemory` keeps everything in memory;
  * `layerKeyValueStore` uses Effect's `KeyValueStore`, which has file system,
  * Web Storage and SQL implementations.
@@ -28,14 +28,14 @@ import type * as Replica from "./Replica.ts"
 import * as VersionVector from "./VersionVector.ts"
 
 /**
- * What a store has kept for one document.
+ * What a store has kept for one room.
  *
  * **Details**
  *
  * - `history`: the changes, combined into one delta.
  * - `unconfirmed`: a confirmed replica's own changes that its authority hadn't
  *   acknowledged. Kept apart, so a rejected change never comes back on reload.
- * - `writers`: every replica id written under for this document here, and who
+ * - `writers`: every replica id written under for this room here, and who
  *   it belongs to. Replicas use it to upload changes made in earlier sessions;
  *   servers use it to know whose edits are whose.
  * - `snapshot`: the text at a version, if one was saved.
@@ -78,12 +78,12 @@ export class HistoryStoreError extends Schema.TaggedError<HistoryStoreError>()("
 }) {}
 
 /**
- * Keeps each document's history. Append-only, apart from the unconfirmed
+ * Keeps each room's history. Append-only, apart from the unconfirmed
  * changes, which are replaced as a whole.
  *
  * **Gotchas**
  *
- * One writer per document per store: two replicas persisting the same document
+ * One writer per room per store: two replicas persisting the same room
  * to the same store at once isn't supported yet.
  *
  * @stability unstable
@@ -91,12 +91,12 @@ export class HistoryStoreError extends Schema.TaggedError<HistoryStoreError>()("
  * @since 0.1.0
  */
 export class HistoryStore extends Context.Service<HistoryStore, {
-  readonly load: (document: Replica.DocumentId) => Effect.Effect<Option.Option<Stored>, HistoryStoreError>
-  readonly append: (document: Replica.DocumentId, delta: Delta.Delta) => Effect.Effect<void, HistoryStoreError>
-  readonly setUnconfirmed: (document: Replica.DocumentId, delta: Delta.Delta) => Effect.Effect<void, HistoryStoreError>
-  readonly setSnapshot: (document: Replica.DocumentId, snapshot: Snapshot) => Effect.Effect<void, HistoryStoreError>
+  readonly load: (room: Replica.RoomId) => Effect.Effect<Option.Option<Stored>, HistoryStoreError>
+  readonly append: (room: Replica.RoomId, delta: Delta.Delta) => Effect.Effect<void, HistoryStoreError>
+  readonly setUnconfirmed: (room: Replica.RoomId, delta: Delta.Delta) => Effect.Effect<void, HistoryStoreError>
+  readonly setSnapshot: (room: Replica.RoomId, snapshot: Snapshot) => Effect.Effect<void, HistoryStoreError>
   readonly addWriter: (
-    document: Replica.DocumentId,
+    room: Replica.RoomId,
     replica: Replica.ReplicaId,
     owner: string
   ) => Effect.Effect<void, HistoryStoreError>
@@ -104,14 +104,14 @@ export class HistoryStore extends Context.Service<HistoryStore, {
 
 /**
  * A history store in memory, lost when the process ends. For tests, and for
- * relays that only need to keep documents while they're in use.
+ * relays that only need to keep rooms while they're in use.
  *
  * @stability unstable
  * @category layers
  * @since 0.1.0
  */
 export const layerMemory: Layer.Layer<HistoryStore> = Layer.sync(HistoryStore)(() => {
-  const documents = new Map<
+  const rooms = new Map<
     string,
     {
       history: Delta.Delta
@@ -120,36 +120,36 @@ export const layerMemory: Layer.Layer<HistoryStore> = Layer.sync(HistoryStore)((
       snapshot: Option.Option<Snapshot>
     }
   >()
-  const entry = (document: string) => {
-    let found = documents.get(document)
+  const entry = (room: string) => {
+    let found = rooms.get(room)
     if (found === undefined) {
       found = { history: Delta.empty, unconfirmed: Delta.empty, writers: {}, snapshot: Option.none() }
-      documents.set(document, found)
+      rooms.set(room, found)
     }
     return found
   }
   return HistoryStore.of({
-    load: (document) =>
+    load: (room) =>
       Effect.sync(() => {
-        const found = documents.get(document)
+        const found = rooms.get(room)
         return found === undefined ? Option.none() : Option.some({ ...found, writers: { ...found.writers } })
       }),
-    append: (document, delta) =>
+    append: (room, delta) =>
       Effect.sync(() => {
-        const found = entry(document)
+        const found = entry(room)
         found.history = Delta.combine(found.history, delta)
       }),
-    setUnconfirmed: (document, delta) =>
+    setUnconfirmed: (room, delta) =>
       Effect.sync(() => {
-        entry(document).unconfirmed = delta
+        entry(room).unconfirmed = delta
       }),
-    setSnapshot: (document, snapshot) =>
+    setSnapshot: (room, snapshot) =>
       Effect.sync(() => {
-        entry(document).snapshot = Option.some(snapshot)
+        entry(room).snapshot = Option.some(snapshot)
       }),
-    addWriter: (document, replica, owner) =>
+    addWriter: (room, replica, owner) =>
       Effect.sync(() => {
-        entry(document).writers[replica] = owner
+        entry(room).writers[replica] = owner
       })
   })
 })
@@ -174,7 +174,7 @@ export const layerKeyValueStore = (options: {
   Layer.effect(HistoryStore)(Effect.gen(function*() {
     const store = yield* KeyValueStore.KeyValueStore
     const foldAfter = options.foldAfter ?? 64
-    const key = (document: string, name: string) => `${options.prefix}/${encodeURIComponent(document)}/${name}`
+    const key = (room: string, name: string) => `${options.prefix}/${encodeURIComponent(room)}/${name}`
     const fail = (message: string) => (cause: unknown) => new HistoryStoreError({ message, cause })
 
     const readJson = <A, I>(schema: Schema.Codec<A, I>, at: string) =>
@@ -200,25 +200,24 @@ export const layerKeyValueStore = (options: {
       text: Schema.String
     })
 
-    const count = (document: string) =>
-      readJson(Count, key(document, "count")).pipe(Effect.map(Option.getOrElse(() => 0)))
+    const count = (room: string) => readJson(Count, key(room, "count")).pipe(Effect.map(Option.getOrElse(() => 0)))
 
-    const readHistory = Effect.fnUntraced(function*(document: string) {
-      const n = yield* count(document)
+    const readHistory = Effect.fnUntraced(function*(room: string) {
+      const n = yield* count(room)
       let history = Delta.empty
       for (let i = 0; i < n; i++) {
-        const delta = yield* readJson(Delta.Delta, key(document, `history/${i}`))
+        const delta = yield* readJson(Delta.Delta, key(room, `history/${i}`))
         if (Option.isSome(delta)) history = Delta.combine(history, delta.value)
       }
       return { n, history }
     })
 
     return HistoryStore.of({
-      load: Effect.fnUntraced(function*(document) {
-        const { history, n } = yield* readHistory(document)
-        const unconfirmed = yield* readJson(Delta.Delta, key(document, "unconfirmed"))
-        const writers = yield* readJson(Writers, key(document, "writers"))
-        const snapshot = yield* readJson(SnapshotRecord, key(document, "snapshot"))
+      load: Effect.fnUntraced(function*(room) {
+        const { history, n } = yield* readHistory(room)
+        const unconfirmed = yield* readJson(Delta.Delta, key(room, "unconfirmed"))
+        const writers = yield* readJson(Writers, key(room, "writers"))
+        const snapshot = yield* readJson(SnapshotRecord, key(room, "snapshot"))
         if (n === 0 && Option.isNone(unconfirmed) && Option.isNone(writers)) return Option.none()
         return Option.some({
           history,
@@ -227,29 +226,28 @@ export const layerKeyValueStore = (options: {
           snapshot: Option.map(snapshot, ({ text, version }) => ({ version, text }))
         })
       }),
-      append: Effect.fnUntraced(function*(document, delta) {
-        const n = yield* count(document)
+      append: Effect.fnUntraced(function*(room, delta) {
+        const n = yield* count(room)
         if (n < foldAfter) {
-          yield* writeJson(Delta.Delta, key(document, `history/${n}`), delta)
-          yield* writeJson(Count, key(document, "count"), n + 1)
+          yield* writeJson(Delta.Delta, key(room, `history/${n}`), delta)
+          yield* writeJson(Count, key(room, "count"), n + 1)
           return
         }
         // Fold everything into the first record, then drop the rest.
-        const { history } = yield* readHistory(document)
-        yield* writeJson(Delta.Delta, key(document, "history/0"), Delta.combine(history, delta))
-        yield* writeJson(Count, key(document, "count"), 1)
+        const { history } = yield* readHistory(room)
+        yield* writeJson(Delta.Delta, key(room, "history/0"), Delta.combine(history, delta))
+        yield* writeJson(Count, key(room, "count"), 1)
         for (let i = 1; i < n; i++) {
-          yield* store.remove(key(document, `history/${i}`)).pipe(Effect.mapError(fail("Couldn't fold history")))
+          yield* store.remove(key(room, `history/${i}`)).pipe(Effect.mapError(fail("Couldn't fold history")))
         }
       }),
-      setUnconfirmed: (document, delta) => writeJson(Delta.Delta, key(document, "unconfirmed"), delta),
-      setSnapshot: (document, snapshot) =>
-        writeJson(SnapshotRecord, key(document, "snapshot"), { format: 1, ...snapshot }),
-      addWriter: Effect.fnUntraced(function*(document, replica, owner) {
-        const writers = yield* readJson(Writers, key(document, "writers"))
+      setUnconfirmed: (room, delta) => writeJson(Delta.Delta, key(room, "unconfirmed"), delta),
+      setSnapshot: (room, snapshot) => writeJson(SnapshotRecord, key(room, "snapshot"), { format: 1, ...snapshot }),
+      addWriter: Effect.fnUntraced(function*(room, replica, owner) {
+        const writers = yield* readJson(Writers, key(room, "writers"))
         const current = Option.getOrElse(writers, () => ({}) as Record<string, string>)
         if (current[replica] === owner) return
-        yield* writeJson(Writers, key(document, "writers"), { ...current, [replica]: owner })
+        yield* writeJson(Writers, key(room, "writers"), { ...current, [replica]: owner })
       })
     })
   }))
@@ -271,7 +269,7 @@ export interface Persisted {
 }
 
 /**
- * Loads what the store has for `document` into `replica`, then saves every
+ * Loads what the store has for `room` into `replica`, then saves every
  * change the replica makes or receives, for the life of the scope.
  *
  * **Example** (Keeping a text across restarts)
@@ -280,7 +278,7 @@ export interface Persisted {
  * import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  * import { Effect } from "effect"
  *
- * const notes = Replica.DocumentId.make("notes")
+ * const notes = Replica.RoomId.make("notes")
  * const open = (replica: string) =>
  *   Effect.gen(function*() {
  *     const text = yield* ReplicatedText.make({
@@ -307,11 +305,11 @@ export interface Persisted {
  */
 export const persist = Effect.fnUntraced(function*(
   replica: Replica.Replica<unknown>,
-  document: Replica.DocumentId
+  room: Replica.RoomId
 ): Effect.fn.Return<Persisted, HistoryStoreError | Replica.DeltaError, HistoryStore | Scope.Scope> {
   const store = yield* HistoryStore
   const core = InternalReplica.core(replica)
-  const stored = yield* store.load(document)
+  const stored = yield* store.load(room)
   if (Option.isSome(stored)) {
     yield* core.restore({
       history: stored.value.history,
@@ -331,10 +329,10 @@ export const persist = Effect.fnUntraced(function*(
   const save = (final: boolean) =>
     Effect.gen(function*() {
       const next = yield* core.toStore(saved)
-      if (!Delta.isEmpty(next.history)) yield* store.append(document, next.history)
-      if (core.confirmed !== undefined) yield* store.setUnconfirmed(document, next.unconfirmed)
+      if (!Delta.isEmpty(next.history)) yield* store.append(room, next.history)
+      if (core.confirmed !== undefined) yield* store.setUnconfirmed(room, next.unconfirmed)
       for (const writer of next.writers) {
-        if (!savedWriters.has(writer)) yield* store.addWriter(document, writer, "")
+        if (!savedWriters.has(writer)) yield* store.addWriter(room, writer, "")
       }
       savedWriters = new Set([...savedWriters, ...next.writers])
       saved = next.version
@@ -342,7 +340,7 @@ export const persist = Effect.fnUntraced(function*(
       // between, so a reload has little to replay.
       const covered = size(next.version)
       if (replica.strategy === "replay" && covered > snapshotAt && (final || covered - snapshotAt >= snapshotEvery)) {
-        yield* store.setSnapshot(document, { version: next.version, text: next.text })
+        yield* store.setSnapshot(room, { version: next.version, text: next.text })
         snapshotAt = covered
       }
     })

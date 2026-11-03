@@ -6,7 +6,7 @@ import type { RpcClient } from "effect/rpc"
 import { describe, expect, it } from "tstyche"
 
 declare const notes: ReplicatedText.ReplicatedText
-const document = Replica.DocumentId.make("notes")
+const room = Replica.RoomId.make("notes")
 
 // An app service an authority's rule might need.
 interface Members {
@@ -16,16 +16,16 @@ declare const editorsOnly: Effect.Effect<void, Authority.Rejected, Members>
 
 describe("Sync", () => {
   it("a confirmed replica needs an authority", () => {
-    expect(ReplicatedText.makeConfirmed({ document })).type.toBe<
+    expect(ReplicatedText.makeConfirmed({ room })).type.toBe<
       Effect.Effect<ReplicatedText.Confirmed, never, Authority.Authority | SecureRandom | Scope.Scope>
     >()
   })
 
   it("connecting through a relay needs a relay, in either form", () => {
-    expect(Relay.connect(notes, { document })).type.toBe<
+    expect(Relay.connect(notes, { room })).type.toBe<
       Effect.Effect<Sync.Connection, never, Relay.Relay | Scope.Scope>
     >()
-    expect(notes.pipe(Relay.connect({ document }))).type.toBe<
+    expect(notes.pipe(Relay.connect({ room }))).type.toBe<
       Effect.Effect<Sync.Connection, never, Relay.Relay | Scope.Scope>
     >()
   })

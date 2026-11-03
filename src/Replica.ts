@@ -37,7 +37,7 @@ const TypeId = "~effect-delta/Replica"
 export type Strategy = "tree" | "replay"
 
 /**
- * One copy of a document in one place (a tab, a device, a server) that accepts
+ * One copy of a shared value in one place (a tab, a device, a server) that accepts
  * edits immediately and syncs with other copies later.
  *
  * @stability unstable
@@ -79,23 +79,23 @@ export const ReplicaId = Schema.String.check(Schema.isMinLength(1)).pipe(Schema.
 export type ReplicaId = typeof ReplicaId.Type
 
 /**
- * Identifies a document: the shared thing that replicas are copies of. Sync and
+ * Identifies a room: where the replicas of one shared value meet. Sync and
  * storage use it; a replica itself doesn't need one.
  *
  * @stability unstable
  * @category schemas
  * @since 0.1.0
  */
-export const DocumentId = Schema.String.pipe(Schema.brand("DocumentId"))
+export const RoomId = Schema.String.pipe(Schema.brand("RoomId"))
 
 /**
- * A document id: identifies the shared thing that replicas are copies of.
+ * A room id: identifies where the replicas of one shared value meet.
  *
  * @stability unstable
  * @category models
  * @since 0.1.0
  */
-export type DocumentId = typeof DocumentId.Type
+export type RoomId = typeof RoomId.Type
 
 /**
  * Schema for an overlap: a stretch of merged text where changes from replicas

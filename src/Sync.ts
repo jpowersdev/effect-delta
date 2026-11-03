@@ -9,8 +9,8 @@
  *
  * Because it's an `RpcGroup`, the protocol runs over any `RpcClient` and
  * `RpcServer` protocol (WebSocket, HTTP, sockets, workers), one connection
- * carries any number of documents, and apps add their own `RpcMiddleware`. Who
- * may read and write each document is decided by the `Authorization` service.
+ * carries any number of rooms, and apps add their own `RpcMiddleware`. Who
+ * may read and write each room is decided by the `Authorization` service.
  *
  * @stability unstable
  * @since 0.1.0
@@ -94,7 +94,7 @@ export const Ack = Schema.Union([Accepted, PushRejected])
 export type Ack = Accepted | PushRejected
 
 /**
- * The connection's user may not read or write this document.
+ * The connection's user may not read or write this room.
  *
  * @stability unstable
  * @category errors
@@ -128,7 +128,7 @@ export class Disconnected extends Schema.TaggedError<Disconnected>()("Disconnect
 }) {}
 
 /**
- * The server couldn't load or save the document. Connections retry these.
+ * The server couldn't load or save the room. Connections retry these.
  *
  * @stability unstable
  * @category errors
@@ -151,7 +151,7 @@ export class SyncError extends Schema.TaggedError<SyncError>()("SyncError", {
 }) {}
 
 /**
- * Subscribes to a document: streams back the changes a replica at `version`
+ * Subscribes to a room: streams back the changes a replica at `version`
  * lacks, then each new change. `authority` says whether the replica expects to
  * answer to an authority, so the server can refuse a mismatch.
  *
@@ -162,7 +162,7 @@ export class SyncError extends Schema.TaggedError<SyncError>()("SyncError", {
 export class Subscribe extends Rpc.make("Sync.Subscribe", {
   payload: {
     format: Schema.Literal(FORMAT),
-    document: Replica.DocumentId,
+    room: Replica.RoomId,
     strategy: Schema.Literals(["tree", "replay"]),
     version: VersionVector.VersionVector,
     authority: Schema.Boolean
@@ -173,7 +173,7 @@ export class Subscribe extends Rpc.make("Sync.Subscribe", {
 }) {}
 
 /**
- * Pushes a replica's own changes to a document.
+ * Pushes a replica's own changes to a room.
  *
  * @stability unstable
  * @category protocols
@@ -182,7 +182,7 @@ export class Subscribe extends Rpc.make("Sync.Subscribe", {
 export class Push extends Rpc.make("Sync.Push", {
   payload: {
     format: Schema.Literal(FORMAT),
-    document: Replica.DocumentId,
+    room: Replica.RoomId,
     delta: Delta.Delta
   },
   success: Ack,
@@ -218,7 +218,7 @@ export type SubscribeRequest = Rpc.Payload<typeof Subscribe>
 export type PushRequest = Rpc.Payload<typeof Push>
 
 /**
- * What a relay and an authority both provide: subscribing to a document and
+ * What a relay and an authority both provide: subscribing to a room and
  * pushing changes to it. The in-process layers implement it directly; the
  * remote layers implement it over `Rpcs`.
  *
@@ -247,7 +247,7 @@ export const CurrentUser: Context.Reference<string> = Context.Reference<string>(
  * Decides who is connecting and what they may do. Servers check it on every
  * request: `identify` turns the request's headers (from the HTTP request or
  * WebSocket upgrade) into a stable user id, and `authorize` decides read and
- * write access per document.
+ * write access per room.
  *
  * **Details**
  *
@@ -263,7 +263,7 @@ export class Authorization extends Context.Service<Authorization, {
   readonly identify: (headers: Headers.Headers) => Effect.Effect<string, Forbidden>
   readonly authorize: (request: {
     readonly user: string
-    readonly document: Replica.DocumentId
+    readonly room: Replica.RoomId
     readonly access: "read" | "write"
   }) => Effect.Effect<void, Forbidden>
 }>()("effect-delta/Sync/Authorization") {}
@@ -309,7 +309,7 @@ export type Status =
  * - `status`: where the connection is up to, then each change of it.
  * - `unconfirmed`: how many of the replica's own changes the server hasn't
  *   acknowledged yet, then each new count. An app can show it ("Saving…"),
- *   or wait for 0 before closing a document.
+ *   or wait for 0 before closing.
  * - `sync`: waits until the replica holds everything the server had when it was
  *   called, so what anyone was acknowledged before then is in the replica. Fails if
  *   the server can't be reached. From a relay, it also waits for changes the relay

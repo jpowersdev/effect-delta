@@ -27,7 +27,7 @@ Save this as `main.ts` and run `node main.ts`, on Node.js 24 or later in a packa
 import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Layer, Stream } from "effect"
 
-const notes = Replica.DocumentId.make("notes")
+const notes = Replica.RoomId.make("notes")
 
 const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
@@ -37,10 +37,10 @@ const program = Effect.gen(function*() {
     replica: Replica.ReplicaId.make("phone")
   })
   yield* Relay.connect(laptop, {
-    document: notes
+    room: notes
   })
   yield* Relay.connect(phone, {
-    document: notes
+    room: notes
   })
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
@@ -68,8 +68,8 @@ The [documentation](https://jpowersdev.github.io/effect-delta/) has guides and t
 | `Sync`           | The sync protocol, connections and authorization                      |
 | `Relay`          | A server that passes changes between replicas and keeps them          |
 | `Authority`      | A server that decides which changes are accepted                      |
-| `HistoryStore`   | Where a document's history is kept                                    |
-| `Presence`       | Who else is in a document, and their selections                       |
+| `HistoryStore`   | Where a room's history is kept                                        |
+| `Presence`       | Who else is in a room, and their selections                           |
 
 `ReplicatedText` merges with one of two strategies: `tree`, the default, keeps a tree of every character, and `replay`
 keeps only the text and its history. `Authority` works with `tree` only. Locating anchors under `replay` is slow on long

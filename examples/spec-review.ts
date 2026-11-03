@@ -87,12 +87,12 @@ const AuthorityRemote = (token: string) =>
     Layer.provide(RpcSerialization.layerNdjson)
   )
 
-const spec = Replica.DocumentId.make("spec-42")
+const spec = Replica.RoomId.make("spec-42")
 
 // Opens the spec, and waits until it has caught up with the server.
 const openSpec = Effect.gen(function*() {
   const text = yield* ReplicatedText.makeConfirmed({
-    document: spec
+    room: spec
   })
   yield* text.connection.status.pipe(Stream.filter((status) => status._tag === "Synced"), Stream.runHead)
   return text

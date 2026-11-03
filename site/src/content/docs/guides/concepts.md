@@ -5,7 +5,7 @@ sidebar:
   order: 1
 ---
 
-A **document** is shared by many **replicas**, one per device or session. Each has a **replica id**. When an app edits
+A shared text has many **replicas**, one per device or session, which meet in a **room**. Each has a **replica id**. When an app edits
 a replica's text, the edit is recorded as a **change**, along with the **parents** it was made on top of. All the changes
 a replica knows form its **history**, and a **version vector** summarizes what it has seen from each replica.
 
@@ -16,12 +16,12 @@ the same changes shows the same text.
 Apps observe each change to the text as a **patch**. They keep stable positions as **anchors**, and are told about
 **overlaps**: places where two replicas edited the same stretch of text without seeing each other's edit.
 
-## Documents and replicas
+## Rooms and replicas
 
 | Term       | Meaning                                                                                                     |
 | ---------- | ----------------------------------------------------------------------------------------------------------- |
-| Document   | The shared text being edited, identified by a document id.                                                  |
-| Replica    | One copy of a document in one place (a tab, a device, a server). It accepts edits at once and syncs later.  |
+| Room       | Where the replicas of one text meet, identified by a room id.                                               |
+| Replica    | One copy of the text in one place (a tab, a device, a server). It accepts edits at once and syncs later.    |
 | Replica id | Identifies the stream of changes one replica writes. Never reused. It isn't a user or a network connection. |
 
 ## Changes and history
@@ -45,7 +45,7 @@ Apps observe each change to the text as a **patch**. They keep stable positions 
 | Authority     | A server that checks each change, and can reject it.                                                     |
 | History store | Where a replica or server keeps history between sessions.                                                |
 | Snapshot      | The text at one version, saved so a `replay` replica can load without replaying its history.             |
-| Presence      | Short-lived state that isn't part of the document: who's here, and their selections.                     |
+| Presence      | Short-lived state that isn't part of the room: who's here, and their selections.                         |
 
 ## Text and positions
 
@@ -66,6 +66,7 @@ what an editor applies to show new text. Yjs, Quill and Loro call the second one
 | -------------- | ------------------------ | ---------------------- | ----------------- | ------------------------- |
 | Replica        | Y.Doc instance           | doc instance           | LoroDoc instance  | branch + oplog            |
 | Replica id     | clientID                 | actor                  | PeerID            | agent                     |
+| Room           | room (y-websocket)       | document URL           | —                 | —                         |
 | Change         | item runs in an update   | change                 | change            | event (run)               |
 | History        | struct store             | change graph           | OpLog             | event graph / oplog       |
 | Version vector | state vector             | —                      | version vector    | —                         |
