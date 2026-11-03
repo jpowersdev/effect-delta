@@ -42,8 +42,8 @@ interface Options {
 }
 
 // A replica that syncs with anything: peers (Replica.exchange) and relays (Relay.connect).
-// It requires Crypto unless you give it a replica id.
-declare const make: (options?: Options) => Effect<ReplicatedText, never, Crypto>
+// It requires SecureRandom unless you give it a replica id.
+declare const make: (options?: Options) => Effect<ReplicatedText, never, SecureRandom>
 
 // A replica whose changes an authority confirms or rejects. It syncs through that Authority for the life
 // of the scope, and with nothing else.
@@ -51,7 +51,7 @@ declare const makeConfirmed: (options: {
   readonly document: Replica.DocumentId
   readonly replica?: Replica.ReplicaId | undefined
   readonly retry?: Schedule | undefined
-}) => Effect<Confirmed, never, Authority | Crypto | Scope>
+}) => Effect<Confirmed, never, Authority | SecureRandom | Scope>
 
 // Reading
 declare const get: (self: ReplicatedText) => Effect<string>
@@ -107,8 +107,8 @@ This decides how concurrent edits merge. Changing "24 hours" to "8 hours" on one
 `Local` ones. If the editor has keystrokes it hasn't handed to the replica yet, move the remote patch past them with
 `TextPatch.transform`.
 
-**`Crypto`** comes from platform layers such as `NodeServices.layer`. Tests can use `TestCrypto.layer(seed)` from
-`effect/testing`.
+**`SecureRandom`** is in `effect/crypto`. `SecureRandom.layerWebCrypto` provides it on Node.js, browsers and Workers, and tests
+can supply their own bytes with `SecureRandom.make`.
 
 ## TextPatch
 

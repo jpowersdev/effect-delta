@@ -58,7 +58,7 @@ on long histories. Authorities don't work with it.
 - **Indexes are UTF-16 code units.** A local edit that would split a surrogate pair (half an emoji) is rejected, which keeps
   every merged text well-formed. Grapheme clusters, such as an emoji with a skin tone, can still be split by concurrent
   edits.
-- **Replica ids are random, one per replica instance** (each tab, process or session), generated with `Crypto`. Reuse an id
+- **Replica ids are random, one per replica instance** (each tab, process or session), generated with `SecureRandom`. Reuse an id
   only when a replica is restoring its own saved state and nothing else is using that id.
 - **History is kept forever.** Nothing prunes it.
 - **Transports needn't preserve order.** Changes that arrive early wait inside the replica.

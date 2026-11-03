@@ -1,9 +1,8 @@
-import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
 import { Authority, Delta, HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Layer, Option, Stream } from "effect"
 import { KeyValueStore } from "effect/persistence"
-import { TestCrypto } from "effect/testing"
+import { layerSeeded } from "./utils/secureRandom.ts"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
 const makeReplay = (replica: string) =>
@@ -169,7 +168,7 @@ describe("HistoryStore", () => {
             after.includes("secret") ? Effect.fail(new Authority.Rejected({ message: "No secrets" })) : Effect.void
         }).pipe(Layer.provide(HistoryStore.layerMemory)),
         HistoryStore.layerKeyValueStore({ prefix: "client" }).pipe(Layer.provide(KeyValueStore.layerMemory)),
-        TestCrypto.layer("store").pipe(Layer.provide(NodeCrypto.layer))
+        layerSeeded("store")
       ])
     ))
 })

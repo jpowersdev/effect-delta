@@ -1,4 +1,3 @@
-import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
 import {
   Authority,
@@ -11,7 +10,7 @@ import {
   VersionVector
 } from "@jpowersdev/effect-delta"
 import { Context, Deferred, Effect, Layer, Option, Schedule, Stream } from "effect"
-import { TestCrypto } from "effect/testing"
+import { layerSeeded } from "./utils/secureRandom.ts"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
 const notes = Replica.DocumentId.make("notes")
@@ -51,7 +50,7 @@ const failingOnce = Layer.effect(HistoryStore.HistoryStore)(Effect.gen(function*
   }
 })).pipe(Layer.provide(HistoryStore.layerMemory))
 
-const CryptoTest = TestCrypto.layer("sync").pipe(Layer.provide(NodeCrypto.layer))
+const CryptoTest = layerSeeded("sync")
 
 describe("Relay", () => {
   it.effect("syncs replicas both ways", () =>

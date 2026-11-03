@@ -15,7 +15,7 @@
  * @stability unstable
  * @since 0.1.0
  */
-import * as Crypto from "effect/Crypto"
+import * as SecureRandom from "effect/crypto/SecureRandom"
 import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
 import { dual } from "effect/Function"
@@ -80,8 +80,8 @@ const Proto = {
 }
 
 const randomReplicaId = Effect.gen(function*() {
-  const crypto = yield* Crypto.Crypto
-  return Replica.ReplicaId.make(yield* Effect.orDie(crypto.randomUUIDv4()))
+  const random = yield* SecureRandom.SecureRandom
+  return Replica.ReplicaId.make(yield* random.uuidV4())
 })
 
 const makeWith = Effect.fnUntraced(function*(options: {
@@ -115,8 +115,8 @@ const makeImpl = Effect.fnUntraced(function*(options?: Options) {
 
 const makeConfirmedImpl = Effect.fnUntraced(function*(options: ConfirmedOptions) {
   // Kept for later: a rejection moves the replica to a new id.
-  const crypto = yield* Crypto.Crypto
-  const freshId = Effect.provideService(randomReplicaId, Crypto.Crypto, crypto)
+  const random = yield* SecureRandom.SecureRandom
+  const freshId = Effect.provideService(randomReplicaId, SecureRandom.SecureRandom, random)
   const self = yield* makeWith({
     strategy: "tree",
     replica: options.replica ?? (yield* freshId),
@@ -506,9 +506,9 @@ export interface Options {
  *
  * **Details**
  *
- * Without a `replica` option, a fresh random replica id comes from `Crypto`,
- * which platform layers such as `NodeServices.layer` provide. With one, no
- * `Crypto` is needed; tests and examples use fixed ids to stay deterministic.
+ * Without a `replica` option, a fresh random replica id comes from
+ * `SecureRandom`, which `SecureRandom.layerWebCrypto` provides on Node.js,
+ * browsers and Workers. With one, no `SecureRandom` is needed.
  *
  * **Example** (Creating and editing a text)
  *
@@ -532,7 +532,7 @@ export interface Options {
  */
 export const make: {
   (options: Options & { readonly replica: Replica.ReplicaId }): Effect.Effect<ReplicatedText>
-  (options?: Options): Effect.Effect<ReplicatedText, never, Crypto.Crypto>
+  (options?: Options): Effect.Effect<ReplicatedText, never, SecureRandom.SecureRandom>
 } = makeImpl as any
 
 /**
@@ -588,7 +588,7 @@ export interface ConfirmedOptions {
  * **Example** (Rejecting a reviewer's edit)
  *
  * ```ts import.meta.vitest
- * import { NodeServices } from "@effect/platform-node"
+ * import { SecureRandom } from "effect/crypto"
  * import { Effect, Layer, Stream } from "effect"
  * import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
  *
@@ -608,7 +608,7 @@ export interface ConfirmedOptions {
  * await Effect.runPromise(program.pipe(
  *   Effect.scoped,
  *   Effect.provideService(Sync.CurrentUser, "reviewer"),
- *   Effect.provide([EditorsOnly, NodeServices.layer])
+ *   Effect.provide([EditorsOnly, SecureRandom.layerWebCrypto])
  * )) // => ""
  * ```
  *
@@ -618,7 +618,7 @@ export interface ConfirmedOptions {
  */
 export const makeConfirmed: (
   options: ConfirmedOptions
-) => Effect.Effect<Confirmed, never, Authority.Authority | Crypto.Crypto | Scope.Scope> = makeConfirmedImpl
+) => Effect.Effect<Confirmed, never, Authority.Authority | SecureRandom.SecureRandom | Scope.Scope> = makeConfirmedImpl
 
 /**
  * Returns the current text.

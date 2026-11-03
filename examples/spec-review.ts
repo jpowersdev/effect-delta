@@ -9,6 +9,7 @@
 import { NodeHttpServer, NodeRuntime, NodeServices, NodeSocket } from "@effect/platform-node"
 import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
 import { Console, Effect, Layer, Option, Stream } from "effect"
+import { SecureRandom } from "effect/crypto"
 import { Headers, HttpRouter } from "effect/http"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"
 import { createServer } from "node:http"
@@ -103,4 +104,7 @@ const adaAgain = Effect.gen(function*() {
   yield* Console.log("Ada sees: ", yield* ReplicatedText.get(text))
 }).pipe(Effect.scoped, Effect.provide(AuthorityRemote("token-ada")))
 
-Effect.all([ada, ben, adaAgain]).pipe(Effect.provide([ServerLive, NodeServices.layer]), NodeRuntime.runMain)
+Effect.all([ada, ben, adaAgain]).pipe(
+  Effect.provide([ServerLive, NodeServices.layer, SecureRandom.layerWebCrypto]),
+  NodeRuntime.runMain
+)

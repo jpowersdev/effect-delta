@@ -68,21 +68,21 @@
     "prepare": "effect-tsgo patch"
   },
   "peerDependencies": {
-    "effect": "~4.0.4"
+    "effect": "^4.1.1"
   },
   "devDependencies": {
     "@babel/cli": "8.0.6",
     "@babel/core": "8.0.7",
     "@changesets/changelog-github": "1.0.1",
     "@changesets/cli": "3.0.3",
-    "@effect/doctest": "4.0.4",
-    "@effect/platform-node": "4.0.4",
-    "@effect/tsgo": "0.51.1",
-    "@effect/vitest": "4.0.4",
+    "@effect/doctest": "4.1.1",
+    "@effect/platform-node": "4.1.1",
+    "@effect/tsgo": "0.63.0",
+    "@effect/vitest": "4.1.1",
     "@types/node": "26.6.5",
     "babel-plugin-annotate-pure-calls": "0.5.0",
     "dprint": "0.61.1",
-    "effect": "4.0.4",
+    "effect": "4.1.1",
     "glob": "13.0.6",
     "madge": "8.0.0",
     "oxlint": "1.87.0",

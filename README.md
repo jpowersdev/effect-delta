@@ -7,7 +7,7 @@ conflicts, a sync protocol over any `RpcClient` transport, and presence.
 pnpm add @jpowersdev/effect-delta effect
 ```
 
-`effect` is a peer dependency, `~4.0.4`.
+`effect` is a peer dependency, `^4.1.1`.
 
 ## Use
 

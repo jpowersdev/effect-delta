@@ -1,14 +1,15 @@
 import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
-import type { Crypto, Effect, Option } from "effect"
+import type { Effect, Option } from "effect"
+import type { SecureRandom } from "effect/crypto/SecureRandom"
 import { describe, expect, it } from "tstyche"
 
 declare const notes: ReplicatedText.ReplicatedText
 
 describe("ReplicatedText", () => {
-  it("make needs Crypto only without a replica id", () => {
-    expect(ReplicatedText.make()).type.toBe<Effect.Effect<ReplicatedText.ReplicatedText, never, Crypto.Crypto>>()
+  it("make needs SecureRandom only without a replica id", () => {
+    expect(ReplicatedText.make()).type.toBe<Effect.Effect<ReplicatedText.ReplicatedText, never, SecureRandom>>()
     expect(ReplicatedText.make({ strategy: "tree" })).type.toBe<
-      Effect.Effect<ReplicatedText.ReplicatedText, never, Crypto.Crypto>
+      Effect.Effect<ReplicatedText.ReplicatedText, never, SecureRandom>
     >()
     expect(ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })).type.toBe<
       Effect.Effect<ReplicatedText.ReplicatedText>

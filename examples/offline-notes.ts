@@ -9,6 +9,7 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Console, Effect, Option } from "effect"
+import { SecureRandom } from "effect/crypto"
 
 const program = Effect.gen(function*() {
   const alice = yield* ReplicatedText.make()
@@ -43,4 +44,4 @@ const program = Effect.gen(function*() {
   }
 })
 
-program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain)
+program.pipe(Effect.provide([NodeServices.layer, SecureRandom.layerWebCrypto]), NodeRuntime.runMain)

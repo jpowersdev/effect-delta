@@ -1,6 +1,7 @@
 import type { HistoryStore, Sync } from "@jpowersdev/effect-delta"
 import { Authority, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
-import type { Crypto, Effect, Layer, Scope } from "effect"
+import type { Effect, Layer, Scope } from "effect"
+import type { SecureRandom } from "effect/crypto/SecureRandom"
 import type { RpcClient } from "effect/rpc"
 import { describe, expect, it } from "tstyche"
 
@@ -16,7 +17,7 @@ declare const editorsOnly: Effect.Effect<void, Authority.Rejected, Members>
 describe("Sync", () => {
   it("a confirmed replica needs an authority", () => {
     expect(ReplicatedText.makeConfirmed({ document })).type.toBe<
-      Effect.Effect<ReplicatedText.Confirmed, never, Authority.Authority | Crypto.Crypto | Scope.Scope>
+      Effect.Effect<ReplicatedText.Confirmed, never, Authority.Authority | SecureRandom | Scope.Scope>
     >()
   })
 

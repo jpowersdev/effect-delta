@@ -11,6 +11,7 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Console, Duration, Effect, FileSystem, Layer } from "effect"
+import { SecureRandom } from "effect/crypto"
 import { KeyValueStore } from "effect/persistence"
 
 const manuscript = Replica.DocumentId.make("manuscript")
@@ -84,6 +85,6 @@ const StoreLive = Layer.unwrap(Effect.gen(function*() {
 
 program.pipe(
   Effect.provide(StoreLive),
-  Effect.provide(NodeServices.layer),
+  Effect.provide([NodeServices.layer, SecureRandom.layerWebCrypto]),
   NodeRuntime.runMain
 )
