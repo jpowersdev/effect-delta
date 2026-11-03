@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <rect width="1280" height="640" fill="#18181A"/>
+  <svg x="110" y="150" width="320" height="320" viewBox="0 0 128 128" fill="none">
+  <path d="M64.00 39.75L36.00 88.25L92.00 88.25Z" stroke="#FAFAFA" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M83.05 28.75L55.05 77.25L111.05 77.25Z" fill="#FAFAFA" stroke="#FAFAFA" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M44.95 50.75L16.95 99.25L72.95 99.25" stroke="#FAFAFA" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+  <g font-family="Noto Sans, sans-serif">
+    <text x="476" y="286" font-size="100" font-weight="700" fill="#FAFAFA" letter-spacing="-2">effect-delta</text>
+    <text x="480" y="346" font-size="30" fill="#A1A1AA">Collaborative text for Effect</text>
+    <text x="480" y="396" font-size="24" fill="#71717A">instant edits · conflict-free merges · any transport · presence</text>
+  </g>
+  <rect x="476" y="436" width="501" height="54" rx="12" fill="#27272A"/>
+  <text x="498" y="471" font-family="Hack, DejaVu Sans Mono, monospace" font-size="23" fill="#D4D4D8">pnpm add @jpowersdev/effect-delta</text>
+</svg>
