@@ -1,7 +1,17 @@
-# effect-delta
+<p align="center">
+  <img src="assets/logo.svg" width="128" height="128" alt="">
+</p>
 
-Collaborative text for [Effect](https://effect.website): replicas that accept edits immediately and merge without
-conflicts, a sync protocol over any `RpcClient` transport, and presence.
+<h1 align="center">effect-delta</h1>
+
+<p align="center">
+  Collaborative text for <a href="https://effect.website">Effect</a>: replicas that accept edits immediately and merge without conflicts, a sync protocol over any <code>RpcClient</code> transport, and presence.
+</p>
+
+<p align="center">
+  <a href="https://jpowersdev.github.io/effect-delta/">Documentation</a> ·
+  <a href="https://jpowersdev.github.io/effect-delta/api/">API reference</a>
+</p>
 
 ```sh
 pnpm add @jpowersdev/effect-delta effect

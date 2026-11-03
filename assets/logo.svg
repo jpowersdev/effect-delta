@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">effect-delta</title>
+  <desc id="desc">Three deltas cascading up and to the right: one solid, one outlined and one a detached stroke, stacked the way the Effect logo stacks its layers.</desc>
+  <rect width="128" height="128" rx="28" fill="#18181A"/>
+  <path d="M64.00 39.75L36.00 88.25L92.00 88.25Z" stroke="#FAFAFA" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M83.05 28.75L55.05 77.25L111.05 77.25Z" fill="#FAFAFA" stroke="#FAFAFA" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M44.95 50.75L16.95 99.25L72.95 99.25" stroke="#FAFAFA" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

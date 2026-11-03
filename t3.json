@@ -1,0 +1,18 @@
+{
+  "$schema": "https://t3.codes/schema/t3.json",
+  "iconPath": "assets/logo.svg",
+  "scripts": [
+    {
+      "name": "Setup",
+      "command": "pnpm install --frozen-lockfile --ignore-scripts && pnpm exec effect-tsgo patch",
+      "icon": "configure"
+    },
+    { "name": "Check types", "command": "pnpm check", "icon": "build" },
+    { "name": "Test", "command": "pnpm test", "icon": "test" },
+    { "name": "Test docs", "command": "pnpm doctest", "icon": "test" },
+    { "name": "Test types", "command": "pnpm test-types", "icon": "test" },
+    { "name": "Lint", "command": "pnpm lint", "icon": "lint" },
+    { "name": "Build", "command": "pnpm build", "icon": "build" },
+    { "name": "Verify package", "command": "pnpm pack-check", "icon": "test" }
+  ]
+}
