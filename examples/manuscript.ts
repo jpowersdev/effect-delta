@@ -6,7 +6,8 @@
  *
  * Strategy: replay.
  *
- *   node examples/manuscript.ts
+ *   pnpm add @jpowersdev/effect-delta @effect/platform-node effect
+ *   node manuscript.ts
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"

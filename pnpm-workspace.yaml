@@ -1,5 +1,7 @@
 packages:
+  # The library itself, and the docs site.
   - .
+  - site
 
 verifyDepsBeforeRun: error
 enableGlobalVirtualStore: false

@@ -11,7 +11,9 @@ pnpm add @jpowersdev/effect-delta effect
 
 ## Use
 
-```ts
+Save this as `main.ts` and run `node main.ts`, on Node.js 24 or later in a package with `"type": "module"`.
+
+```ts import.meta.vitest
 import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Layer, Stream } from "effect"
 
@@ -24,15 +26,18 @@ const program = Effect.gen(function*() {
   yield* Relay.connect(phone, { document: notes })
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
-  return yield* ReplicatedText.changes(phone).pipe(Stream.filter((text) => text === "Hello"), Stream.runHead)
+  yield* ReplicatedText.changes(phone).pipe(Stream.filter((text) => text === "Hello"), Stream.runHead)
+  return yield* ReplicatedText.get(phone)
 })
 
 const RelayLive = Relay.layer.pipe(Layer.provide(HistoryStore.layerMemory))
-await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive)))
+
+const text = await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive))) // => "Hello"
+console.log(text)
 ```
 
-[`examples/`](examples) has fuller cases, including a server that rejects edits. [`docs/`](docs) explains the concepts,
-how to choose a strategy, and the API.
+The [documentation](https://jpowersdev.github.io/effect-delta/) has guides and the API reference, and
+[`examples/`](examples) has fuller programs, including a server that rejects edits.
 
 ## Modules
 

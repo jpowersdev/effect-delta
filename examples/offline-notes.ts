@@ -4,9 +4,9 @@
  *
  * Strategy: tree.
  *
- *   node examples/offline-notes.ts
+ *   pnpm add @jpowersdev/effect-delta effect
+ *   node offline-notes.ts
  */
-import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Console, Effect, Option } from "effect"
 import { SecureRandom } from "effect/crypto"
@@ -44,4 +44,4 @@ const program = Effect.gen(function*() {
   }
 })
 
-program.pipe(Effect.provide([NodeServices.layer, SecureRandom.layerWebCrypto]), NodeRuntime.runMain)
+await Effect.runPromise(program.pipe(Effect.provide(SecureRandom.layerWebCrypto)))

@@ -4,7 +4,8 @@
  *
  * Strategy: tree, with an authority.
  *
- *   node examples/spec-review.ts
+ *   pnpm add @jpowersdev/effect-delta @effect/platform-node effect
+ *   node spec-review.ts
  */
 import { NodeHttpServer, NodeRuntime, NodeServices, NodeSocket } from "@effect/platform-node"
 import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"

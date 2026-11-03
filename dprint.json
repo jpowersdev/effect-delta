@@ -15,7 +15,7 @@
   "excludes": [
     "**/dist",
     "**/build",
-    "**/docs",
+    "site",
     "**/coverage",
     "**/*.tsbuildinfo",
     "**/CHANGELOG.md",

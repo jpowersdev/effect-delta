@@ -1,4 +1,9 @@
-# Concepts
+---
+title: "Concepts"
+description: "The model, the terms these docs use, and what other libraries call them."
+sidebar:
+  order: 1
+---
 
 A **document** is shared by many **replicas**, one per device or session. Each has a **replica id**. When an app edits
 a replica's text, the edit is recorded as a **change**, along with the **parents** it was made on top of. All the changes

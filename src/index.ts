@@ -1,4 +1,7 @@
 /**
+ * Collaborative text for Effect: replicas that accept edits immediately and merge
+ * without conflicts, a sync protocol over any `RpcClient` transport, and presence.
+ *
  * @stability unstable
  * @since 0.1.0
  */

@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/@effect/docgen/schema.json",
+  "projectHomepage": "https://github.com/jpowersdev/effect-delta",
+  "srcLink": "https://github.com/jpowersdev/effect-delta/blob/main/src/",
+  "runExamples": true,
+  "outDir": "site/.docgen",
+  "exclude": ["src/internal/**/*.ts"],
+  "parseCompilerOptions": "tsconfig.json",
+  "examplesCompilerOptions": {
+    "noEmit": true,
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "skipLibCheck": true,
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "target": "ES2024",
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
+    "paths": {
+      "@jpowersdev/effect-delta": ["../../../src/index.ts"],
+      "@jpowersdev/effect-delta/*": ["../../../src/*.ts"]
+    }
+  }
+}

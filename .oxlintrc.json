@@ -6,7 +6,7 @@
     "suspicious": "error",
     "perf": "error"
   },
-  "ignorePatterns": ["**/dist", "**/docs", "**/*.tsbuildinfo", "**/CHANGELOG.md"],
+  "ignorePatterns": ["**/dist", "site", "**/*.tsbuildinfo", "**/CHANGELOG.md"],
   "rules": {
     "typescript/consistent-type-imports": ["error", {
       "fixStyle": "inline-type-imports"

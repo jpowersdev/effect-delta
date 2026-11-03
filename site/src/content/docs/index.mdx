@@ -1,0 +1,62 @@
+---
+title: effect-delta
+description: Collaborative text for Effect, with replicas that merge without conflicts.
+template: splash
+hero:
+  tagline: Collaborative text for Effect
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: getting-started/
+      icon: right-arrow
+    - text: API reference
+      link: api/
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkButton } from "@astrojs/starlight/components"
+
+```ts import.meta.vitest
+import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+import { Effect } from "effect"
+
+const program = Effect.gen(function*() {
+  const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+  const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
+
+  // Offline, each edits their own copy
+  yield* ReplicatedText.insert(laptop, 0, "Hello")
+  yield* ReplicatedText.insert(phone, 0, "world")
+
+  // Back online, both show the same text
+  yield* Replica.exchange(laptop, phone)
+  return yield* ReplicatedText.get(phone)
+})
+
+const text = await Effect.runPromise(program) // => "Helloworld"
+console.log(text)
+```
+
+<CardGrid>
+  <Card title="Edits apply immediately" icon="pencil">
+    A replica never waits for the network, and concurrent edits merge without conflicts.
+
+    <LinkButton href="guides/editing/" variant="minimal" icon="right-arrow">Editing text</LinkButton>
+  </Card>
+  <Card title="Sync over any transport" icon="random">
+    The protocol is an `RpcGroup`, so it runs over any `RpcClient` protocol, through a relay or a server that decides what's accepted.
+
+    <LinkButton href="guides/syncing/" variant="minimal" icon="right-arrow">Syncing</LinkButton>
+  </Card>
+  <Card title="Two merge strategies" icon="setting">
+    `tree` needs nothing beyond delivery. `replay` keeps memory close to the size of the text.
+
+    <LinkButton href="guides/strategies/" variant="minimal" icon="right-arrow">Strategies</LinkButton>
+  </Card>
+  <Card title="Presence" icon="group">
+    Who's in a document and what they've selected, using positions that follow the text.
+
+    <LinkButton href="guides/presence/" variant="minimal" icon="right-arrow">Presence</LinkButton>
+  </Card>
+</CardGrid>

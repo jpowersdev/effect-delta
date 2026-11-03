@@ -63,8 +63,12 @@
     "build": "tsc -p tsconfig.build.json && pnpm babel",
     "babel": "babel dist --plugins annotate-pure-calls --out-dir dist --source-maps",
     "prepack": "pnpm build",
+    "pack-check": "bash scripts/pack-check.sh",
     "lint": "oxlint -f unix && dprint check",
     "lint-fix": "oxlint --fix && dprint fmt",
+    "docgen": "docgen",
+    "docs:dev": "pnpm docgen && pnpm --filter ./site dev",
+    "docs:build": "pnpm docgen && pnpm --filter ./site build",
     "prepare": "effect-tsgo patch"
   },
   "peerDependencies": {
@@ -75,6 +79,7 @@
     "@babel/core": "8.0.7",
     "@changesets/changelog-github": "1.0.1",
     "@changesets/cli": "3.0.3",
+    "@effect/docgen": "4.1.1",
     "@effect/doctest": "4.1.1",
     "@effect/platform-node": "4.1.1",
     "@effect/tsgo": "0.63.0",
@@ -87,6 +92,7 @@
     "madge": "8.0.0",
     "oxlint": "1.87.0",
     "tstyche": "7.2.5",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vite": "8.3.4",
     "vitest": "5.0.3"
