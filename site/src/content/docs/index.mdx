@@ -31,11 +31,12 @@ const program = Effect.gen(function*() {
 
   // Back online, both show the same text
   yield* Replica.exchange(laptop, phone)
-  return yield* ReplicatedText.get(phone)
+  const text = yield* ReplicatedText.get(phone)
+  yield* Effect.log(text)
+  return text
 })
 
-const text = await Effect.runPromise(program) // => "Helloworld"
-console.log(text)
+await Effect.runPromise(program) // => "Helloworld"
 ```
 
 <CardGrid>

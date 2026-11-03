@@ -36,11 +36,12 @@ const program = Effect.gen(function*() {
   const sent = Schema.encodeSync(Delta.Delta)(yield* Replica.delta(laptop, yield* Replica.version(phone)))
   yield* Replica.receive(phone, Schema.decodeUnknownSync(Delta.Delta)(sent))
 
-  return yield* ReplicatedText.get(phone)
+  const text = yield* ReplicatedText.get(phone)
+  yield* Effect.log(text)
+  return text
 })
 
-const text = await Effect.runPromise(program) // => "Hello"
-console.log(text)
+await Effect.runPromise(program) // => "Hello"
 ```
 
 ## Serve a relay
@@ -98,15 +99,16 @@ const program = Effect.gen(function*() {
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
   yield* ReplicatedText.changes(phone).pipe(Stream.filter((text) => text === "Hello"), Stream.runHead)
-  return yield* ReplicatedText.get(phone)
+  const text = yield* ReplicatedText.get(phone)
+  yield* Effect.log(text)
+  return text
 })
 
-const text = await Effect.runPromise(program.pipe(
+await Effect.runPromise(program.pipe(
   Effect.scoped,
   Effect.provide(RelayRemote),
   Effect.provide(ServerLive)
 )) // => "Hello"
-console.log(text)
 ```
 
 The server and client share a process here so the example runs by itself. On a real deployment `ServerLive` is one program
@@ -142,11 +144,11 @@ const program = Effect.gen(function*() {
   const authorization = yield* Sync.Authorization
   const user = yield* authorization.identify(Headers.fromInput({ authorization: "Bearer token-ada" }))
   yield* authorization.authorize({ user, document: Replica.DocumentId.make("notes"), access: "read" })
+  yield* Effect.log(user)
   return user
 })
 
-const user = await Effect.runPromise(program.pipe(Effect.provide(SignedIn))) // => "ada"
-console.log(user)
+await Effect.runPromise(program.pipe(Effect.provide(SignedIn))) // => "ada"
 ```
 
 ## Decide which changes are accepted
@@ -172,15 +174,16 @@ const program = Effect.gen(function*() {
 
   yield* ReplicatedText.insert(spec, 0, "LGTM")
   const rejected = yield* edits.pipe(Stream.filter((edit) => edit._tag === "Rejected"), Stream.runHead)
-  return Option.getOrThrow(rejected).message
+  const message = Option.getOrThrow(rejected).message
+  yield* Effect.log(message)
+  return message
 })
 
-const message = await Effect.runPromise(program.pipe(
+await Effect.runPromise(program.pipe(
   Effect.scoped,
   Effect.provideService(Sync.CurrentUser, "reviewer"),
   Effect.provide([EditorsOnly, SecureRandom.layerWebCrypto])
 )) // => "Read only"
-console.log(message)
 ```
 
 Over a network, serve it the same way as a relay, with `Authority.layerHandlers` and `Authority.layerRemote`.
@@ -210,13 +213,14 @@ const program = Effect.gen(function*() {
 
   yield* ReplicatedText.insert(notes, 0, "Hello")
   yield* connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)
-  return "The relay has every change"
+  const result = "The relay has every change"
+  yield* Effect.log(result)
+  return result
 })
 
 const RelayLive = Relay.layer.pipe(Layer.provide(HistoryStore.layerMemory))
 
-const result = await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive))) // => "The relay has every change"
-console.log(result)
+await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive))) // => "The relay has every change"
 ```
 
 ## What servers guarantee

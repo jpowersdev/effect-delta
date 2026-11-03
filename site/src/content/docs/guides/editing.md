@@ -20,11 +20,12 @@ const program = Effect.gen(function*() {
   yield* ReplicatedText.insert(notes, 0, "Hello")
   yield* ReplicatedText.insert(notes, 5, ", world")
   yield* ReplicatedText.remove(notes, 0, 7)
-  return yield* ReplicatedText.get(notes)
+  const text = yield* ReplicatedText.get(notes)
+  yield* Effect.log(text)
+  return text
 })
 
-const text = await Effect.runPromise(program.pipe(Effect.provide(SecureRandom.layerWebCrypto))) // => "world"
-console.log(text)
+await Effect.runPromise(program.pipe(Effect.provide(SecureRandom.layerWebCrypto))) // => "world"
 ```
 
 `ReplicatedText.makeConfirmed` makes a replica whose changes an authority confirms or rejects. See
@@ -55,11 +56,12 @@ const program = Effect.gen(function*() {
   yield* ReplicatedText.update(bob, (text) => text.replace("24", "12"))
 
   yield* Replica.exchange(alice, bob)
-  return yield* ReplicatedText.get(alice)
+  const text = yield* ReplicatedText.get(alice)
+  yield* Effect.log(text)
+  return text
 })
 
-const text = await Effect.runPromise(program) // => "Sessions last 812 hours."
-console.log(text)
+await Effect.runPromise(program) // => "Sessions last 812 hours."
 ```
 
 Editors should use `insert`, `remove` and `applyPatch`, which say exactly what the user did.
@@ -77,11 +79,12 @@ const program = Effect.gen(function*() {
   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
   yield* ReplicatedText.set(notes, "Hello")
   yield* ReplicatedText.modify(notes, ({ length }) => [undefined, TextPatch.insert(length, "!")])
-  return yield* ReplicatedText.get(notes)
+  const text = yield* ReplicatedText.get(notes)
+  yield* Effect.log(text)
+  return text
 })
 
-const text = await Effect.runPromise(program) // => "Hello!"
-console.log(text)
+await Effect.runPromise(program) // => "Hello!"
 ```
 
 ## Follow changes
@@ -116,11 +119,11 @@ const program = Effect.gen(function*() {
       })
     )
   )
+  yield* Effect.log(shown)
   return shown
 })
 
-const shown = await Effect.runPromise(program.pipe(Effect.scoped)) // => "Hello"
-console.log(shown)
+await Effect.runPromise(program.pipe(Effect.scoped)) // => "Hello"
 ```
 
 ## Keep a position
@@ -137,11 +140,12 @@ const program = Effect.gen(function*() {
   yield* ReplicatedText.insert(notes, 0, "world")
   const anchor = yield* ReplicatedText.anchor(notes, 0)
   yield* ReplicatedText.insert(notes, 0, "Hello, ")
-  return yield* ReplicatedText.locate(notes, anchor)
+  const index = yield* ReplicatedText.locate(notes, anchor)
+  yield* Effect.log(index)
+  return index
 })
 
-const index = await Effect.runPromise(program) // => Option.some(7)
-console.log(index)
+await Effect.runPromise(program) // => Option.some(7)
 ```
 
 `locate` is `None` if this replica hasn't received that character yet, or the character was rolled back. `anchorRange` and
@@ -168,11 +172,12 @@ const program = Effect.gen(function*() {
 
   const text = yield* ReplicatedText.get(alice)
   const range = Option.getOrThrow(yield* ReplicatedText.locateRange(alice, overlaps[0]!.anchors))
-  return text.slice(range.start, range.end)
+  const overlap = text.slice(range.start, range.end)
+  yield* Effect.log(overlap)
+  return overlap
 })
 
-const overlap = await Effect.runPromise(program) // => "812"
-console.log(overlap)
+await Effect.runPromise(program) // => "812"
 ```
 
 ## See who typed what
@@ -192,9 +197,10 @@ const program = Effect.gen(function*() {
   yield* Replica.exchange(owner, agent)
 
   const authored = yield* ReplicatedText.authorship(owner)
-  return authored.map(({ range, replica }) => `${replica} ${range.start}-${range.end}`)
+  const stretches = authored.map(({ range, replica }) => `${replica} ${range.start}-${range.end}`)
+  yield* Effect.log(stretches)
+  return stretches
 })
 
-const authored = await Effect.runPromise(program) // => ["owner 0-14", "agent 14-31", "owner 31-32"]
-console.log(authored)
+await Effect.runPromise(program) // => ["owner 0-14", "agent 14-31", "owner 31-32"]
 ```

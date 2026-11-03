@@ -27,15 +27,16 @@ const program = Effect.gen(function*() {
     const first = yield* open("session-1")
     yield* ReplicatedText.insert(first, 0, "Saved")
   }))
-  return yield* Effect.scoped(Effect.flatMap(open("session-2"), ReplicatedText.get))
+  const text = yield* Effect.scoped(Effect.flatMap(open("session-2"), ReplicatedText.get))
+  yield* Effect.log(text)
+  return text
 })
 
 const StoreLive = HistoryStore.layerKeyValueStore({ prefix: "notes" }).pipe(
   Layer.provide(KeyValueStore.layerMemory)
 )
 
-const text = await Effect.runPromise(program.pipe(Effect.provide(StoreLive))) // => "Saved"
-console.log(text)
+await Effect.runPromise(program.pipe(Effect.provide(StoreLive))) // => "Saved"
 ```
 
 ## Stores

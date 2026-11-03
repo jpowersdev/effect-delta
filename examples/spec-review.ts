@@ -9,7 +9,7 @@
  */
 import { NodeHttpServer, NodeRuntime, NodeServices, NodeSocket } from "@effect/platform-node"
 import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
-import { Console, Effect, Layer, Option, Stream } from "effect"
+import { Effect, Layer, Option, Stream } from "effect"
 import { SecureRandom } from "effect/crypto"
 import { Headers, HttpRouter } from "effect/http"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"
@@ -89,20 +89,20 @@ const ben = Effect.gen(function*() {
   const text = yield* openSpec
   const { edits } = yield* ReplicatedText.subscribe(text)
   yield* ReplicatedText.insert(text, 0, "LGTM ")
-  yield* Console.log("Ben typed:", yield* ReplicatedText.get(text))
+  yield* Effect.log("Ben typed:", yield* ReplicatedText.get(text))
 
   yield* edits.pipe(
     Stream.filter((edit) => edit._tag === "Rejected"),
     Stream.take(1),
-    Stream.runForEach((edit) => Console.log("Rejected:", edit.message))
+    Stream.runForEach((edit) => Effect.log("Rejected:", edit.message))
   )
-  yield* Console.log("Ben sees: ", yield* ReplicatedText.get(text))
+  yield* Effect.log("Ben sees: ", yield* ReplicatedText.get(text))
 }).pipe(Effect.scoped, Effect.provide(AuthorityRemote("token-ben")))
 
 // Ada opens the spec again later.
 const adaAgain = Effect.gen(function*() {
   const text = yield* openSpec
-  yield* Console.log("Ada sees: ", yield* ReplicatedText.get(text))
+  yield* Effect.log("Ada sees: ", yield* ReplicatedText.get(text))
 }).pipe(Effect.scoped, Effect.provide(AuthorityRemote("token-ada")))
 
 Effect.all([ada, ben, adaAgain]).pipe(

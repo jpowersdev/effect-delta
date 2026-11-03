@@ -11,7 +11,7 @@
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
-import { Console, Duration, Effect, FileSystem, Layer } from "effect"
+import { Duration, Effect, FileSystem, Layer } from "effect"
 import { SecureRandom } from "effect/crypto"
 import { KeyValueStore } from "effect/persistence"
 
@@ -64,15 +64,15 @@ const program = Effect.gen(function*() {
   yield* Effect.scoped(Effect.gen(function*() {
     const [loading, laptop] = yield* Effect.timed(open)
     const text = yield* ReplicatedText.get(laptop)
-    yield* Console.log(`Reopened ${text.length} characters in ${milliseconds(loading)}`)
+    yield* Effect.log(`Reopened ${text.length} characters in ${milliseconds(loading)}`)
 
     const [merging] = yield* Effect.timed(Replica.exchange(laptop, coauthor))
-    yield* Console.log(`Merged the co-author's week in ${milliseconds(merging)}`)
+    yield* Effect.log(`Merged the co-author's week in ${milliseconds(merging)}`)
 
     const merged = yield* ReplicatedText.get(laptop)
-    yield* Console.log(merged.slice(merged.indexOf("Chapter 40"), merged.indexOf("Chapter 40") + 50))
-    yield* Console.log(merged.slice(merged.indexOf("Epilogue")))
-    yield* Console.log("Same on both laptops:", merged === (yield* ReplicatedText.get(coauthor)))
+    yield* Effect.log(merged.slice(merged.indexOf("Chapter 40"), merged.indexOf("Chapter 40") + 50))
+    yield* Effect.log(merged.slice(merged.indexOf("Epilogue")))
+    yield* Effect.log("Same on both laptops:", merged === (yield* ReplicatedText.get(coauthor)))
   }))
 })
 

@@ -8,7 +8,7 @@
  *   node offline-notes.ts
  */
 import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
-import { Console, Effect, Option } from "effect"
+import { Effect, Option } from "effect"
 import { SecureRandom } from "effect/crypto"
 
 const program = Effect.gen(function*() {
@@ -27,14 +27,14 @@ const program = Effect.gen(function*() {
   // Back online.
   const overlaps = yield* Replica.exchange(alice, bob)
 
-  yield* Console.log(yield* ReplicatedText.get(alice))
+  yield* Effect.log(yield* ReplicatedText.get(alice))
   // # Decisions
   // Launch is Friday. Sessions last 812 hours.    (or 128; the same on both laptops)
 
   for (const overlap of overlaps) {
     const range = yield* ReplicatedText.locateRange(alice, overlap.anchors)
     const text = yield* ReplicatedText.get(alice)
-    yield* Console.log(
+    yield* Effect.log(
       "Both changed:",
       Option.match(range, {
         onNone: () => "(removed)",
