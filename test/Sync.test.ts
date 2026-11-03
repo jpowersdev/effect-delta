@@ -13,8 +13,8 @@ import { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Stream } fro
 import { layerSeeded } from "./utils/secureRandom.ts"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
-const notes = Replica.RoomId.make("notes")
-const spec = Replica.RoomId.make("spec")
+const notes = Replica.makeRoom("notes")
+const spec = Replica.makeRoom("spec")
 
 // Waits until the replica shows `text`.
 const showing = (self: ReplicatedText.ReplicatedText, text: string) =>

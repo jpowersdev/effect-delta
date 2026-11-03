@@ -278,7 +278,7 @@ export interface Persisted {
  * import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  * import { Effect } from "effect"
  *
- * const notes = Replica.RoomId.make("notes")
+ * const notes = Replica.makeRoom("notes")
  * const open = (replica: string) =>
  *   Effect.gen(function*() {
  *     const text = yield* ReplicatedText.make({

@@ -108,7 +108,7 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  *
  * const program = Effect.gen(function*() {
  *   const spec = yield* ReplicatedText.makeConfirmed({
- *     room: Replica.RoomId.make("spec")
+ *     room: Replica.makeRoom("spec")
  *   })
  *   yield* ReplicatedText.insert(spec, 0, "Spec v1")
  *   yield* spec.connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)

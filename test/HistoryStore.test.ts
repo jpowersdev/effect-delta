@@ -7,7 +7,7 @@ import { layerSeeded } from "./utils/secureRandom.ts"
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
 const makeReplay = (replica: string) =>
   ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
-const notes = Replica.RoomId.make("notes")
+const notes = Replica.makeRoom("notes")
 
 // Opens `notes` as a replica that saves to the store.
 const open = (replica: string) =>
@@ -145,7 +145,7 @@ describe("HistoryStore", () => {
 
   it.effect("a rejected change doesn't come back on reload", () =>
     Effect.gen(function*() {
-      const spec = Replica.RoomId.make("spec")
+      const spec = Replica.makeRoom("spec")
       yield* Effect.scoped(Effect.gen(function*() {
         const text = yield* ReplicatedText.makeConfirmed({ room: spec })
         yield* HistoryStore.persist(text, spec)

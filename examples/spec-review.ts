@@ -87,7 +87,7 @@ const AuthorityRemote = (token: string) =>
     Layer.provide(RpcSerialization.layerNdjson)
   )
 
-const spec = Replica.RoomId.make("spec-42")
+const spec = Replica.makeRoom("spec-42")
 
 // Opens the spec, and waits until it has caught up with the server.
 const openSpec = Effect.gen(function*() {

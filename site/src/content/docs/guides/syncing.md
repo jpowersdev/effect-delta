@@ -105,7 +105,7 @@ const RelayRemote = Relay.layerRemote.pipe(
   Layer.provide(RpcSerialization.layerNdjson)
 )
 
-const notes = Replica.RoomId.make("notes")
+const notes = Replica.makeRoom("notes")
 
 const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
@@ -187,7 +187,7 @@ const program = Effect.gen(function*() {
   )
   yield* authorization.authorize({
     user,
-    room: Replica.RoomId.make("notes"),
+    room: Replica.makeRoom("notes"),
     access: "read"
   })
   yield* Effect.log(user)
@@ -227,7 +227,7 @@ const EditorsOnly = Authority.layer({
 
 const program = Effect.gen(function*() {
   const spec = yield* ReplicatedText.makeConfirmed({
-    room: Replica.RoomId.make("spec")
+    room: Replica.makeRoom("spec")
   })
   const { edits } = yield* ReplicatedText.subscribe(spec)
 
@@ -272,7 +272,7 @@ const program = Effect.gen(function*() {
     replica: Replica.ReplicaId.make("laptop")
   })
   const connection = yield* Relay.connect(notes, {
-    room: Replica.RoomId.make("notes")
+    room: Replica.makeRoom("notes")
   })
   yield* connection.status.pipe(
     Stream.filter((status) => status._tag === "Synced"),

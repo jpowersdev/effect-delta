@@ -6,8 +6,8 @@ import { Headers, HttpRouter, HttpServer } from "effect/http"
 import type * as NetAddress from "effect/net/NetAddress"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"
 
-const notes = Replica.RoomId.make("notes")
-const other = Replica.RoomId.make("other")
+const notes = Replica.makeRoom("notes")
+const other = Replica.makeRoom("other")
 const named = (name: string): Presence.State => ({ selection: Option.none(), data: { name } })
 
 const as = (user: string) => Effect.provideService(Sync.CurrentUser, user)

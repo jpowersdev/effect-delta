@@ -18,7 +18,7 @@
  * import { Presence, Replica, Sync } from "@jpowersdev/effect-delta"
  * import { Effect, Option, Stream } from "effect"
  *
- * const notes = Replica.RoomId.make("notes")
+ * const notes = Replica.makeRoom("notes")
  *
  * const program = Effect.gen(function*() {
  *   const ada = yield* Presence.join({

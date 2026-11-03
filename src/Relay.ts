@@ -116,7 +116,7 @@ export interface ConnectOptions {
  * import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  * import { Effect, Layer, Option, Stream } from "effect"
  *
- * const notes = Replica.RoomId.make("notes")
+ * const notes = Replica.makeRoom("notes")
  *
  * const program = Effect.gen(function*() {
  *   const laptop = yield* ReplicatedText.make({

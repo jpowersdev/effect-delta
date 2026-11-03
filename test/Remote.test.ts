@@ -8,8 +8,8 @@ import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"
 
 // A server and its clients talking over a real WebSocket, with JSON framing.
 
-const spec = Replica.RoomId.make("spec")
-const drafts = Replica.RoomId.make("drafts")
+const spec = Replica.makeRoom("spec")
+const drafts = Replica.makeRoom("drafts")
 
 // Users sign in with a header. Only editors may edit, and only editors may
 // read drafts.

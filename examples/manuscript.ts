@@ -15,7 +15,7 @@ import { Duration, Effect, FileSystem, Layer } from "effect"
 import { SecureRandom } from "effect/crypto"
 import { KeyValueStore } from "effect/persistence"
 
-const manuscript = Replica.RoomId.make("manuscript")
+const manuscript = Replica.makeRoom("manuscript")
 
 // Opens the manuscript on the writer's laptop: it loads what was saved, then
 // saves every change until the scope closes.

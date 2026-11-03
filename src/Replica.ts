@@ -86,7 +86,7 @@ export type ReplicaId = typeof ReplicaId.Type
  * @category schemas
  * @since 0.1.0
  */
-export const RoomId = Schema.String.pipe(Schema.brand("RoomId"))
+export const RoomId = Schema.NonEmptyString.pipe(Schema.brand("RoomId"))
 
 /**
  * A room id: identifies where the replicas of one shared value meet.
@@ -96,6 +96,23 @@ export const RoomId = Schema.String.pipe(Schema.brand("RoomId"))
  * @since 0.1.0
  */
 export type RoomId = typeof RoomId.Type
+
+/**
+ * Makes a room id from its name, which can't be empty.
+ *
+ * **Example** (Naming a room)
+ *
+ * ```ts import.meta.vitest
+ * import { Replica } from "@jpowersdev/effect-delta"
+ *
+ * Replica.makeRoom("notes") // => "notes"
+ * ```
+ *
+ * @stability unstable
+ * @category constructors
+ * @since 0.1.0
+ */
+export const makeRoom = (name: string): RoomId => RoomId.make(name)
 
 /**
  * Schema for an overlap: a stretch of merged text where changes from replicas

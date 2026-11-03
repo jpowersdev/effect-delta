@@ -605,7 +605,7 @@ export interface ConfirmedOptions {
  *
  * const program = Effect.gen(function*() {
  *   const spec = yield* ReplicatedText.makeConfirmed({
- *     room: Replica.RoomId.make("spec")
+ *     room: Replica.makeRoom("spec")
  *   })
  *   const { edits } = yield* ReplicatedText.subscribe(spec)
  *   yield* ReplicatedText.insert(spec, 0, "LGTM")

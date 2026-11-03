@@ -6,7 +6,7 @@ import type { RpcClient } from "effect/rpc"
 import { describe, expect, it } from "tstyche"
 
 declare const notes: ReplicatedText.ReplicatedText
-const room = Replica.RoomId.make("notes")
+const room = Replica.makeRoom("notes")
 
 // An app service an authority's rule might need.
 interface Members {

@@ -13,7 +13,7 @@ import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Layer } from "effect"
 import { KeyValueStore } from "effect/persistence"
 
-const notes = Replica.RoomId.make("notes")
+const notes = Replica.makeRoom("notes")
 
 const open = (session: string) =>
   Effect.gen(function*() {
