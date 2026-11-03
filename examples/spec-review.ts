@@ -7,8 +7,8 @@
  *   node examples/spec-review.ts
  */
 import { NodeHttpServer, NodeRuntime, NodeServices, NodeSocket } from "@effect/platform-node"
+import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
 import { Console, Effect, Layer, Option, Stream } from "effect"
-import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "effect-delta"
 import { Headers, HttpRouter } from "effect/http"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"
 import { createServer } from "node:http"

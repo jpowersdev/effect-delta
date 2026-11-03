@@ -64,7 +64,7 @@ const Length = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
  *
  * ```ts import.meta.vitest
  * import { Schema } from "effect"
- * import { TextPatch } from "effect-delta"
+ * import { TextPatch } from "@jpowersdev/effect-delta"
  *
  * const patch = Schema.decodeUnknownSync(TextPatch.TextPatch)([{ retain: 6 }, { insert: "big " }])
  * TextPatch.apply(patch, "a fox is here") // => "a fox big is here"
@@ -126,7 +126,7 @@ export const empty: TextPatch = []
  * **Example** (Inserting text)
  *
  * ```ts import.meta.vitest
- * import { TextPatch } from "effect-delta"
+ * import { TextPatch } from "@jpowersdev/effect-delta"
  *
  * TextPatch.apply(TextPatch.insert(5, ","), "Hello world") // => "Hello, world"
  * ```
@@ -143,7 +143,7 @@ export const insert = (index: number, text: string): TextPatch => normalize([ret
  * **Example** (Removing text)
  *
  * ```ts import.meta.vitest
- * import { TextPatch } from "effect-delta"
+ * import { TextPatch } from "@jpowersdev/effect-delta"
  *
  * TextPatch.apply(TextPatch.remove(5, 6), "Hello world") // => "Hello"
  * ```
@@ -163,7 +163,7 @@ export const remove = (index: number, length: number): TextPatch => normalize([r
  * **Example** (Finding the replacement)
  *
  * ```ts import.meta.vitest
- * import { TextPatch } from "effect-delta"
+ * import { TextPatch } from "@jpowersdev/effect-delta"
  *
  * const patch = TextPatch.get("Sessions last 24 hours", "Sessions last 8 hours")
  * patch // => [{ _tag: "Retain", length: 14 }, { _tag: "Insert", text: "8" }, { _tag: "Remove", length: 2 }]
@@ -201,7 +201,7 @@ export const get = (before: string, after: string): TextPatch => {
  * **Example** (Applying a patch)
  *
  * ```ts import.meta.vitest
- * import { TextPatch } from "effect-delta"
+ * import { TextPatch } from "@jpowersdev/effect-delta"
  *
  * TextPatch.apply(TextPatch.get("cat", "cart"), "cat") // => "cart"
  * ```
@@ -245,7 +245,7 @@ export const apply: {
  * **Example** (Composing edits)
  *
  * ```ts import.meta.vitest
- * import { TextPatch } from "effect-delta"
+ * import { TextPatch } from "@jpowersdev/effect-delta"
  *
  * const both = TextPatch.compose(TextPatch.insert(0, "Hello"), TextPatch.insert(5, " world"))
  * TextPatch.apply(both, "") // => "Hello world"
@@ -288,7 +288,7 @@ export const compose: {
  * **Example** (Rebasing a remote patch over local typing)
  *
  * ```ts import.meta.vitest
- * import { TextPatch } from "effect-delta"
+ * import { TextPatch } from "@jpowersdev/effect-delta"
  *
  * const local = TextPatch.insert(0, "Hi ")
  * const remote = TextPatch.insert(5, "!")
@@ -343,7 +343,7 @@ export type Side = "before" | "after"
  * **Example** (Moving a cursor past a remote edit)
  *
  * ```ts import.meta.vitest
- * import { TextPatch } from "effect-delta"
+ * import { TextPatch } from "@jpowersdev/effect-delta"
  *
  * TextPatch.mapIndex(TextPatch.insert(0, "Hi "), 2, "before") // => 5
  * TextPatch.mapIndex(TextPatch.insert(2, "!"), 2, "after") // => 2

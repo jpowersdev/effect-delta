@@ -7,8 +7,8 @@
  *   node examples/offline-notes.ts
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
+import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Console, Effect, Option } from "effect"
-import { Replica, ReplicatedText } from "effect-delta"
 
 const program = Effect.gen(function*() {
   const alice = yield* ReplicatedText.make()

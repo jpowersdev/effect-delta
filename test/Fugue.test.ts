@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import * as Fugue from "effect-delta/internal/fugue"
+import * as Fugue from "@jpowersdev/effect-delta/internal/fugue"
 
 const make = () => Fugue.make<null>(null)
 

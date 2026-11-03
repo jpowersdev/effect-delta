@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
+import { Delta, Replica, ReplicatedText, VersionVector } from "@jpowersdev/effect-delta"
+import * as InternalDelta from "@jpowersdev/effect-delta/internal/delta"
 import { Effect, Equal, Random, Schema } from "effect"
-import { Delta, Replica, ReplicatedText, VersionVector } from "effect-delta"
-import * as InternalDelta from "effect-delta/internal/delta"
 
 // Random editing sessions across three replicas, with partial syncs along the
 // way. Positions are fractions of the current text, so every generated command

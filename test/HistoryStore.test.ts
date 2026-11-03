@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
+import { Authority, Delta, HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Layer, Option, Stream } from "effect"
-import { Authority, Delta, HistoryStore, Replica, ReplicatedText } from "effect-delta"
 import { KeyValueStore } from "effect/persistence"
 import { TestCrypto } from "effect/testing"
 

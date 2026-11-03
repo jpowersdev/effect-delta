@@ -1,7 +1,16 @@
 import { NodeCrypto } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
+import {
+  Authority,
+  Delta,
+  HistoryStore,
+  Relay,
+  Replica,
+  ReplicatedText,
+  Sync,
+  VersionVector
+} from "@jpowersdev/effect-delta"
 import { Context, Deferred, Effect, Layer, Option, Schedule, Stream } from "effect"
-import { Authority, Delta, HistoryStore, Relay, Replica, ReplicatedText, Sync, VersionVector } from "effect-delta"
 import { TestCrypto } from "effect/testing"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })

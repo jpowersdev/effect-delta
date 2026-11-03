@@ -16,7 +16,7 @@
  *
  * ```ts import.meta.vitest
  * import { Effect, Option, Stream } from "effect"
- * import { Presence, Replica, Sync } from "effect-delta"
+ * import { Presence, Replica, Sync } from "@jpowersdev/effect-delta"
  *
  * const notes = Replica.DocumentId.make("notes")
  *

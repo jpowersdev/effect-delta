@@ -514,7 +514,7 @@ export interface Options {
  *
  * ```ts import.meta.vitest
  * import { Effect } from "effect"
- * import { Replica, ReplicatedText } from "effect-delta"
+ * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
@@ -590,7 +590,7 @@ export interface ConfirmedOptions {
  * ```ts import.meta.vitest
  * import { NodeServices } from "@effect/platform-node"
  * import { Effect, Layer, Stream } from "effect"
- * import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "effect-delta"
+ * import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
  *
  * const EditorsOnly = Authority.layer({
  *   check: ({ user }) =>
@@ -685,7 +685,7 @@ export interface Subscription {
  *
  * ```ts import.meta.vitest
  * import { Effect, Option, Stream } from "effect"
- * import { Replica, ReplicatedText } from "effect-delta"
+ * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
@@ -819,7 +819,7 @@ export const set: {
  *
  * ```ts import.meta.vitest
  * import { Effect } from "effect"
- * import { Replica, ReplicatedText } from "effect-delta"
+ * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
@@ -857,7 +857,7 @@ export const update: {
  *
  * ```ts import.meta.vitest
  * import { Effect } from "effect"
- * import { Replica, ReplicatedText, TextPatch } from "effect-delta"
+ * import { Replica, ReplicatedText, TextPatch } from "@jpowersdev/effect-delta"
  *
  * const replace = (from: string, to: string) => (text: string) =>
  *   text.includes(from)
@@ -966,7 +966,7 @@ export interface Range {
  *
  * ```ts import.meta.vitest
  * import { Effect, Option } from "effect"
- * import { Replica, ReplicatedText } from "effect-delta"
+ * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
@@ -1052,7 +1052,7 @@ export interface Authorship {
  *
  * ```ts import.meta.vitest
  * import { Effect } from "effect"
- * import { Replica, ReplicatedText } from "effect-delta"
+ * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  *
  * const program = Effect.gen(function*() {
  *   const owner = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("owner") })

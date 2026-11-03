@@ -63,7 +63,7 @@ export const isDelta: (u: unknown) => u is Delta = internal.isDelta
  *
  * ```ts import.meta.vitest
  * import { Schema } from "effect"
- * import { Delta } from "effect-delta"
+ * import { Delta } from "@jpowersdev/effect-delta"
  *
  * const json = Schema.encodeSync(Delta.Delta)(Delta.empty)
  * json // => { format: 1, changes: [] }
@@ -110,7 +110,7 @@ export const isEmpty = (self: Delta): boolean => (self as internal.DeltaImpl).ch
  *
  * ```ts import.meta.vitest
  * import { Effect } from "effect"
- * import { Delta, Replica, ReplicatedText, VersionVector } from "effect-delta"
+ * import { Delta, Replica, ReplicatedText, VersionVector } from "@jpowersdev/effect-delta"
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })

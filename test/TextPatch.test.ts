@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
+import { TextPatch } from "@jpowersdev/effect-delta"
 import { Schema } from "effect"
-import { TextPatch } from "effect-delta"
 
 // Maps any string onto a few letters, a space and an emoji, so patches collide
 // often and surrogate pairs come up.

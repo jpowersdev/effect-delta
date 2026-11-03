@@ -9,8 +9,8 @@
  *   node examples/manuscript.ts
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
+import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Console, Duration, Effect, FileSystem, Layer } from "effect"
-import { HistoryStore, Replica, ReplicatedText } from "effect-delta"
 import { KeyValueStore } from "effect/persistence"
 
 const manuscript = Replica.DocumentId.make("manuscript")

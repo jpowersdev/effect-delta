@@ -1,12 +1,12 @@
 import { assert, describe, it } from "@effect/vitest"
+import { Delta, Replica, ReplicatedText, TextPatch } from "@jpowersdev/effect-delta"
+import type { Change } from "@jpowersdev/effect-delta/internal/change"
+import type * as InternalDelta from "@jpowersdev/effect-delta/internal/delta"
+import * as History from "@jpowersdev/effect-delta/internal/history"
+import * as ReplayText from "@jpowersdev/effect-delta/internal/replayText"
+import * as InternalText from "@jpowersdev/effect-delta/internal/text"
+import type * as TreeText from "@jpowersdev/effect-delta/internal/treeText"
 import { Effect, Schema } from "effect"
-import { Delta, Replica, ReplicatedText, TextPatch } from "effect-delta"
-import type { Change } from "effect-delta/internal/change"
-import type * as InternalDelta from "effect-delta/internal/delta"
-import * as History from "effect-delta/internal/history"
-import * as ReplayText from "effect-delta/internal/replayText"
-import * as InternalText from "effect-delta/internal/text"
-import type * as TreeText from "effect-delta/internal/treeText"
 
 // A large batch applies in one pass; a small one, character by character. They
 // must not be told apart by anything but how long they take.

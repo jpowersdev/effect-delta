@@ -1,7 +1,7 @@
 import { NodeHttpServer, NodeSocket } from "@effect/platform-node"
 import { assert, describe, it } from "@effect/vitest"
+import { Presence, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
 import { Effect, Exit, Layer, Option, Scope, Stream } from "effect"
-import { Presence, Replica, ReplicatedText, Sync } from "effect-delta"
 import { Headers, HttpRouter, HttpServer } from "effect/http"
 import type * as NetAddress from "effect/net/NetAddress"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"

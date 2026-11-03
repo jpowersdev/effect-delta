@@ -89,7 +89,7 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  *
  * ```ts import.meta.vitest
  * import { Effect, Layer } from "effect"
- * import { Authority, HistoryStore } from "effect-delta"
+ * import { Authority, HistoryStore } from "@jpowersdev/effect-delta"
  *
  * const EditorsOnly = Authority.layer({
  *   check: ({ user }) =>

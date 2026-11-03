@@ -1,9 +1,9 @@
 import { assert, describe, it } from "@effect/vitest"
+import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+import type { Change, Id } from "@jpowersdev/effect-delta/internal/change"
+import * as InternalDelta from "@jpowersdev/effect-delta/internal/delta"
+import type * as ReplayText from "@jpowersdev/effect-delta/internal/replayText"
 import { Effect, Option, Random, Schema } from "effect"
-import { Replica, ReplicatedText } from "effect-delta"
-import type { Change, Id } from "effect-delta/internal/change"
-import * as InternalDelta from "effect-delta/internal/delta"
-import type * as ReplayText from "effect-delta/internal/replayText"
 import cases from "./fixtures/eg-walker-conformance.json" with { type: "json" }
 
 // The replay strategy must give exactly what the tree strategy gives.

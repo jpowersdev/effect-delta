@@ -1,10 +1,10 @@
 import { assert, describe, it } from "@effect/vitest"
+import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+import type { Change, Id } from "@jpowersdev/effect-delta/internal/change"
+import * as InternalDelta from "@jpowersdev/effect-delta/internal/delta"
+import * as History from "@jpowersdev/effect-delta/internal/history"
+import * as TreeText from "@jpowersdev/effect-delta/internal/treeText"
 import { Effect, Random } from "effect"
-import { Replica, ReplicatedText } from "effect-delta"
-import type { Change, Id } from "effect-delta/internal/change"
-import * as InternalDelta from "effect-delta/internal/delta"
-import * as History from "effect-delta/internal/history"
-import * as TreeText from "effect-delta/internal/treeText"
 import cases from "./fixtures/eg-walker-conformance.json" with { type: "json" }
 
 // Concurrent editing histories with known results, from the Eg-walker

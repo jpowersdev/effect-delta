@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
+import { Delta, Replica, ReplicatedText, TextPatch, VersionVector } from "@jpowersdev/effect-delta"
 import { Effect, Option, Schema, Stream } from "effect"
-import { Delta, Replica, ReplicatedText, TextPatch, VersionVector } from "effect-delta"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
 
@@ -100,7 +100,7 @@ describe("ReplicatedText", () => {
         yield* Replica.exchange(laptop, phone)
         const [edit] = yield* Stream.runCollect(Stream.take(edits, 1))
         assert.strictEqual(edit!._tag, "Remote")
-        const { TextPatch } = yield* Effect.promise(() => import("effect-delta"))
+        const { TextPatch } = yield* Effect.promise(() => import("@jpowersdev/effect-delta"))
         assert.strictEqual(TextPatch.apply(edit!.patch, text), yield* ReplicatedText.get(laptop))
       }))
 

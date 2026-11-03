@@ -52,7 +52,7 @@ export const empty: VersionVector = {}
  * **Example** (Reading a version vector)
  *
  * ```ts import.meta.vitest
- * import { VersionVector } from "effect-delta"
+ * import { VersionVector } from "@jpowersdev/effect-delta"
  *
  * VersionVector.get({ alice: 3 }, "alice") // => 3
  * VersionVector.get({ alice: 3 }, "bob") // => 0
@@ -74,7 +74,7 @@ export const get: {
  * **Example** (Combining what two replicas have seen)
  *
  * ```ts import.meta.vitest
- * import { VersionVector } from "effect-delta"
+ * import { VersionVector } from "@jpowersdev/effect-delta"
  *
  * VersionVector.combine({ alice: 3, bob: 1 }, { bob: 4 }) // => { alice: 3, bob: 4 }
  * ```
@@ -123,7 +123,7 @@ export type Comparison = "equal" | "before" | "after" | "concurrent"
  * **Example** (Comparing what two replicas have seen)
  *
  * ```ts import.meta.vitest
- * import { VersionVector } from "effect-delta"
+ * import { VersionVector } from "@jpowersdev/effect-delta"
  *
  * VersionVector.compare({ alice: 2 }, { alice: 3 }) // => "before"
  * VersionVector.compare({ alice: 3 }, { bob: 1 }) // => "concurrent"

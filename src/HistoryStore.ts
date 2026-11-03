@@ -278,7 +278,7 @@ export interface Persisted {
  *
  * ```ts import.meta.vitest
  * import { Effect } from "effect"
- * import { HistoryStore, Replica, ReplicatedText } from "effect-delta"
+ * import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  *
  * const notes = Replica.DocumentId.make("notes")
  * const open = (replica: string) =>

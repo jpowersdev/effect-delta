@@ -24,12 +24,12 @@
     "types": ["node"],
     "paths": {
       // These allow tests to load internal modules, which the package's exports hide.
-      "effect-delta": ["./src/index.ts"],
-      "effect-delta/*": ["./src/*.ts"]
+      "@jpowersdev/effect-delta": ["./src/index.ts"],
+      "@jpowersdev/effect-delta/*": ["./src/*.ts"]
     },
     "plugins": [{
       "name": "@effect/language-service",
-      "namespaceImportPackages": ["effect", "@effect/*", "effect-delta"],
+      "namespaceImportPackages": ["effect", "@effect/*", "@jpowersdev/effect-delta"],
       "diagnosticSeverity": {
         "globalErrorInEffectFailure": "off", // TODO: Check if we should fix the warnings this reports
         "unknownInEffectCatch": "off",

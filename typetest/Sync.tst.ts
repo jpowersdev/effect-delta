@@ -1,6 +1,6 @@
+import type { HistoryStore, Sync } from "@jpowersdev/effect-delta"
+import { Authority, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import type { Crypto, Effect, Layer, Scope } from "effect"
-import type { HistoryStore, Sync } from "effect-delta"
-import { Authority, Relay, Replica, ReplicatedText } from "effect-delta"
 import type { RpcClient } from "effect/rpc"
 import { describe, expect, it } from "tstyche"
 

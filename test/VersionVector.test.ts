@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
+import { VersionVector } from "@jpowersdev/effect-delta"
 import { Schema } from "effect"
-import { VersionVector } from "effect-delta"
 
 const Vector = Schema.Record(
   Schema.Literals(["a", "b", "c"]),

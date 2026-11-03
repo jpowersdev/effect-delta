@@ -1,5 +1,5 @@
 {
-  "name": "effect-delta",
+  "name": "@jpowersdev/effect-delta",
   "version": "0.1.0",
   "type": "module",
   "packageManager": "pnpm@11.20.0",

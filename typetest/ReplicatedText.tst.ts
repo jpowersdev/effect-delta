@@ -1,5 +1,5 @@
+import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import type { Crypto, Effect, Option } from "effect"
-import { Replica, ReplicatedText } from "effect-delta"
 import { describe, expect, it } from "tstyche"
 
 declare const notes: ReplicatedText.ReplicatedText

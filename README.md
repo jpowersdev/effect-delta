@@ -4,7 +4,7 @@ Collaborative text for [Effect](https://effect.website): replicas that accept ed
 conflicts, a sync protocol over any `RpcClient` transport, and presence.
 
 ```sh
-pnpm add effect-delta effect
+pnpm add @jpowersdev/effect-delta effect
 ```
 
 `effect` is a peer dependency, `~4.0.4`.
@@ -12,8 +12,8 @@ pnpm add effect-delta effect
 ## Use
 
 ```ts
+import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Layer, Stream } from "effect"
-import { HistoryStore, Relay, Replica, ReplicatedText } from "effect-delta"
 
 const notes = Replica.DocumentId.make("notes")
 

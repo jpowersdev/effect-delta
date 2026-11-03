@@ -114,7 +114,7 @@ export interface ConnectOptions {
  *
  * ```ts import.meta.vitest
  * import { Effect, Layer, Option, Stream } from "effect"
- * import { HistoryStore, Relay, Replica, ReplicatedText } from "effect-delta"
+ * import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  *
  * const notes = Replica.DocumentId.make("notes")
  *

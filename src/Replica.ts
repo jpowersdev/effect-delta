@@ -280,7 +280,7 @@ export const receive: {
  *
  * ```ts import.meta.vitest
  * import { Effect } from "effect"
- * import { Replica, ReplicatedText } from "effect-delta"
+ * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
  *
  * const program = Effect.gen(function*() {
  *   const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
