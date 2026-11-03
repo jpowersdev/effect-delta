@@ -1,8 +1,70 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "include": [],
-  "references": [
-    { "path": "tsconfig.packages.json" },
-    { "path": "tsconfig.tests.json" }
-  ]
+  "compilerOptions": {
+    // Target modern JavaScript (ES2022+) whilst staying closely compatible with the Node.js module system.
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleDetection": "force", // Treat every non-declaration file as a module.
+    "verbatimModuleSyntax": true, // Only transform/eliminate type-only import/export statements.
+    "allowJs": false,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true, // Allows to run directly with node and type removal
+    "noEmit": true,
+    "resolveJsonModule": true,
+    // Opt-in to stricter type checking and correctness guard rails.
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    // Miscellaneous
+    "skipLibCheck": true, // Skip type checking of third party libraries.
+    "noErrorTruncation": true, // Do not truncate error messages.
+    "types": ["node"],
+    "paths": {
+      // These allow tests to load internal modules, which the package's exports hide.
+      "effect-delta": ["./src/index.ts"],
+      "effect-delta/*": ["./src/*.ts"]
+    },
+    "plugins": [{
+      "name": "@effect/language-service",
+      "namespaceImportPackages": ["effect", "@effect/*", "effect-delta"],
+      "diagnosticSeverity": {
+        "globalErrorInEffectFailure": "off", // TODO: Check if we should fix the warnings this reports
+        "unknownInEffectCatch": "off",
+        "multipleEffectProvide": "off",
+        "unstableApiUsage": "off",
+        "experimentalApiUsage": "off"
+      },
+      "includeSuggestionsInTsc": false,
+      "ignoreEffectWarningsInTscExitCode": true,
+      "ignoreEffectErrorsInTscExitCode": true,
+      "overrides": [
+        {
+          "exclude": [
+            "**/internal/**/*",
+            "**/index.ts",
+            "**/test/**/*",
+            "**/typetest/**/*",
+            "**/examples/**/*"
+          ],
+          "options": {
+            "diagnosticSeverity": {
+              "apiStabilityLeak": "error"
+            }
+          }
+        },
+        {
+          "include": ["**/typetest/**/*.ts"],
+          "options": {
+            "diagnosticSeverity": {
+              "floatingEffect": "off"
+            }
+          }
+        }
+      ]
+    }]
+  },
+  "include": ["src", "test", "typetest", "examples", "vitest.*.ts"]
 }

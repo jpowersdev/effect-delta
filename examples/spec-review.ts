@@ -4,7 +4,7 @@
  *
  * Strategy: tree, with an authority.
  *
- *   node packages/delta/examples/spec-review.ts
+ *   node examples/spec-review.ts
  */
 import { NodeHttpServer, NodeRuntime, NodeServices, NodeSocket } from "@effect/platform-node"
 import { Console, Effect, Layer, Option, Stream } from "effect"

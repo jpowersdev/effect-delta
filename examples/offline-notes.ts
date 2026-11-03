@@ -4,7 +4,7 @@
  *
  * Strategy: tree.
  *
- *   node packages/delta/examples/offline-notes.ts
+ *   node examples/offline-notes.ts
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Console, Effect, Option } from "effect"

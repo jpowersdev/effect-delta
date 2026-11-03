@@ -6,7 +6,7 @@
  *
  * Strategy: replay.
  *
- *   node packages/delta/examples/manuscript.ts
+ *   node examples/manuscript.ts
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Console, Duration, Effect, FileSystem, Layer } from "effect"

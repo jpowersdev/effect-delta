@@ -1,34 +1,83 @@
 {
-  "private": true,
+  "name": "effect-delta",
+  "version": "0.1.0",
   "type": "module",
   "packageManager": "pnpm@11.20.0",
+  "license": "MIT",
+  "description": "Replicated data types and merge rules for collaborative state, built on Effect",
+  "homepage": "https://github.com/jpowersdev/effect-delta",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jpowersdev/effect-delta.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jpowersdev/effect-delta/issues"
+  },
+  "tags": [
+    "typescript",
+    "effect",
+    "crdt",
+    "collaboration",
+    "local-first"
+  ],
+  "keywords": [
+    "typescript",
+    "effect",
+    "crdt",
+    "collaboration",
+    "local-first"
+  ],
+  "sideEffects": [],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts",
+    "./internal/*": null,
+    "./index": null,
+    "./*/index": null
+  },
+  "files": [
+    "src/**/*.ts",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      "./package.json": "./package.json",
+      ".": "./dist/index.js",
+      "./*": "./dist/*.js",
+      "./internal/*": null,
+      "./index": null,
+      "./*/index": null
+    }
+  },
   "scripts": {
-    "prepare": "effect-tsgo patch",
-    "clean": "node scripts/clean.mjs",
-    "codegen": "pnpm --recursive --parallel --filter \"./packages/**/*\" run codegen",
-    "build": "tsc -b tsconfig.packages.json && pnpm --recursive --parallel --filter \"./packages/**/*\" run build",
+    "check": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "doctest": "vitest run --config vitest.docs.ts",
+    "test-types": "tstyche",
     "circular": "node scripts/circular.mjs",
-    "test": "vitest",
-    "doctest": "vitest --config vitest.docs.ts",
-    "check": "tsc -b tsconfig.json",
-    "jsdocs": "effect-jsdocs",
+    "build": "tsc -p tsconfig.build.json && pnpm babel",
+    "babel": "babel dist --plugins annotate-pure-calls --out-dir dist --source-maps",
+    "prepack": "pnpm build",
     "lint": "oxlint -f unix && dprint check",
     "lint-fix": "oxlint --fix && dprint fmt",
-    "test-types": "tstyche --target '>=5.9'",
-    "changeset-version": "changeset version",
-    "changeset-publish": "node scripts/set-strip-internal.mjs && pnpm build && changeset publish"
+    "prepare": "effect-tsgo patch"
+  },
+  "peerDependencies": {
+    "effect": "~4.0.4"
   },
   "devDependencies": {
     "@babel/cli": "8.0.6",
     "@babel/core": "8.0.7",
     "@changesets/changelog-github": "1.0.1",
     "@changesets/cli": "3.0.3",
-    "@effect/docgen": "4.0.4",
     "@effect/doctest": "4.0.4",
-    "@effect/jsdocs": "workspace:^",
-    "@effect/oxc": "workspace:^",
+    "@effect/platform-node": "4.0.4",
     "@effect/tsgo": "0.51.1",
-    "@effect/utils": "workspace:^",
     "@effect/vitest": "4.0.4",
     "@types/node": "26.6.5",
     "babel-plugin-annotate-pure-calls": "0.5.0",

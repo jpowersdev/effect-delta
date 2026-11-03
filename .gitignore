@@ -26,5 +26,4 @@ tmp/
 .DS_Store
 
 # Scratchpad files
-scratchpad/*
-!scratchpad/.gitkeep
+scratchpad/

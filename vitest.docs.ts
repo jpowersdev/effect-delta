@@ -10,9 +10,6 @@ export default defineConfig({
     passWithNoTests: true,
     testTimeout: 10_000,
     include: [],
-    includeSource: [
-      "packages/*/src/**/*.ts",
-      "packages/*/*/src/**/*.ts"
-    ]
+    includeSource: ["src/**/*.ts"]
   }
 })

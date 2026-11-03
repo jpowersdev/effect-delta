@@ -3,6 +3,14 @@
 Collaborative text for [Effect](https://effect.website): replicas that accept edits immediately and merge without
 conflicts, a sync protocol over any `RpcClient` transport, and presence.
 
+```sh
+pnpm add effect-delta effect
+```
+
+`effect` is a peer dependency, `~4.0.4`.
+
+## Use
+
 ```ts
 import { Effect, Layer, Stream } from "effect"
 import { HistoryStore, Relay, Replica, ReplicatedText } from "effect-delta"
@@ -40,25 +48,13 @@ await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive)))
 | `HistoryStore`   | Where a document's history is kept                                    |
 | `Presence`       | Who else is in a document, and their selections                       |
 
-Text merges with one of two strategies: `tree` (the default) keeps a tree of every character, and `replay` keeps only
-the text and its history. Authorities work with `tree` only. Locating anchors under `replay` gets slow as history
-grows, about 3 s at 50 small edits to a 47 KB text.
+`ReplicatedText` merges with one of two strategies: `tree`, the default, keeps a tree of every character, and `replay`
+keeps only the text and its history. `Authority` works with `tree` only. Locating anchors under `replay` is slow on long
+histories: about 3 s at 50 small edits to a 47 KB text.
 
 ## Status
 
-Unstable: every module is `@stability unstable` and may change in any minor release. Schema-derived documents aren't
-built yet.
-
-It's written to fit Effect's repository as `effect/delta`: replacing `effect-delta` with `effect/delta` in imports would
-be the only change for a consumer, and stored data doesn't name the library. See [`docs/`](../../docs) for the design.
-
-## Installation
-
-```sh
-pnpm add effect-delta effect
-```
-
-`effect` is a peer dependency, `~4.0.4`.
+Unstable: every module may change in any minor release. Design notes are in [`docs/`](docs).
 
 ## License
 

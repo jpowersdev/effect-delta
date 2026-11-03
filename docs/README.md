@@ -13,8 +13,8 @@ a server.
   upgrade with a find-and-replace of `effect-delta` → `effect/delta` in their
   imports, and nothing else changes for them: same exports, same behaviour,
   and data they've stored or sent still loads (the library name never appears
-  in anything encoded). Same tooling, configuration, directory structure, and
-  doc conventions as the Effect monorepo (v4).
+  in anything encoded). Same tooling, configuration and doc conventions as Effect
+  (v4), in a single package.
 - **Build on Effect concepts instead of replacing them.** Reuse `Schema`,
   `Differ`, `eventlog`, `Stream`/`PubSub`, `Socket`/`Rpc`,
   `KeyValueStore`, etc. wherever they fit.
