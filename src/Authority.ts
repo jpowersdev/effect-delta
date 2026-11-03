@@ -91,19 +91,25 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  * **Example** (Only editors may edit)
  *
  * ```ts import.meta.vitest
+ * import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
  * import { Effect, Layer, Stream } from "effect"
  * import { SecureRandom } from "effect/crypto"
- * import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
  *
  * const EditorsOnly = Authority.layer({
  *   check: ({ user }) =>
  *     user.startsWith("editor:")
  *       ? Effect.void
- *       : Effect.fail(new Authority.Rejected({ message: "Reviewers can comment but not edit" }))
+ *       : Effect.fail(
+ *         new Authority.Rejected({
+ *           message: "Reviewers can comment but not edit"
+ *         })
+ *       )
  * }).pipe(Layer.provide(HistoryStore.layerMemory))
  *
  * const program = Effect.gen(function*() {
- *   const spec = yield* ReplicatedText.makeConfirmed({ document: Replica.DocumentId.make("spec") })
+ *   const spec = yield* ReplicatedText.makeConfirmed({
+ *     document: Replica.DocumentId.make("spec")
+ *   })
  *   yield* ReplicatedText.insert(spec, 0, "Spec v1")
  *   yield* spec.connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)
  *   return yield* ReplicatedText.get(spec)

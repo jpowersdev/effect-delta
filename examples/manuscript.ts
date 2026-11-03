@@ -20,7 +20,9 @@ const manuscript = Replica.DocumentId.make("manuscript")
 // Opens the manuscript on the writer's laptop: it loads what was saved, then
 // saves every change until the scope closes.
 const open = Effect.gen(function*() {
-  const laptop = yield* ReplicatedText.make({ strategy: "replay" })
+  const laptop = yield* ReplicatedText.make({
+    strategy: "replay"
+  })
   yield* HistoryStore.persist(laptop, manuscript)
   return laptop
 })
@@ -31,7 +33,9 @@ const append = (self: ReplicatedText.ReplicatedText, text: string) =>
   Effect.flatMap(ReplicatedText.get(self), (current) => ReplicatedText.insert(self, current.length, text))
 
 const program = Effect.gen(function*() {
-  const coauthor = yield* ReplicatedText.make({ strategy: "replay" })
+  const coauthor = yield* ReplicatedText.make({
+    strategy: "replay"
+  })
 
   // Month one: the writer drafts forty chapters, a sentence at a time, and the
   // co-author takes a copy.
@@ -79,7 +83,9 @@ const program = Effect.gen(function*() {
 // The writer's laptop keeps manuscripts in files, here in a temporary folder.
 const StoreLive = Layer.unwrap(Effect.gen(function*() {
   const directory = yield* FileSystem.FileSystem.use((fs) => fs.makeTempDirectoryScoped())
-  return HistoryStore.layerKeyValueStore({ prefix: "manuscripts" }).pipe(
+  return HistoryStore.layerKeyValueStore({
+    prefix: "manuscripts"
+  }).pipe(
     Layer.provide(KeyValueStore.layerFileSystem(directory))
   )
 }))

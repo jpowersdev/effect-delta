@@ -279,12 +279,16 @@ export const receive: {
  * **Example** (Bringing two copies up to date)
  *
  * ```ts import.meta.vitest
- * import { Effect } from "effect"
  * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+ * import { Effect } from "effect"
  *
  * const program = Effect.gen(function*() {
- *   const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
- *   const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
+ *   const laptop = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
+ *   const phone = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("phone")
+ *   })
  *   yield* ReplicatedText.insert(laptop, 0, "Hello")
  *   yield* Replica.exchange(laptop, phone)
  *   return yield* ReplicatedText.get(phone)

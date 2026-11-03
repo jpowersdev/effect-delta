@@ -58,7 +58,7 @@ await Effect.runPromise(program)
     The protocol is an `RpcGroup`, so it runs over any `RpcClient` protocol, through a relay or a server that decides what's accepted.
 
     ```ts
-    yield* Relay.connect(notes, { document })
+    yield* Relay.connect(notes, options)
     // In one process: Relay.layer
     // Over a network: Relay.layerRemote
     ```
@@ -69,9 +69,9 @@ await Effect.runPromise(program)
     `tree` needs nothing beyond delivery. `replay` keeps memory close to the size of the text.
 
     ```ts
-    ReplicatedText.make() // tree
-    ReplicatedText.make({ strategy: "replay" })
-    // Code that edits it doesn't change
+    ReplicatedText.make({
+      strategy: "replay"
+    })
     ```
 
     <LinkButton href="guides/strategies/" variant="minimal" icon="right-arrow">Strategies</LinkButton>
@@ -80,9 +80,9 @@ await Effect.runPromise(program)
     Who's in a document and what they've selected, using positions that follow the text.
 
     ```ts
-    const me = yield* Presence.join({ document })
-    yield* me.set({ selection, data: { name: "Ada" } })
-    yield* me.peers.pipe(Stream.runForEach(show))
+    const me = yield* Presence.join(options)
+    yield* me.set(state)
+    yield* Stream.runForEach(me.peers, show)
     ```
 
     <LinkButton href="guides/presence/" variant="minimal" icon="right-arrow">Presence</LinkButton>

@@ -28,7 +28,12 @@ const SignedIn = Layer.succeed(Sync.Authorization)({
     Headers.get(headers, "authorization").pipe(
       Option.flatMap((value) => Option.fromNullishOr(sessions.get(value.replace(/^Bearer /, "")))),
       Option.match({
-        onNone: () => Effect.fail(new Sync.Forbidden({ message: "Sign in first" })),
+        onNone: () =>
+          Effect.fail(
+            new Sync.Forbidden({
+              message: "Sign in first"
+            })
+          ),
         onSome: Effect.succeed
       })
     ),
@@ -40,18 +45,28 @@ const EditorsOnly = Authority.layer({
   check: ({ user }) =>
     roles.get(user) === "editor"
       ? Effect.void
-      : Effect.fail(new Authority.Rejected({ message: "Reviewers can comment but not edit" }))
+      : Effect.fail(
+        new Authority.Rejected({
+          message: "Reviewers can comment but not edit"
+        })
+      )
 }).pipe(Layer.provide(HistoryStore.layerMemory))
 
 const ServerLive = HttpRouter.serve(
   RpcServer.layer(Sync.Rpcs).pipe(
     Layer.provide(Authority.layerHandlers),
     Layer.provide([EditorsOnly, SignedIn]),
-    Layer.provide(RpcServer.layerProtocolWebsocket({ path: "/sync" }))
+    Layer.provide(RpcServer.layerProtocolWebsocket({
+      path: "/sync"
+    }))
   ),
-  { disableLogger: true }
+  {
+    disableLogger: true
+  }
 ).pipe(
-  Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 })),
+  Layer.provide(NodeHttpServer.layer(createServer, {
+    port: 3000
+  })),
   Layer.provide(RpcSerialization.layerNdjson)
 )
 
@@ -63,7 +78,11 @@ const AuthorityRemote = (token: string) =>
   Authority.layerRemote.pipe(
     Layer.provide(RpcClient.layerProtocolSocket()),
     Layer.provide(
-      NodeSocket.layerWebSocket("ws://localhost:3000/sync", { headers: { authorization: `Bearer ${token}` } })
+      NodeSocket.layerWebSocket("ws://localhost:3000/sync", {
+        headers: {
+          authorization: `Bearer ${token}`
+        }
+      })
     ),
     Layer.provide(RpcSerialization.layerNdjson)
   )
@@ -72,7 +91,9 @@ const spec = Replica.DocumentId.make("spec-42")
 
 // Opens the spec, and waits until it has caught up with the server.
 const openSpec = Effect.gen(function*() {
-  const text = yield* ReplicatedText.makeConfirmed({ document: spec })
+  const text = yield* ReplicatedText.makeConfirmed({
+    document: spec
+  })
   yield* text.connection.status.pipe(Stream.filter((status) => status._tag === "Synced"), Stream.runHead)
   return text
 })

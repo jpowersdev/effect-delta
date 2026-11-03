@@ -277,13 +277,15 @@ export interface Persisted {
  * **Example** (Keeping a text across restarts)
  *
  * ```ts import.meta.vitest
- * import { Effect } from "effect"
  * import { HistoryStore, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+ * import { Effect } from "effect"
  *
  * const notes = Replica.DocumentId.make("notes")
  * const open = (replica: string) =>
  *   Effect.gen(function*() {
- *     const text = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
+ *     const text = yield* ReplicatedText.make({
+ *       replica: Replica.ReplicaId.make(replica)
+ *     })
  *     yield* HistoryStore.persist(text, notes)
  *     return text
  *   })

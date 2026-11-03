@@ -63,10 +63,14 @@ const Length = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))
  * **Example** (Decoding a Quill delta)
  *
  * ```ts import.meta.vitest
- * import { Schema } from "effect"
  * import { TextPatch } from "@jpowersdev/effect-delta"
+ * import { Schema } from "effect"
  *
- * const patch = Schema.decodeUnknownSync(TextPatch.TextPatch)([{ retain: 6 }, { insert: "big " }])
+ * const patch = Schema.decodeUnknownSync(TextPatch.TextPatch)([{
+ *   retain: 6
+ * }, {
+ *   insert: "big "
+ * }])
  * TextPatch.apply(patch, "a fox is here") // => "a fox big is here"
  * ```
  *

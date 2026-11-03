@@ -30,10 +30,18 @@ import { Effect, Layer, Stream } from "effect"
 const notes = Replica.DocumentId.make("notes")
 
 const program = Effect.gen(function*() {
-  const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
-  const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
-  yield* Relay.connect(laptop, { document: notes })
-  yield* Relay.connect(phone, { document: notes })
+  const laptop = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("laptop")
+  })
+  const phone = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("phone")
+  })
+  yield* Relay.connect(laptop, {
+    document: notes
+  })
+  yield* Relay.connect(phone, {
+    document: notes
+  })
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
   yield* ReplicatedText.changes(phone).pipe(Stream.filter((text) => text === "Hello"), Stream.runHead)

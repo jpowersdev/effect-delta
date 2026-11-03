@@ -30,11 +30,17 @@ const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
     replica: Replica.ReplicaId.make("laptop")
   })
-  const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
+  const phone = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("phone")
+  })
 
   // Each syncs through the relay for as long as the scope is open
-  yield* Relay.connect(laptop, { document: notes })
-  yield* Relay.connect(phone, { document: notes })
+  yield* Relay.connect(laptop, {
+    document: notes
+  })
+  yield* Relay.connect(phone, {
+    document: notes
+  })
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
 

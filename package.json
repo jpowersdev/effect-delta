@@ -64,8 +64,8 @@
     "babel": "babel dist --plugins annotate-pure-calls --out-dir dist --source-maps",
     "prepack": "pnpm build",
     "pack-check": "bash scripts/pack-check.sh",
-    "lint": "oxlint -f unix && dprint check && dprint check --config site/dprint.json",
-    "lint-fix": "oxlint --fix && dprint fmt && dprint fmt --config site/dprint.json",
+    "lint": "node scripts/format-examples.mjs --check && oxlint -f unix && dprint check && dprint check --config site/dprint.json",
+    "lint-fix": "node scripts/format-examples.mjs && oxlint --fix && dprint fmt && dprint fmt --config site/dprint.json",
     "docgen": "docgen",
     "docs:dev": "pnpm docgen && pnpm --filter ./site dev",
     "docs:build": "pnpm docgen && pnpm --filter ./site build",
@@ -77,6 +77,7 @@
   "devDependencies": {
     "@babel/cli": "8.0.6",
     "@babel/core": "8.0.7",
+    "@babel/parser": "8.0.7",
     "@changesets/changelog-github": "1.0.1",
     "@changesets/cli": "3.0.3",
     "@effect/docgen": "4.1.1",

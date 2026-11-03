@@ -31,7 +31,9 @@ const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
     replica: Replica.ReplicaId.make("laptop")
   })
-  const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
+  const phone = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("phone")
+  })
   yield* ReplicatedText.insert(laptop, 0, "Hello")
 
   // Encoded on the laptop, sent however you like, and decoded on the phone
@@ -83,11 +85,17 @@ const ServerLive = HttpRouter.serve(
     Layer.provide(Relay.layer.pipe(Layer.provide(HistoryStore.layerMemory))),
     // Anyone may connect. Provide your own `Sync.Authorization` for a real server.
     Layer.provide(Sync.layerAuthorizationAllowAll),
-    Layer.provide(RpcServer.layerProtocolWebsocket({ path: "/sync" }))
+    Layer.provide(RpcServer.layerProtocolWebsocket({
+      path: "/sync"
+    }))
   ),
-  { disableLogger: true }
+  {
+    disableLogger: true
+  }
 ).pipe(
-  Layer.provide(NodeHttpServer.layer(createServer, { port: 3101 })),
+  Layer.provide(NodeHttpServer.layer(createServer, {
+    port: 3101
+  })),
   Layer.provide(RpcSerialization.layerNdjson)
 )
 
@@ -103,9 +111,15 @@ const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
     replica: Replica.ReplicaId.make("laptop")
   })
-  const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
-  yield* Relay.connect(laptop, { document: notes })
-  yield* Relay.connect(phone, { document: notes })
+  const phone = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("phone")
+  })
+  yield* Relay.connect(laptop, {
+    document: notes
+  })
+  yield* Relay.connect(phone, {
+    document: notes
+  })
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
   yield* ReplicatedText.changes(phone).pipe(
@@ -145,20 +159,31 @@ const SignedIn = Layer.succeed(Sync.Authorization)({
         Option.fromNullishOr(sessions.get(value.replace(/^Bearer /, "")))
       ),
       Option.match({
-        onNone: () => Effect.fail(new Sync.Forbidden({ message: "Sign in first" })),
+        onNone: () =>
+          Effect.fail(
+            new Sync.Forbidden({
+              message: "Sign in first"
+            })
+          ),
         onSome: Effect.succeed
       })
     ),
   authorize: ({ access }) =>
     access === "read"
       ? Effect.void
-      : Effect.fail(new Sync.Forbidden({ message: "Read only" }))
+      : Effect.fail(
+        new Sync.Forbidden({
+          message: "Read only"
+        })
+      )
 })
 
 const program = Effect.gen(function*() {
   const authorization = yield* Sync.Authorization
   const user = yield* authorization.identify(
-    Headers.fromInput({ authorization: "Bearer token-ada" })
+    Headers.fromInput({
+      authorization: "Bearer token-ada"
+    })
   )
   yield* authorization.authorize({
     user,
@@ -193,7 +218,11 @@ const EditorsOnly = Authority.layer({
   check: ({ user }) =>
     user === "editor"
       ? Effect.void
-      : Effect.fail(new Authority.Rejected({ message: "Read only" }))
+      : Effect.fail(
+        new Authority.Rejected({
+          message: "Read only"
+        })
+      )
 }).pipe(Layer.provide(HistoryStore.layerMemory))
 
 const program = Effect.gen(function*() {

@@ -45,8 +45,12 @@ import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
-  const alice = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("alice") })
-  const bob = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("bob") })
+  const alice = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("alice")
+  })
+  const bob = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("bob")
+  })
   yield* ReplicatedText.set(alice, "Sessions last 24 hours.")
   yield* Replica.exchange(alice, bob)
 
@@ -100,7 +104,9 @@ import { Replica, ReplicatedText, TextPatch } from "@jpowersdev/effect-delta"
 import { Effect, Stream } from "effect"
 
 const program = Effect.gen(function*() {
-  const mine = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("mine") })
+  const mine = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("mine")
+  })
   const theirs = yield* ReplicatedText.make({
     replica: Replica.ReplicaId.make("theirs")
   })
@@ -161,8 +167,12 @@ import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Option } from "effect"
 
 const program = Effect.gen(function*() {
-  const alice = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("alice") })
-  const bob = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("bob") })
+  const alice = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("alice")
+  })
+  const bob = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("bob")
+  })
   yield* ReplicatedText.set(alice, "Sessions last 24 hours.")
   yield* Replica.exchange(alice, bob)
 
@@ -189,8 +199,12 @@ import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
-  const owner = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("owner") })
-  const agent = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("agent") })
+  const owner = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("owner")
+  })
+  const agent = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("agent")
+  })
   yield* ReplicatedText.insert(owner, 0, "Ship it Friday.")
   yield* Replica.exchange(owner, agent)
   yield* ReplicatedText.insert(agent, 14, " after the review")

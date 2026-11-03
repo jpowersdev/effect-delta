@@ -35,7 +35,9 @@ const program = Effect.gen(function*() {
   yield* Effect.log(text)
 })
 
-const StoreLive = HistoryStore.layerKeyValueStore({ prefix: "notes" }).pipe(
+const StoreLive = HistoryStore.layerKeyValueStore({
+  prefix: "notes"
+}).pipe(
   Layer.provide(KeyValueStore.layerMemory)
 )
 

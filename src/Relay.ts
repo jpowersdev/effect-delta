@@ -113,16 +113,24 @@ export interface ConnectOptions {
  * **Example** (Two devices syncing through a relay)
  *
  * ```ts import.meta.vitest
- * import { Effect, Layer, Option, Stream } from "effect"
  * import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+ * import { Effect, Layer, Option, Stream } from "effect"
  *
  * const notes = Replica.DocumentId.make("notes")
  *
  * const program = Effect.gen(function*() {
- *   const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
- *   const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
- *   yield* Relay.connect(laptop, { document: notes })
- *   yield* Relay.connect(phone, { document: notes })
+ *   const laptop = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
+ *   const phone = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("phone")
+ *   })
+ *   yield* Relay.connect(laptop, {
+ *     document: notes
+ *   })
+ *   yield* Relay.connect(phone, {
+ *     document: notes
+ *   })
  *
  *   yield* ReplicatedText.insert(laptop, 0, "Hello")
  *   return yield* ReplicatedText.changes(phone).pipe(Stream.filter((text) => text === "Hello"), Stream.runHead)

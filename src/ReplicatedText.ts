@@ -513,11 +513,13 @@ export interface Options {
  * **Example** (Creating and editing a text)
  *
  * ```ts import.meta.vitest
- * import { Effect } from "effect"
  * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+ * import { Effect } from "effect"
  *
  * const program = Effect.gen(function*() {
- *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+ *   const notes = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
  *   yield* ReplicatedText.insert(notes, 0, "Hello")
  *   yield* ReplicatedText.insert(notes, 5, ", world")
  *   return yield* ReplicatedText.get(notes)
@@ -588,17 +590,23 @@ export interface ConfirmedOptions {
  * **Example** (Rejecting a reviewer's edit)
  *
  * ```ts import.meta.vitest
- * import { SecureRandom } from "effect/crypto"
- * import { Effect, Layer, Stream } from "effect"
  * import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
+ * import { Effect, Layer, Stream } from "effect"
+ * import { SecureRandom } from "effect/crypto"
  *
  * const EditorsOnly = Authority.layer({
  *   check: ({ user }) =>
- *     user === "editor" ? Effect.void : Effect.fail(new Authority.Rejected({ message: "Read only" }))
+ *     user === "editor" ? Effect.void : Effect.fail(
+ *       new Authority.Rejected({
+ *         message: "Read only"
+ *       })
+ *     )
  * }).pipe(Layer.provide(HistoryStore.layerMemory))
  *
  * const program = Effect.gen(function*() {
- *   const spec = yield* ReplicatedText.makeConfirmed({ document: Replica.DocumentId.make("spec") })
+ *   const spec = yield* ReplicatedText.makeConfirmed({
+ *     document: Replica.DocumentId.make("spec")
+ *   })
  *   const { edits } = yield* ReplicatedText.subscribe(spec)
  *   yield* ReplicatedText.insert(spec, 0, "LGTM")
  *   yield* edits.pipe(Stream.filter((edit) => edit._tag === "Rejected"), Stream.runHead)
@@ -684,11 +692,13 @@ export interface Subscription {
  * **Example** (Watching edits)
  *
  * ```ts import.meta.vitest
- * import { Effect, Option, Stream } from "effect"
  * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+ * import { Effect, Option, Stream } from "effect"
  *
  * const program = Effect.gen(function*() {
- *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+ *   const notes = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
  *   const { text, edits } = yield* ReplicatedText.subscribe(notes)
  *   yield* ReplicatedText.insert(notes, 0, "Hi")
  *   const first = yield* Stream.runHead(edits)
@@ -818,11 +828,13 @@ export const set: {
  * **Example** (Find and replace)
  *
  * ```ts import.meta.vitest
- * import { Effect } from "effect"
  * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+ * import { Effect } from "effect"
  *
  * const program = Effect.gen(function*() {
- *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+ *   const notes = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
  *   yield* ReplicatedText.set(notes, "Sessions last 24 hours.")
  *   yield* ReplicatedText.update(notes, (text) => text.replace("24", "8"))
  *   return yield* ReplicatedText.get(notes)
@@ -856,8 +868,8 @@ export const update: {
  * **Example** (A find and replace that reports a missing match)
  *
  * ```ts import.meta.vitest
- * import { Effect } from "effect"
  * import { Replica, ReplicatedText, TextPatch } from "@jpowersdev/effect-delta"
+ * import { Effect } from "effect"
  *
  * const replace = (from: string, to: string) => (text: string) =>
  *   text.includes(from)
@@ -865,7 +877,9 @@ export const update: {
  *     : ["not found", TextPatch.empty] as const
  *
  * const program = Effect.gen(function*() {
- *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+ *   const notes = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
  *   yield* ReplicatedText.set(notes, "Sessions last 24 hours.")
  *   const first = yield* ReplicatedText.modify(notes, replace("24", "8"))
  *   const second = yield* ReplicatedText.modify(notes, replace("24", "8"))
@@ -965,11 +979,13 @@ export interface Range {
  * **Example** (Following a position through an edit)
  *
  * ```ts import.meta.vitest
- * import { Effect, Option } from "effect"
  * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+ * import { Effect, Option } from "effect"
  *
  * const program = Effect.gen(function*() {
- *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+ *   const notes = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
  *   yield* ReplicatedText.insert(notes, 0, "world")
  *   const anchor = yield* ReplicatedText.anchor(notes, 0)
  *   yield* ReplicatedText.insert(notes, 0, "Hello, ")
@@ -1051,12 +1067,16 @@ export interface Authorship {
  * **Example** (Telling two writers' text apart)
  *
  * ```ts import.meta.vitest
- * import { Effect } from "effect"
  * import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
+ * import { Effect } from "effect"
  *
  * const program = Effect.gen(function*() {
- *   const owner = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("owner") })
- *   const agent = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("agent") })
+ *   const owner = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("owner")
+ *   })
+ *   const agent = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("agent")
+ *   })
  *   yield* ReplicatedText.insert(owner, 0, "Ship it Friday.")
  *   yield* Replica.exchange(owner, agent)
  *   yield* ReplicatedText.insert(agent, 14, " after the review")

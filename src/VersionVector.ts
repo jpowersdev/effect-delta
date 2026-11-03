@@ -54,8 +54,12 @@ export const empty: VersionVector = {}
  * ```ts import.meta.vitest
  * import { VersionVector } from "@jpowersdev/effect-delta"
  *
- * VersionVector.get({ alice: 3 }, "alice") // => 3
- * VersionVector.get({ alice: 3 }, "bob") // => 0
+ * VersionVector.get({
+ *   alice: 3
+ * }, "alice") // => 3
+ * VersionVector.get({
+ *   alice: 3
+ * }, "bob") // => 0
  * ```
  *
  * @stability unstable
@@ -76,7 +80,12 @@ export const get: {
  * ```ts import.meta.vitest
  * import { VersionVector } from "@jpowersdev/effect-delta"
  *
- * VersionVector.combine({ alice: 3, bob: 1 }, { bob: 4 }) // => { alice: 3, bob: 4 }
+ * VersionVector.combine({
+ *   alice: 3,
+ *   bob: 1
+ * }, {
+ *   bob: 4
+ * }) // => { alice: 3, bob: 4 }
  * ```
  *
  * @stability unstable
@@ -125,8 +134,16 @@ export type Comparison = "equal" | "before" | "after" | "concurrent"
  * ```ts import.meta.vitest
  * import { VersionVector } from "@jpowersdev/effect-delta"
  *
- * VersionVector.compare({ alice: 2 }, { alice: 3 }) // => "before"
- * VersionVector.compare({ alice: 3 }, { bob: 1 }) // => "concurrent"
+ * VersionVector.compare({
+ *   alice: 2
+ * }, {
+ *   alice: 3
+ * }) // => "before"
+ * VersionVector.compare({
+ *   alice: 3
+ * }, {
+ *   bob: 1
+ * }) // => "concurrent"
  * ```
  *
  * @stability unstable

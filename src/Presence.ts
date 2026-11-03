@@ -15,16 +15,28 @@
  * **Example** (Seeing another person's selection)
  *
  * ```ts import.meta.vitest
- * import { Effect, Option, Stream } from "effect"
  * import { Presence, Replica, Sync } from "@jpowersdev/effect-delta"
+ * import { Effect, Option, Stream } from "effect"
  *
  * const notes = Replica.DocumentId.make("notes")
  *
  * const program = Effect.gen(function*() {
- *   const ada = yield* Presence.join({ document: notes }).pipe(Effect.provideService(Sync.CurrentUser, "ada"))
- *   const ben = yield* Presence.join({ document: notes }).pipe(Effect.provideService(Sync.CurrentUser, "ben"))
- *   yield* ada.set({ selection: Option.none(), data: { name: "Ada" } })
- *   const seen = yield* ben.peers.pipe(Stream.filter((peers) => peers.some((peer) => peer.state.data !== null)), Stream.runHead)
+ *   const ada = yield* Presence.join({
+ *     document: notes
+ *   }).pipe(Effect.provideService(Sync.CurrentUser, "ada"))
+ *   const ben = yield* Presence.join({
+ *     document: notes
+ *   }).pipe(Effect.provideService(Sync.CurrentUser, "ben"))
+ *   yield* ada.set({
+ *     selection: Option.none(),
+ *     data: {
+ *       name: "Ada"
+ *     }
+ *   })
+ *   const seen = yield* ben.peers.pipe(
+ *     Stream.filter((peers) => peers.some((peer) => peer.state.data !== null)),
+ *     Stream.runHead
+ *   )
  *   return Option.getOrThrow(seen).map((peer) => peer.user)
  * })
  *

@@ -109,11 +109,13 @@ export const isEmpty = (self: Delta): boolean => (self as internal.DeltaImpl).ch
  * **Example** (Checking whether a replica has a delta's changes)
  *
  * ```ts import.meta.vitest
- * import { Effect } from "effect"
  * import { Delta, Replica, ReplicatedText, VersionVector } from "@jpowersdev/effect-delta"
+ * import { Effect } from "effect"
  *
  * const program = Effect.gen(function*() {
- *   const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+ *   const notes = yield* ReplicatedText.make({
+ *     replica: Replica.ReplicaId.make("laptop")
+ *   })
  *   yield* ReplicatedText.insert(notes, 0, "Hello")
  *   const delta = yield* Replica.delta(notes, VersionVector.empty)
  *   return VersionVector.compare(Delta.version(delta), yield* Replica.version(notes))
