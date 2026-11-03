@@ -9,7 +9,7 @@ import {
   Sync,
   VersionVector
 } from "@jpowersdev/effect-delta"
-import { Context, Deferred, Effect, Layer, Option, Schedule, Stream } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect"
 import { layerSeeded } from "./utils/secureRandom.ts"
 
 const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
@@ -292,6 +292,55 @@ describe("Relay", () => {
 })
 
 describe("Authority", () => {
+  for (const step of ["check", "append", "addWriter"] as const) {
+    it.effect(`a push interrupted during ${step} is still saved and shared`, () =>
+      Effect.gen(function*() {
+        const reached = yield* Deferred.make<void>()
+        const resume = yield* Deferred.make<void>()
+        const holding = (at: typeof step) =>
+          at === step
+            ? Effect.andThen(Deferred.succeed(reached, undefined), Deferred.await(resume))
+            : Effect.void
+        const Held = Layer.effect(HistoryStore.HistoryStore)(Effect.map(HistoryStore.HistoryStore, (store) => ({
+          ...store,
+          append: (document, delta) => Effect.andThen(holding("append"), store.append(document, delta)),
+          addWriter: (document, replica, owner) =>
+            Effect.andThen(holding("addWriter"), store.addWriter(document, replica, owner))
+        }))).pipe(Layer.provideMerge(HistoryStore.layerMemory))
+
+        yield* Effect.gen(function*() {
+          const reviewer = yield* ReplicatedText.makeConfirmed({ document: spec })
+          yield* synced(reviewer.connection)
+          const authority = yield* Authority.Authority
+          const writer = yield* make("writer")
+          yield* ReplicatedText.insert(writer, 0, "Spec v1")
+          const pushing = yield* authority.push({
+            format: Sync.FORMAT,
+            document: spec,
+            delta: yield* Replica.delta(writer, {})
+          }).pipe(asUser("editor"), Effect.forkChild)
+
+          yield* Deferred.await(reached)
+          pushing.interruptUnsafe()
+          yield* Deferred.succeed(resume, undefined)
+          yield* Fiber.await(pushing)
+
+          yield* reviewer.connection.sync
+          assert.strictEqual(yield* ReplicatedText.get(reviewer), "Spec v1")
+          const store = yield* HistoryStore.HistoryStore
+          const stored = Option.getOrThrow(yield* store.load(spec))
+          assert.deepStrictEqual(Delta.version(stored.history), yield* Replica.version(writer))
+          assert.strictEqual(stored.writers["writer"], "editor")
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(
+            Authority.layer({ check: () => holding("check") }).pipe(Layer.provideMerge(Held))
+          ),
+          Effect.provide(CryptoTest)
+        )
+      }))
+  }
+
   it.effect("a change that comes back in an update is confirmed, before its push is answered", () =>
     Effect.gen(function*() {
       const answer = yield* Deferred.make<void>()

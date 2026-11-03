@@ -121,7 +121,9 @@ export const make = Effect.fnUntraced(function*(options: {
     Effect.gen(function*() {
       const user = yield* Sync.CurrentUser
       const document = yield* open(request.document)
-      return yield* document.lock.withPermit(Effect.gen(function*() {
+      // Uninterruptible once it has the lock: a client going away partway mustn't leave
+      // a change in memory that isn't stored, or stored that subscribers weren't told of.
+      return yield* document.lock.withPermit(Effect.uninterruptible(Effect.gen(function*() {
         const incoming = [...(request.delta as InternalDelta.DeltaImpl).changes.values()]
         for (const change of incoming) {
           const owner = document.owners.get(change.replica)
@@ -208,14 +210,9 @@ export const make = Effect.fnUntraced(function*(options: {
         const kept = fresh.filter((change) => history.changes.has(key(change)) || history.pending.has(key(change)))
         if (kept.length > 0) {
           yield* save(store, document, kept, user).pipe(
-            // Failing ends the subscriptions, and may interrupt this very push, if its
-            // replica is subscribed too. The document must be dropped regardless, or
-            // it says it's reloading forever.
+            // Dropped as well as failed, or it says it's reloading forever.
             Effect.tapError((error) =>
-              Effect.uninterruptible(Effect.andThen(
-                Deferred.fail(document.failed, error),
-                RcMap.invalidate(documents, document.id)
-              ))
+              Effect.andThen(Deferred.fail(document.failed, error), RcMap.invalidate(documents, document.id))
             )
           )
           yield* PubSub.publish(
@@ -231,7 +228,7 @@ export const make = Effect.fnUntraced(function*(options: {
         return rejected === undefined
           ? new Sync.Accepted({ confirmed })
           : new Sync.PushRejected({ confirmed, message: rejected })
-      }))
+      })))
     }).pipe(Effect.scoped)
 
   return { subscribe, push }

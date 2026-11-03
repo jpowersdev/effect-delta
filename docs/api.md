@@ -277,6 +277,8 @@ text back, and switches to a new replica id.
 
 **Servers save before they share.** A pushed change is checked, stored, then sent to subscribers. If storing fails, the push
 fails with `Unavailable`, every subscription to that document ends with it, and the document is loaded again from the store.
+A push that has started finishes even if its client goes away, so a store or `check` that never returns holds up that
+document's other pushes.
 A change that builds on something the server doesn't have yet waits on a relay. An authority can't check it, so it refuses
 the push as `Malformed`.
 

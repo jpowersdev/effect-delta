@@ -85,6 +85,9 @@ export class Rejected extends Schema.TaggedError<Rejected>()("Rejected", {
  * accepted up to the first change `check` rejects; that change and the rest of
  * the push are dropped, because each was made on top of the one before.
  *
+ * A push that has started finishes even if its client goes away, so a `check`
+ * that never returns holds up that document's other pushes.
+ *
  * **Example** (Only editors may edit)
  *
  * ```ts import.meta.vitest
