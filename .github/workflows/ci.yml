@@ -1,0 +1,75 @@
+name: CI
+
+# Always triggered, so the "CI passed" check always reports (main requires it);
+# the jobs are skipped when only the docs site or prose changed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: filter
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          # Anything but the docs site and prose (docs.yml builds the site)
+          predicate-quantifier: every
+          filters: |
+            code:
+              - "**"
+              - "!site/**"
+              - "!assets/**"
+              - "!**/*.md"
+              - "!.github/workflows/docs.yml"
+
+  node:
+    name: Check, test, build
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm exec effect-tsgo patch
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm test-types
+      - run: pnpm doctest
+      - run: pnpm lint
+      - run: pnpm circular
+      - run: pnpm build
+      - run: pnpm pack-check
+
+  passed:
+    name: CI passed
+    if: always()
+    needs: [changes, node]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # A skipped job is fine; a failed or cancelled one is not
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
