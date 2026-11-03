@@ -7,11 +7,11 @@ sidebar:
 
 Replicas sync in three ways. Each runs over any transport, and none changes the code that edits or observes a text.
 
-| Way                | When                                                       | Replica made with |
-| ------------------ | ---------------------------------------------------------- | ----------------- |
-| `Replica.exchange` | Two replicas you hold, such as in tests or over your own channel | `make`      |
-| `Relay`            | A server passes changes along and stores them              | `make`            |
-| `Authority`        | A server decides which changes are accepted                | `makeConfirmed`   |
+| Way                | When                                                             | Replica made with |
+| ------------------ | ---------------------------------------------------------------- | ----------------- |
+| `Replica.exchange` | Two replicas you hold, such as in tests or over your own channel | `make`            |
+| `Relay`            | A server passes changes along and stores them                    | `make`            |
+| `Authority`        | A server decides which changes are accepted                      | `makeConfirmed`   |
 
 A `make` replica can sync with several things at once, so connecting is explicit. A `makeConfirmed` replica has exactly one
 path, its authority. It connects when it's made, and `Replica.exchange` and `Replica.receive` from anything else fail with
@@ -28,12 +28,16 @@ import { Delta, Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Schema } from "effect"
 
 const program = Effect.gen(function*() {
-  const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+  const laptop = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("laptop")
+  })
   const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
   yield* ReplicatedText.insert(laptop, 0, "Hello")
 
   // Encoded on the laptop, sent however you like, and decoded on the phone
-  const sent = Schema.encodeSync(Delta.Delta)(yield* Replica.delta(laptop, yield* Replica.version(phone)))
+  const sent = Schema.encodeSync(Delta.Delta)(
+    yield* Replica.delta(laptop, yield* Replica.version(phone))
+  )
   yield* Replica.receive(phone, Schema.decodeUnknownSync(Delta.Delta)(sent))
 
   const text = yield* ReplicatedText.get(phone)
@@ -63,7 +67,13 @@ pnpm add @effect/platform-node
 
 ```ts import.meta.vitest
 import { NodeHttpServer, NodeSocket } from "@effect/platform-node"
-import { HistoryStore, Relay, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
+import {
+  HistoryStore,
+  Relay,
+  Replica,
+  ReplicatedText,
+  Sync
+} from "@jpowersdev/effect-delta"
 import { Effect, Layer, Stream } from "effect"
 import { HttpRouter } from "effect/http"
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc"
@@ -92,13 +102,18 @@ const RelayRemote = Relay.layerRemote.pipe(
 const notes = Replica.DocumentId.make("notes")
 
 const program = Effect.gen(function*() {
-  const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+  const laptop = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("laptop")
+  })
   const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
   yield* Relay.connect(laptop, { document: notes })
   yield* Relay.connect(phone, { document: notes })
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
-  yield* ReplicatedText.changes(phone).pipe(Stream.filter((text) => text === "Hello"), Stream.runHead)
+  yield* ReplicatedText.changes(phone).pipe(
+    Stream.filter((text) => text === "Hello"),
+    Stream.runHead
+  )
   const text = yield* ReplicatedText.get(phone)
   yield* Effect.log(text)
   return text
@@ -130,20 +145,30 @@ const sessions = new Map([["token-ada", "ada"]])
 const SignedIn = Layer.succeed(Sync.Authorization)({
   identify: (headers) =>
     Headers.get(headers, "authorization").pipe(
-      Option.flatMap((value) => Option.fromNullishOr(sessions.get(value.replace(/^Bearer /, "")))),
+      Option.flatMap((value) =>
+        Option.fromNullishOr(sessions.get(value.replace(/^Bearer /, "")))
+      ),
       Option.match({
         onNone: () => Effect.fail(new Sync.Forbidden({ message: "Sign in first" })),
         onSome: Effect.succeed
       })
     ),
   authorize: ({ access }) =>
-    access === "read" ? Effect.void : Effect.fail(new Sync.Forbidden({ message: "Read only" }))
+    access === "read"
+      ? Effect.void
+      : Effect.fail(new Sync.Forbidden({ message: "Read only" }))
 })
 
 const program = Effect.gen(function*() {
   const authorization = yield* Sync.Authorization
-  const user = yield* authorization.identify(Headers.fromInput({ authorization: "Bearer token-ada" }))
-  yield* authorization.authorize({ user, document: Replica.DocumentId.make("notes"), access: "read" })
+  const user = yield* authorization.identify(
+    Headers.fromInput({ authorization: "Bearer token-ada" })
+  )
+  yield* authorization.authorize({
+    user,
+    document: Replica.DocumentId.make("notes"),
+    access: "read"
+  })
   yield* Effect.log(user)
   return user
 })
@@ -159,21 +184,34 @@ change and every unconfirmed change after it, emits a `Rejected` edit with the p
 to a new replica id.
 
 ```ts import.meta.vitest
-import { Authority, HistoryStore, Replica, ReplicatedText, Sync } from "@jpowersdev/effect-delta"
+import {
+  Authority,
+  HistoryStore,
+  Replica,
+  ReplicatedText,
+  Sync
+} from "@jpowersdev/effect-delta"
 import { Effect, Layer, Option, Stream } from "effect"
 import { SecureRandom } from "effect/crypto"
 
 const EditorsOnly = Authority.layer({
   check: ({ user }) =>
-    user === "editor" ? Effect.void : Effect.fail(new Authority.Rejected({ message: "Read only" }))
+    user === "editor"
+      ? Effect.void
+      : Effect.fail(new Authority.Rejected({ message: "Read only" }))
 }).pipe(Layer.provide(HistoryStore.layerMemory))
 
 const program = Effect.gen(function*() {
-  const spec = yield* ReplicatedText.makeConfirmed({ document: Replica.DocumentId.make("spec") })
+  const spec = yield* ReplicatedText.makeConfirmed({
+    document: Replica.DocumentId.make("spec")
+  })
   const { edits } = yield* ReplicatedText.subscribe(spec)
 
   yield* ReplicatedText.insert(spec, 0, "LGTM")
-  const rejected = yield* edits.pipe(Stream.filter((edit) => edit._tag === "Rejected"), Stream.runHead)
+  const rejected = yield* edits.pipe(
+    Stream.filter((edit) => edit._tag === "Rejected"),
+    Stream.runHead
+  )
   const message = Option.getOrThrow(rejected).message
   yield* Effect.log(message)
   return message
@@ -207,12 +245,22 @@ import { HistoryStore, Relay, Replica, ReplicatedText } from "@jpowersdev/effect
 import { Effect, Layer, Stream } from "effect"
 
 const program = Effect.gen(function*() {
-  const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
-  const connection = yield* Relay.connect(notes, { document: Replica.DocumentId.make("notes") })
-  yield* connection.status.pipe(Stream.filter((status) => status._tag === "Synced"), Stream.runHead)
+  const notes = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("laptop")
+  })
+  const connection = yield* Relay.connect(notes, {
+    document: Replica.DocumentId.make("notes")
+  })
+  yield* connection.status.pipe(
+    Stream.filter((status) => status._tag === "Synced"),
+    Stream.runHead
+  )
 
   yield* ReplicatedText.insert(notes, 0, "Hello")
-  yield* connection.unconfirmed.pipe(Stream.filter((count) => count === 0), Stream.runHead)
+  yield* connection.unconfirmed.pipe(
+    Stream.filter((count) => count === 0),
+    Stream.runHead
+  )
   const result = "The relay has every change"
   yield* Effect.log(result)
   return result

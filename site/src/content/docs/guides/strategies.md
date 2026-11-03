@@ -13,11 +13,11 @@ There are two separate choices:
 
 Where replicas sync doesn't depend on the merge strategy. Both work over any transport.
 
-| Use                | When                                                                                  | Runnable example           |
-| ------------------ | ------------------------------------------------------------------------------------- | -------------------------- |
-| `tree`             | The default. Local-first apps, syncing directly or through a relay.                   | [`offline-notes.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/offline-notes.ts) |
-| `tree`, authority  | A server must be able to refuse edits, and clients sync only with it.                 | [`spec-review.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/spec-review.ts)  |
-| `replay`           | Large documents, many documents loaded at once, or long offline stretches.            | [`manuscript.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/manuscript.ts)   |
+| Use               | When                                                                       | Runnable example                                                                                     |
+| ----------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `tree`            | The default. Local-first apps, syncing directly or through a relay.        | [`offline-notes.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/offline-notes.ts) |
+| `tree`, authority | A server must be able to refuse edits, and clients sync only with it.      | [`spec-review.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/spec-review.ts)     |
+| `replay`          | Large documents, many documents loaded at once, or long offline stretches. | [`manuscript.ts`](https://github.com/jpowersdev/effect-delta/blob/main/examples/manuscript.ts)       |
 
 `tree` and `replay` produce the same text for the same edits.
 

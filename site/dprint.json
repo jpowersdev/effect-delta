@@ -1,0 +1,24 @@
+{
+  "$schema": "https://dprint.dev/schemas/v0.json",
+  "incremental": false,
+  "includes": [
+    "src/content/docs/**/*.md"
+  ],
+  "excludes": [
+    "src/content/docs/api"
+  ],
+  "indentWidth": 2,
+  "lineWidth": 88,
+  "newLineKind": "lf",
+  "typescript": {
+    "semiColons": "asi",
+    "quoteStyle": "alwaysDouble",
+    "trailingCommas": "never",
+    "operatorPosition": "maintain",
+    "arrowFunction.useParentheses": "force"
+  },
+  "plugins": [
+    "https://plugins.dprint.dev/typescript-0.93.4.wasm",
+    "https://plugins.dprint.dev/markdown-0.20.0.wasm"
+  ]
+}

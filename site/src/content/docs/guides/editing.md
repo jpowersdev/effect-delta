@@ -76,9 +76,14 @@ import { Replica, ReplicatedText, TextPatch } from "@jpowersdev/effect-delta"
 import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
-  const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+  const notes = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("laptop")
+  })
   yield* ReplicatedText.set(notes, "Hello")
-  yield* ReplicatedText.modify(notes, ({ length }) => [undefined, TextPatch.insert(length, "!")])
+  yield* ReplicatedText.modify(
+    notes,
+    ({ length }) => [undefined, TextPatch.insert(length, "!")]
+  )
   const text = yield* ReplicatedText.get(notes)
   yield* Effect.log(text)
   return text
@@ -102,7 +107,9 @@ import { Effect, Stream } from "effect"
 
 const program = Effect.gen(function*() {
   const mine = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("mine") })
-  const theirs = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("theirs") })
+  const theirs = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("theirs")
+  })
   yield* ReplicatedText.insert(theirs, 0, "Hello")
 
   // What an editor would show
@@ -136,7 +143,9 @@ import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect, Option } from "effect"
 
 const program = Effect.gen(function*() {
-  const notes = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+  const notes = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("laptop")
+  })
   yield* ReplicatedText.insert(notes, 0, "world")
   const anchor = yield* ReplicatedText.anchor(notes, 0)
   yield* ReplicatedText.insert(notes, 0, "Hello, ")
@@ -171,7 +180,9 @@ const program = Effect.gen(function*() {
   const overlaps = yield* Replica.exchange(alice, bob)
 
   const text = yield* ReplicatedText.get(alice)
-  const range = Option.getOrThrow(yield* ReplicatedText.locateRange(alice, overlaps[0]!.anchors))
+  const range = Option.getOrThrow(
+    yield* ReplicatedText.locateRange(alice, overlaps[0]!.anchors)
+  )
   const overlap = text.slice(range.start, range.end)
   yield* Effect.log(overlap)
   return overlap
@@ -197,7 +208,9 @@ const program = Effect.gen(function*() {
   yield* Replica.exchange(owner, agent)
 
   const authored = yield* ReplicatedText.authorship(owner)
-  const stretches = authored.map(({ range, replica }) => `${replica} ${range.start}-${range.end}`)
+  const stretches = authored.map(({ range, replica }) =>
+    `${replica} ${range.start}-${range.end}`
+  )
   yield* Effect.log(stretches)
   return stretches
 })

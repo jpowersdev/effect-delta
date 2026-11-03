@@ -15,8 +15,12 @@ import { Effect, Option, Stream } from "effect"
 const notes = Replica.DocumentId.make("notes")
 
 const program = Effect.gen(function*() {
-  const ada = yield* Presence.join({ document: notes }).pipe(Effect.provideService(Sync.CurrentUser, "ada"))
-  const ben = yield* Presence.join({ document: notes }).pipe(Effect.provideService(Sync.CurrentUser, "ben"))
+  const ada = yield* Presence.join({ document: notes }).pipe(
+    Effect.provideService(Sync.CurrentUser, "ada")
+  )
+  const ben = yield* Presence.join({ document: notes }).pipe(
+    Effect.provideService(Sync.CurrentUser, "ben")
+  )
 
   yield* ada.set({ selection: Option.none(), data: { name: "Ada" } })
 

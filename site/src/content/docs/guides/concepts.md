@@ -26,36 +26,36 @@ Apps observe each change to the text as a **patch**. They keep stable positions 
 
 ## Changes and history
 
-| Term           | Meaning                                                                                                     |
-| -------------- | ----------------------------------------------------------------------------------------------------------- |
-| Change         | The edits one replica committed together. The unit that is stored and sent, and is never modified.          |
-| Parents        | What a change was made on top of: the changes its replica had seen.                                         |
-| History        | Every change a replica knows. Append-only. The current text is derived from it.                             |
-| Version vector | For each replica id, how much of it a replica has seen. Compares as before, after, equal or concurrent.     |
-| Concurrent     | Two changes are concurrent when neither's replica had seen the other when it was made.                      |
+| Term           | Meaning                                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------------------------- |
+| Change         | The edits one replica committed together. The unit that is stored and sent, and is never modified.      |
+| Parents        | What a change was made on top of: the changes its replica had seen.                                     |
+| History        | Every change a replica knows. Append-only. The current text is derived from it.                         |
+| Version vector | For each replica id, how much of it a replica has seen. Compares as before, after, equal or concurrent. |
+| Concurrent     | Two changes are concurrent when neither's replica had seen the other when it was made.                  |
 
 ## Syncing
 
-| Term           | Meaning                                                                                                     |
-| -------------- | ----------------------------------------------------------------------------------------------------------- |
-| Delta          | A set of changes sent between replicas. Deltas combine in any order, and repeating one is harmless.         |
-| Pending        | Changes received before their parents, held until the parents arrive. Transports needn't preserve order.    |
-| Unconfirmed    | A replica's own changes that its authority hasn't acknowledged. They may still be rejected.                 |
-| Relay          | A server that passes changes between replicas and stores them. It never rejects anything.                   |
-| Authority      | A server that checks each change, and can reject it.                                                        |
-| History store  | Where a replica or server keeps history between sessions.                                                   |
-| Snapshot       | The text at one version, saved so a `replay` replica can load without replaying its history.                |
-| Presence       | Short-lived state that isn't part of the document: who's here, and their selections.                        |
+| Term          | Meaning                                                                                                  |
+| ------------- | -------------------------------------------------------------------------------------------------------- |
+| Delta         | A set of changes sent between replicas. Deltas combine in any order, and repeating one is harmless.      |
+| Pending       | Changes received before their parents, held until the parents arrive. Transports needn't preserve order. |
+| Unconfirmed   | A replica's own changes that its authority hasn't acknowledged. They may still be rejected.              |
+| Relay         | A server that passes changes between replicas and stores them. It never rejects anything.                |
+| Authority     | A server that checks each change, and can reject it.                                                     |
+| History store | Where a replica or server keeps history between sessions.                                                |
+| Snapshot      | The text at one version, saved so a `replay` replica can load without replaying its history.             |
+| Presence      | Short-lived state that isn't part of the document: who's here, and their selections.                     |
 
 ## Text and positions
 
-| Term    | Meaning                                                                                                            |
-| ------- | ------------------------------------------------------------------------------------------------------------------ |
-| Index   | A position in the current text, counted in UTF-16 code units, as JavaScript strings and editor libraries count.    |
-| Patch   | How a text changed, as retain, insert and remove, in Quill's shape. Applied in order to one particular text.       |
-| Anchor  | A position that follows the text through edits and merges, attached to one character.                              |
-| Side    | Which way an anchor leans, `before` or `after` its character. This decides where text typed exactly at it goes.    |
-| Overlap | A stretch of merged text where changes that hadn't seen each other touch ("24 hours" becoming "812 hours").        |
+| Term    | Meaning                                                                                                         |
+| ------- | --------------------------------------------------------------------------------------------------------------- |
+| Index   | A position in the current text, counted in UTF-16 code units, as JavaScript strings and editor libraries count. |
+| Patch   | How a text changed, as retain, insert and remove, in Quill's shape. Applied in order to one particular text.    |
+| Anchor  | A position that follows the text through edits and merges, attached to one character.                           |
+| Side    | Which way an anchor leans, `before` or `after` its character. This decides where text typed exactly at it goes. |
+| Overlap | A stretch of merged text where changes that hadn't seen each other touch ("24 hours" becoming "812 hours").     |
 
 A **delta** and a **patch** are different. Deltas are what replicas send each other, and combine in any order. A patch is
 what an editor applies to show new text. Yjs, Quill and Loro call the second one a delta.

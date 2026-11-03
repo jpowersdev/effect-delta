@@ -27,7 +27,9 @@ import { Effect, Layer, Stream } from "effect"
 const notes = Replica.DocumentId.make("notes")
 
 const program = Effect.gen(function*() {
-  const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
+  const laptop = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("laptop")
+  })
   const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
 
   // Each syncs through the relay for as long as the scope is open
@@ -37,7 +39,10 @@ const program = Effect.gen(function*() {
   yield* ReplicatedText.insert(laptop, 0, "Hello")
 
   // Wait until the phone shows it
-  yield* ReplicatedText.changes(phone).pipe(Stream.filter((text) => text === "Hello"), Stream.runHead)
+  yield* ReplicatedText.changes(phone).pipe(
+    Stream.filter((text) => text === "Hello"),
+    Stream.runHead
+  )
   const text = yield* ReplicatedText.get(phone)
   yield* Effect.log(text)
   return text

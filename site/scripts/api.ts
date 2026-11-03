@@ -11,12 +11,13 @@
 // overview is written here instead, from the barrel: its module comment, then its
 // modules with their summaries.
 //
-// docgen formats code at 120 columns; pages are formatted again at 88, the
-// width the content column fits without scrolling.
+// docgen formats code with Prettier at 120 columns. Pages are formatted again with
+// dprint, like the guides and the source, at 88, the width the content column fits
+// without scrolling.
+import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import * as Prettier from "prettier"
 
 const site = join(dirname(fileURLToPath(import.meta.url)), "..")
 const input = join(site, ".docgen", "modules")
@@ -52,10 +53,14 @@ const wrapComments = (markdown: string) =>
     return [`${indent}/**`, ...lines.map((l) => `${indent} * ${l}`), `${indent} */`].join("\n")
   })
 
-// docgen's options, narrower
-const format = async (markdown: string) =>
+const dprint = join(site, "..", "node_modules", ".bin", "dprint")
+
+const format = (markdown: string) =>
   wrapComments(
-    await Prettier.format(markdown, { parser: "markdown", semi: false, printWidth: width, trailingComma: "all" }),
+    execFileSync(dprint, ["fmt", "--config", join(site, "dprint.json"), "--stdin", "page.md"], {
+      input: markdown,
+      encoding: "utf8",
+    }),
   )
 
 const yamlString = (s: string) => JSON.stringify(s)
@@ -167,8 +172,8 @@ for (const file of files(input)) {
   const module = relative(input, file).replace(/\.ts\.md$/, "")
   if (module === "index") continue
   const page = convert(file, module)
-  writeFileSync(join(output, `${module}.md`), await format(page.markdown))
+  writeFileSync(join(output, `${module}.md`), format(page.markdown))
   pages.set(module, page)
 }
-writeFileSync(join(output, "index.md"), await format(overview(pages)))
+writeFileSync(join(output, "index.md"), format(overview(pages)))
 console.log(`Wrote ${pages.size} API pages and an overview to ${relative(process.cwd(), output)}`)

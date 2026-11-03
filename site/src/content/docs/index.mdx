@@ -22,8 +22,12 @@ import { Replica, ReplicatedText } from "@jpowersdev/effect-delta"
 import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
-  const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
-  const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
+  const laptop = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("laptop")
+  })
+  const phone = yield* ReplicatedText.make({
+    replica: Replica.ReplicaId.make("phone")
+  })
 
   // Offline, each edits their own copy
   yield* ReplicatedText.insert(laptop, 0, "Hello")
@@ -43,20 +47,44 @@ await Effect.runPromise(program) // => "Helloworld"
   <Card title="Edits apply immediately" icon="pencil">
     A replica never waits for the network, and concurrent edits merge without conflicts.
 
+    ```ts
+    yield* ReplicatedText.insert(laptop, 0, "Hello")
+    yield* ReplicatedText.insert(phone, 0, "world")
+    yield* Replica.exchange(laptop, phone)
+    ```
+
     <LinkButton href="guides/editing/" variant="minimal" icon="right-arrow">Editing text</LinkButton>
   </Card>
   <Card title="Sync over any transport" icon="random">
     The protocol is an `RpcGroup`, so it runs over any `RpcClient` protocol, through a relay or a server that decides what's accepted.
+
+    ```ts
+    yield* Relay.connect(notes, { document })
+    // In one process: Relay.layer
+    // Over a network: Relay.layerRemote
+    ```
 
     <LinkButton href="guides/syncing/" variant="minimal" icon="right-arrow">Syncing</LinkButton>
   </Card>
   <Card title="Two merge strategies" icon="setting">
     `tree` needs nothing beyond delivery. `replay` keeps memory close to the size of the text.
 
+    ```ts
+    ReplicatedText.make() // tree
+    ReplicatedText.make({ strategy: "replay" })
+    // Code that edits it doesn't change
+    ```
+
     <LinkButton href="guides/strategies/" variant="minimal" icon="right-arrow">Strategies</LinkButton>
   </Card>
   <Card title="Presence" icon="group">
     Who's in a document and what they've selected, using positions that follow the text.
+
+    ```ts
+    const me = yield* Presence.join({ document })
+    yield* me.set({ selection, data: { name: "Ada" } })
+    yield* me.peers.pipe(Stream.runForEach(show))
+    ```
 
     <LinkButton href="guides/presence/" variant="minimal" icon="right-arrow">Presence</LinkButton>
   </Card>

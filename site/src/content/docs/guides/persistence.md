@@ -17,7 +17,9 @@ const notes = Replica.DocumentId.make("notes")
 
 const open = (session: string) =>
   Effect.gen(function*() {
-    const text = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make(session) })
+    const text = yield* ReplicatedText.make({
+      replica: Replica.ReplicaId.make(session)
+    })
     yield* HistoryStore.persist(text, notes)
     return text
   })
@@ -27,7 +29,9 @@ const program = Effect.gen(function*() {
     const first = yield* open("session-1")
     yield* ReplicatedText.insert(first, 0, "Saved")
   }))
-  const text = yield* Effect.scoped(Effect.flatMap(open("session-2"), ReplicatedText.get))
+  const text = yield* Effect.scoped(
+    Effect.flatMap(open("session-2"), ReplicatedText.get)
+  )
   yield* Effect.log(text)
   return text
 })
