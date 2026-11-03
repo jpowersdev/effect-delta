@@ -29,10 +29,10 @@ import { Effect, Schema } from "effect"
 
 const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("laptop")
+    replica: Replica.makeId("laptop")
   })
   const phone = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("phone")
+    replica: Replica.makeId("phone")
   })
   yield* ReplicatedText.insert(laptop, 0, "Hello")
 
@@ -109,10 +109,10 @@ const notes = Replica.makeRoom("notes")
 
 const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("laptop")
+    replica: Replica.makeId("laptop")
   })
   const phone = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("phone")
+    replica: Replica.makeId("phone")
   })
   yield* Relay.connect(laptop, {
     room: notes
@@ -269,7 +269,7 @@ import { Effect, Layer, Stream } from "effect"
 
 const program = Effect.gen(function*() {
   const notes = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("laptop")
+    replica: Replica.makeId("laptop")
   })
   const connection = yield* Relay.connect(notes, {
     room: Replica.makeRoom("notes")

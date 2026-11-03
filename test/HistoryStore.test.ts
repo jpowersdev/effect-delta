@@ -4,9 +4,8 @@ import { Effect, Layer, Option, Stream } from "effect"
 import { KeyValueStore } from "effect/persistence"
 import { layerSeeded } from "./utils/secureRandom.ts"
 
-const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
-const makeReplay = (replica: string) =>
-  ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
+const make = (replica: string) => ReplicatedText.make({ replica: Replica.makeId(replica) })
+const makeReplay = (replica: string) => ReplicatedText.make({ strategy: "replay", replica: Replica.makeId(replica) })
 const notes = Replica.makeRoom("notes")
 
 // Opens `notes` as a replica that saves to the store.
@@ -50,7 +49,7 @@ describe("HistoryStore", () => {
         yield* ReplicatedText.insert(laptop, (yield* ReplicatedText.get(laptop)).length, word)
         yield* store.append(notes, yield* Replica.delta(laptop, before))
       }
-      yield* store.addWriter(notes, Replica.ReplicaId.make("laptop"), "alice")
+      yield* store.addWriter(notes, Replica.makeId("laptop"), "alice")
 
       const stored = Option.getOrThrow(yield* store.load(notes))
       assert.deepStrictEqual(stored.writers, { laptop: "alice" })
@@ -77,7 +76,7 @@ describe("HistoryStore", () => {
   describe("snapshots, for the replay strategy", () => {
     const openReplay = (replica: string) =>
       Effect.gen(function*() {
-        const text = yield* ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
+        const text = yield* ReplicatedText.make({ strategy: "replay", replica: Replica.makeId(replica) })
         yield* HistoryStore.persist(text, notes)
         return text
       })
@@ -120,8 +119,7 @@ describe("HistoryStore", () => {
       Effect.gen(function*() {
         const results = yield* Effect.forEach(["tree", "replay"] as const, (strategy) =>
           Effect.gen(function*() {
-            const make = (replica: string) =>
-              ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make(replica) })
+            const make = (replica: string) => ReplicatedText.make({ strategy, replica: Replica.makeId(replica) })
             const coauthor = yield* make("coauthor")
             yield* Effect.scoped(Effect.gen(function*() {
               const first = yield* make("session-1")

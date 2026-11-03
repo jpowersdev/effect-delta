@@ -11,7 +11,7 @@ describe("ReplicatedText", () => {
     expect(ReplicatedText.make({ strategy: "tree" })).type.toBe<
       Effect.Effect<ReplicatedText.ReplicatedText, never, SecureRandom>
     >()
-    expect(ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })).type.toBe<
+    expect(ReplicatedText.make({ replica: Replica.makeId("laptop") })).type.toBe<
       Effect.Effect<ReplicatedText.ReplicatedText>
     >()
   })

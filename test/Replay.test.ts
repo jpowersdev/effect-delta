@@ -44,8 +44,7 @@ const toChanges = (transactions: ReadonlyArray<Transaction>): Array<Change<Repla
   })
 }
 
-const makeReplay = (replica: string) =>
-  ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
+const makeReplay = (replica: string) => ReplicatedText.make({ strategy: "replay", replica: Replica.makeId(replica) })
 
 describe("conformance with Eg-walker", () => {
   it.effect("replay text matches the reference for every case", () =>
@@ -99,14 +98,14 @@ const Session = Schema.Array(Command).check(Schema.isMaxLength(50))
 const letters = (s: string) => [...s].map((c) => "abc"[c.charCodeAt(0) % 3]!).join("")
 
 const makeAll = (strategy: "tree" | "replay") =>
-  Effect.forEach(["r0", "r1", "r2"], (id) => ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make(id) }))
+  Effect.forEach(["r0", "r1", "r2"], (id) => ReplicatedText.make({ strategy, replica: Replica.makeId(id) }))
 
 describe("replay against tree", () => {
   it.effect("an overlap where both removed the same words", () =>
     Effect.gen(function*() {
       const overlaps = yield* Effect.forEach(["tree", "replay"] as const, (strategy) =>
         Effect.gen(function*() {
-          const make = (replica: string) => ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make(replica) })
+          const make = (replica: string) => ReplicatedText.make({ strategy, replica: Replica.makeId(replica) })
           const alice = yield* make("alice")
           const bob = yield* make("bob")
           yield* ReplicatedText.insert(alice, 0, "Sessions last 24 hours.")

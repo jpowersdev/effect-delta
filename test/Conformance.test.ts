@@ -93,7 +93,7 @@ describe("conformance with Eg-walker", () => {
     Effect.gen(function*() {
       for (const [index, { endContent, txns }] of (cases as ReadonlyArray<Case>).slice(0, 100).entries()) {
         const changes = yield* Random.shuffle(toChanges(txns))
-        const replica = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("observer") })
+        const replica = yield* ReplicatedText.make({ replica: Replica.makeId("observer") })
         for (const change of changes) yield* Replica.receive(replica, InternalDelta.fromChanges([change]))
         assert.strictEqual(yield* ReplicatedText.get(replica), endContent, `case ${index}`)
       }

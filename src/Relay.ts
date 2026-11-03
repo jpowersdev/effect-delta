@@ -120,10 +120,10 @@ export interface ConnectOptions {
  *
  * const program = Effect.gen(function*() {
  *   const laptop = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("laptop")
+ *     replica: Replica.makeId("laptop")
  *   })
  *   const phone = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("phone")
+ *     replica: Replica.makeId("phone")
  *   })
  *   yield* Relay.connect(laptop, {
  *     room: notes

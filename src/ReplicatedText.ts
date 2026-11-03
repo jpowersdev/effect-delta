@@ -81,7 +81,7 @@ const Proto = {
 
 const randomReplicaId = Effect.gen(function*() {
   const random = yield* SecureRandom.SecureRandom
-  return Replica.ReplicaId.make(yield* random.uuidV4())
+  return Replica.makeId(yield* random.uuidV4())
 })
 
 const makeWith = Effect.fnUntraced(function*(options: {
@@ -302,7 +302,7 @@ const authorshipImpl = (self: ReplicatedText): Effect.Effect<ReadonlyArray<Autho
       const authored: Array<Authorship> = []
       let start = 0
       for (const run of impl(self).state.text.authorship()) {
-        authored.push({ range: { start, end: start + run.length }, replica: Replica.ReplicaId.make(run.replica) })
+        authored.push({ range: { start, end: start + run.length }, replica: Replica.makeId(run.replica) })
         start += run.length
       }
       return authored
@@ -356,7 +356,7 @@ const makeCore = (self: ReplicatedTextImpl): InternalReplica.Core => {
               History.since(state.text.history, since).filter((change) => !isUnconfirmed(state, change))
             ),
             unconfirmed: InternalDelta.fromChanges(unconfirmed),
-            writers: [...state.writers].map((writer) => Replica.ReplicaId.make(writer)),
+            writers: [...state.writers].map((writer) => Replica.makeId(writer)),
             version,
             text: state.text.value
           }
@@ -441,7 +441,7 @@ const receive = (
       (change.replica === state.replica && existing === undefined) ||
       (existing !== undefined && !Equal.equals(existing, change))
     ) {
-      return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })))
+      return Effect.fail(deltaError(new Replica.ReplicaIdReused({ replica: Replica.makeId(change.replica) })))
     }
   }
   for (const change of delta.changes.values()) {
@@ -455,7 +455,7 @@ const receive = (
     _tag: "Text",
     range: { start: overlap.start, end: overlap.end },
     anchors: overlap.anchors,
-    replicas: overlap.replicas.map((replica) => Replica.ReplicaId.make(replica))
+    replicas: overlap.replicas.map((replica) => Replica.makeId(replica))
   }))
   const published = patch.length === 0 && overlaps.length === 0
     ? Effect.void
@@ -518,7 +518,7 @@ export interface Options {
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("laptop")
+ *     replica: Replica.makeId("laptop")
  *   })
  *   yield* ReplicatedText.insert(notes, 0, "Hello")
  *   yield* ReplicatedText.insert(notes, 5, ", world")
@@ -697,7 +697,7 @@ export interface Subscription {
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("laptop")
+ *     replica: Replica.makeId("laptop")
  *   })
  *   const { text, edits } = yield* ReplicatedText.subscribe(notes)
  *   yield* ReplicatedText.insert(notes, 0, "Hi")
@@ -833,7 +833,7 @@ export const set: {
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("laptop")
+ *     replica: Replica.makeId("laptop")
  *   })
  *   yield* ReplicatedText.set(notes, "Sessions last 24 hours.")
  *   yield* ReplicatedText.update(notes, (text) => text.replace("24", "8"))
@@ -878,7 +878,7 @@ export const update: {
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("laptop")
+ *     replica: Replica.makeId("laptop")
  *   })
  *   yield* ReplicatedText.set(notes, "Sessions last 24 hours.")
  *   const first = yield* ReplicatedText.modify(notes, replace("24", "8"))
@@ -984,7 +984,7 @@ export interface Range {
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("laptop")
+ *     replica: Replica.makeId("laptop")
  *   })
  *   yield* ReplicatedText.insert(notes, 0, "world")
  *   const anchor = yield* ReplicatedText.anchor(notes, 0)
@@ -1072,10 +1072,10 @@ export interface Authorship {
  *
  * const program = Effect.gen(function*() {
  *   const owner = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("owner")
+ *     replica: Replica.makeId("owner")
  *   })
  *   const agent = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("agent")
+ *     replica: Replica.makeId("agent")
  *   })
  *   yield* ReplicatedText.insert(owner, 0, "Ship it Friday.")
  *   yield* Replica.exchange(owner, agent)

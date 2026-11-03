@@ -33,7 +33,7 @@ const inOrder = (changes: Iterable<InternalText.AnyChange>): ReadonlyArray<Inter
 }
 
 const concurrentHistory = Effect.fnUntraced(function*(session: typeof Session.Type) {
-  const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
+  const make = (replica: string) => ReplicatedText.make({ replica: Replica.makeId(replica) })
   const replicas = [yield* make("r0"), yield* make("r1"), yield* make("r2")] as const
   yield* ReplicatedText.insert(replicas[0], 0, "The opening text every replica starts from.\n".repeat(10))
   yield* Replica.exchange(replicas[0], replicas[1])
@@ -187,8 +187,8 @@ describe("replaying a run", () => {
 describe("Delta.version", () => {
   it.effect("is how far a delta's changes reach, for each replica", () =>
     Effect.gen(function*() {
-      const a = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("a") })
-      const b = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("b") })
+      const a = yield* ReplicatedText.make({ replica: Replica.makeId("a") })
+      const b = yield* ReplicatedText.make({ replica: Replica.makeId("b") })
       assert.deepStrictEqual(Delta.version(Delta.empty), {})
       yield* ReplicatedText.insert(a, 0, "abc")
       const first = yield* Replica.version(a)

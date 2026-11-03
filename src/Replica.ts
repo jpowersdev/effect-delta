@@ -79,6 +79,29 @@ export const ReplicaId = Schema.String.check(Schema.isMinLength(1)).pipe(Schema.
 export type ReplicaId = typeof ReplicaId.Type
 
 /**
+ * Makes a replica id from its name, which can't be empty.
+ *
+ * **When to use**
+ *
+ * `ReplicatedText.make` generates a random id if you don't give it one. Name a replica
+ * when it's restoring its own saved state, or when something depends on its id, such as
+ * the order of concurrent edits.
+ *
+ * **Example** (Naming a replica)
+ *
+ * ```ts import.meta.vitest
+ * import { Replica } from "@jpowersdev/effect-delta"
+ *
+ * Replica.makeId("laptop") // => "laptop"
+ * ```
+ *
+ * @stability unstable
+ * @category constructors
+ * @since 0.1.0
+ */
+export const makeId = (name: string): ReplicaId => ReplicaId.make(name)
+
+/**
  * Identifies a room: where the replicas of one shared value meet. Sync and
  * storage use it; a replica itself doesn't need one.
  *
@@ -301,10 +324,10 @@ export const receive: {
  *
  * const program = Effect.gen(function*() {
  *   const laptop = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("laptop")
+ *     replica: Replica.makeId("laptop")
  *   })
  *   const phone = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("phone")
+ *     replica: Replica.makeId("phone")
  *   })
  *   yield* ReplicatedText.insert(laptop, 0, "Hello")
  *   yield* Replica.exchange(laptop, phone)

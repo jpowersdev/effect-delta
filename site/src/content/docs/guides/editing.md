@@ -46,10 +46,10 @@ import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
   const alice = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("alice")
+    replica: Replica.makeId("alice")
   })
   const bob = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("bob")
+    replica: Replica.makeId("bob")
   })
   yield* ReplicatedText.set(alice, "Sessions last 24 hours.")
   yield* Replica.exchange(alice, bob)
@@ -77,7 +77,7 @@ import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
   const notes = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("laptop")
+    replica: Replica.makeId("laptop")
   })
   yield* ReplicatedText.set(notes, "Hello")
   yield* ReplicatedText.modify(
@@ -105,10 +105,10 @@ import { Effect, Stream } from "effect"
 
 const program = Effect.gen(function*() {
   const mine = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("mine")
+    replica: Replica.makeId("mine")
   })
   const theirs = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("theirs")
+    replica: Replica.makeId("theirs")
   })
   yield* ReplicatedText.insert(theirs, 0, "Hello")
 
@@ -143,7 +143,7 @@ import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
   const notes = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("laptop")
+    replica: Replica.makeId("laptop")
   })
   yield* ReplicatedText.insert(notes, 0, "world")
   const anchor = yield* ReplicatedText.anchor(notes, 0)
@@ -168,10 +168,10 @@ import { Effect, Option } from "effect"
 
 const program = Effect.gen(function*() {
   const alice = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("alice")
+    replica: Replica.makeId("alice")
   })
   const bob = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("bob")
+    replica: Replica.makeId("bob")
   })
   yield* ReplicatedText.set(alice, "Sessions last 24 hours.")
   yield* Replica.exchange(alice, bob)
@@ -200,10 +200,10 @@ import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
   const owner = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("owner")
+    replica: Replica.makeId("owner")
   })
   const agent = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("agent")
+    replica: Replica.makeId("agent")
   })
   yield* ReplicatedText.insert(owner, 0, "Ship it Friday.")
   yield* Replica.exchange(owner, agent)

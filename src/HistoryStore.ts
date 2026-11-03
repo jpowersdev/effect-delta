@@ -282,7 +282,7 @@ export interface Persisted {
  * const open = (replica: string) =>
  *   Effect.gen(function*() {
  *     const text = yield* ReplicatedText.make({
- *       replica: Replica.ReplicaId.make(replica)
+ *       replica: Replica.makeId(replica)
  *     })
  *     yield* HistoryStore.persist(text, notes)
  *     return text

@@ -28,10 +28,10 @@ const notes = Replica.makeRoom("notes")
 
 const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("laptop")
+    replica: Replica.makeId("laptop")
   })
   const phone = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("phone")
+    replica: Replica.makeId("phone")
   })
 
   // Each syncs through the relay for as long as the scope is open

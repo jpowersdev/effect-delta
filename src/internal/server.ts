@@ -154,7 +154,7 @@ export const make = Effect.fnUntraced(function*(options: {
           if (existing !== undefined && !Equal.equals(existing, change)) {
             return yield* syncError(
               new Replica.DeltaError({
-                reason: new Replica.ReplicaIdReused({ replica: Replica.ReplicaId.make(change.replica) })
+                reason: new Replica.ReplicaIdReused({ replica: Replica.makeId(change.replica) })
               })
             )
           }
@@ -286,7 +286,7 @@ const save = Effect.fnUntraced(function*(
   yield* store.append(room.id, InternalDelta.fromChanges(changes)).pipe(Effect.mapError(unavailable))
   for (const replica of new Set(changes.map((change) => change.replica))) {
     if (room.owners.has(replica)) continue
-    yield* store.addWriter(room.id, Replica.ReplicaId.make(replica), user).pipe(Effect.mapError(unavailable))
+    yield* store.addWriter(room.id, Replica.makeId(replica), user).pipe(Effect.mapError(unavailable))
     room.owners.set(replica, user)
   }
 })

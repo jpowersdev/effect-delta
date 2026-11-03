@@ -29,7 +29,7 @@ const Session = Schema.Array(Command).check(Schema.isMaxLength(40))
 const letters = (s: string) => [...s].map((c) => "abc"[c.charCodeAt(0) % 3]!).join("")
 
 const run = Effect.fnUntraced(function*(strategy: Replica.Strategy, session: typeof Session.Type) {
-  const make = (replica: string) => ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make(replica) })
+  const make = (replica: string) => ReplicatedText.make({ strategy, replica: Replica.makeId(replica) })
   const replicas = [yield* make("r0"), yield* make("r1"), yield* make("r2")] as const
   for (const command of session) {
     switch (command._tag) {
@@ -92,12 +92,12 @@ describe.each(["tree", "replay"] as const)("convergence (%s)", (strategy) => {
       const deltas = yield* Effect.forEach(replicas, (replica) => Replica.delta(replica, VersionVector.empty))
       const everything = deltas.reduce(Delta.combine, Delta.empty)
 
-      const atOnce = yield* ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make("at-once") })
+      const atOnce = yield* ReplicatedText.make({ strategy, replica: Replica.makeId("at-once") })
       yield* Replica.receive(atOnce, everything)
 
       const changes = [...(everything as InternalDelta.DeltaImpl).changes.values()]
       const shuffled = yield* Random.shuffle([...changes, ...changes]).pipe(Random.withSeed(seed))
-      const oneByOne = yield* ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make("one-by-one") })
+      const oneByOne = yield* ReplicatedText.make({ strategy, replica: Replica.makeId("one-by-one") })
       for (const change of shuffled) yield* Replica.receive(oneByOne, InternalDelta.fromChanges([change]))
 
       yield* syncAll(replicas)
@@ -133,7 +133,7 @@ describe.each(["tree", "replay"] as const)("non-interleaving (%s)", (strategy) =
     for (let i = text.length - 1; i >= 0; i--) yield* ReplicatedText.insert(replica, at, text[i]!)
   })
 
-  const make = (replica: string) => ReplicatedText.make({ strategy, replica: Replica.ReplicaId.make(replica) })
+  const make = (replica: string) => ReplicatedText.make({ strategy, replica: Replica.makeId(replica) })
   const setup = Effect.gen(function*() {
     const alice = yield* make("alice")
     const bob = yield* make("bob")

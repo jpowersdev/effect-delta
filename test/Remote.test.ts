@@ -109,8 +109,8 @@ describe("over a WebSocket", () => {
     Effect.gen(function*() {
       const alice = yield* relayFor("alice")
       const bob = yield* relayFor("bob")
-      const laptop = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("laptop") })
-      const phone = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("phone") })
+      const laptop = yield* ReplicatedText.make({ replica: Replica.makeId("laptop") })
+      const phone = yield* ReplicatedText.make({ replica: Replica.makeId("phone") })
       yield* Relay.connect(laptop, { room: spec }).pipe(Effect.provideContext(alice))
       yield* Relay.connect(phone, { room: spec }).pipe(Effect.provideContext(bob))
 

@@ -114,7 +114,7 @@ export const isEmpty = (self: Delta): boolean => (self as internal.DeltaImpl).ch
  *
  * const program = Effect.gen(function*() {
  *   const notes = yield* ReplicatedText.make({
- *     replica: Replica.ReplicaId.make("laptop")
+ *     replica: Replica.makeId("laptop")
  *   })
  *   yield* ReplicatedText.insert(notes, 0, "Hello")
  *   const delta = yield* Replica.delta(notes, VersionVector.empty)

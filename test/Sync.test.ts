@@ -12,7 +12,7 @@ import {
 import { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect"
 import { layerSeeded } from "./utils/secureRandom.ts"
 
-const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
+const make = (replica: string) => ReplicatedText.make({ replica: Replica.makeId(replica) })
 const notes = Replica.makeRoom("notes")
 const spec = Replica.makeRoom("spec")
 
@@ -170,7 +170,7 @@ describe("Relay", () => {
   it.effect("syncs replay replicas, and keeps their room", () =>
     Effect.gen(function*() {
       const makeReplay = (replica: string) =>
-        ReplicatedText.make({ strategy: "replay", replica: Replica.ReplicaId.make(replica) })
+        ReplicatedText.make({ strategy: "replay", replica: Replica.makeId(replica) })
       yield* Effect.scoped(
         Effect.gen(function*() {
           const laptop = yield* makeReplay("laptop")

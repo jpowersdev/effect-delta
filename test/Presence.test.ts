@@ -28,8 +28,8 @@ describe("Presence", () => {
 
   it.effect("a selection is an anchor another replica can find in its own text", () =>
     Effect.gen(function*() {
-      const mine = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("mine") })
-      const theirs = yield* ReplicatedText.make({ replica: Replica.ReplicaId.make("theirs") })
+      const mine = yield* ReplicatedText.make({ replica: Replica.makeId("mine") })
+      const theirs = yield* ReplicatedText.make({ replica: Replica.makeId("theirs") })
       yield* ReplicatedText.insert(mine, 0, "Hello world")
       yield* Replica.exchange(mine, theirs)
       const selection = yield* ReplicatedText.anchorRange(mine, { start: 6, end: 11 })

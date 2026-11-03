@@ -2,7 +2,7 @@ import { assert, describe, it } from "@effect/vitest"
 import { Delta, Replica, ReplicatedText, TextPatch, VersionVector } from "@jpowersdev/effect-delta"
 import { Effect, Option, Schema, Stream } from "effect"
 
-const make = (replica: string) => ReplicatedText.make({ replica: Replica.ReplicaId.make(replica) })
+const make = (replica: string) => ReplicatedText.make({ replica: Replica.makeId(replica) })
 
 describe("ReplicatedText", () => {
   describe("editing", () => {
@@ -160,8 +160,8 @@ describe("ReplicatedText", () => {
   })
 
   describe("authorship", () => {
-    const owner = Replica.ReplicaId.make("owner")
-    const agent = Replica.ReplicaId.make("agent")
+    const owner = Replica.makeId("owner")
+    const agent = Replica.makeId("agent")
 
     for (const strategy of ["tree", "replay"] as const) {
       it.effect(`says who typed each stretch, and drops removed text (${strategy})`, () =>

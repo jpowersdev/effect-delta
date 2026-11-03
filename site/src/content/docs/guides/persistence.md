@@ -18,7 +18,7 @@ const notes = Replica.makeRoom("notes")
 const open = (session: string) =>
   Effect.gen(function*() {
     const text = yield* ReplicatedText.make({
-      replica: Replica.ReplicaId.make(session)
+      replica: Replica.makeId(session)
     })
     yield* HistoryStore.persist(text, notes)
     return text

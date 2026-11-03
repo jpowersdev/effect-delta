@@ -23,10 +23,10 @@ import { Effect } from "effect"
 
 const program = Effect.gen(function*() {
   const laptop = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("laptop")
+    replica: Replica.makeId("laptop")
   })
   const phone = yield* ReplicatedText.make({
-    replica: Replica.ReplicaId.make("phone")
+    replica: Replica.makeId("phone")
   })
 
   // Offline, each edits their own copy
