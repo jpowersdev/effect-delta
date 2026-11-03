@@ -40,12 +40,10 @@ const program = Effect.gen(function*() {
   )
   yield* Replica.receive(phone, Schema.decodeUnknownSync(Delta.Delta)(sent))
 
-  const text = yield* ReplicatedText.get(phone)
-  yield* Effect.log(text)
-  return text
+  yield* Effect.log(yield* ReplicatedText.get(phone))
 })
 
-await Effect.runPromise(program) // => "Hello"
+await Effect.runPromise(program)
 ```
 
 ## Serve a relay
@@ -114,16 +112,14 @@ const program = Effect.gen(function*() {
     Stream.filter((text) => text === "Hello"),
     Stream.runHead
   )
-  const text = yield* ReplicatedText.get(phone)
-  yield* Effect.log(text)
-  return text
+  yield* Effect.log(yield* ReplicatedText.get(phone))
 })
 
 await Effect.runPromise(program.pipe(
   Effect.scoped,
   Effect.provide(RelayRemote),
   Effect.provide(ServerLive)
-)) // => "Hello"
+))
 ```
 
 The server and client share a process here so the example runs by itself. On a real deployment `ServerLive` is one program
@@ -170,10 +166,9 @@ const program = Effect.gen(function*() {
     access: "read"
   })
   yield* Effect.log(user)
-  return user
 })
 
-await Effect.runPromise(program.pipe(Effect.provide(SignedIn))) // => "ada"
+await Effect.runPromise(program.pipe(Effect.provide(SignedIn)))
 ```
 
 ## Decide which changes are accepted
@@ -214,14 +209,13 @@ const program = Effect.gen(function*() {
   )
   const message = Option.getOrThrow(rejected).message
   yield* Effect.log(message)
-  return message
 })
 
 await Effect.runPromise(program.pipe(
   Effect.scoped,
   Effect.provideService(Sync.CurrentUser, "reviewer"),
   Effect.provide([EditorsOnly, SecureRandom.layerWebCrypto])
-)) // => "Read only"
+))
 ```
 
 Over a network, serve it the same way as a relay, with `Authority.layerHandlers` and `Authority.layerRemote`.
@@ -261,14 +255,12 @@ const program = Effect.gen(function*() {
     Stream.filter((count) => count === 0),
     Stream.runHead
   )
-  const result = "The relay has every change"
-  yield* Effect.log(result)
-  return result
+  yield* Effect.log("The relay has every change")
 })
 
 const RelayLive = Relay.layer.pipe(Layer.provide(HistoryStore.layerMemory))
 
-await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive))) // => "The relay has every change"
+await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive)))
 ```
 
 ## What servers guarantee

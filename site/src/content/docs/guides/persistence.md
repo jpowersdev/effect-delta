@@ -33,14 +33,13 @@ const program = Effect.gen(function*() {
     Effect.flatMap(open("session-2"), ReplicatedText.get)
   )
   yield* Effect.log(text)
-  return text
 })
 
 const StoreLive = HistoryStore.layerKeyValueStore({ prefix: "notes" }).pipe(
   Layer.provide(KeyValueStore.layerMemory)
 )
 
-await Effect.runPromise(program.pipe(Effect.provide(StoreLive))) // => "Saved"
+await Effect.runPromise(program.pipe(Effect.provide(StoreLive)))
 ```
 
 ## Stores

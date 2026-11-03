@@ -28,12 +28,10 @@ const program = Effect.gen(function*() {
     Stream.filter((peers) => peers.some((peer) => peer.state.data !== null)),
     Stream.runHead
   )
-  const users = Option.getOrThrow(seen).map((peer) => peer.user)
-  yield* Effect.log(users)
-  return users
+  yield* Effect.log(Option.getOrThrow(seen).map((peer) => peer.user))
 })
 
-await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(Presence.layer))) // => ["ada"]
+await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(Presence.layer)))
 ```
 
 Presence is never stored or merged. It lives on the server while a client stays connected.

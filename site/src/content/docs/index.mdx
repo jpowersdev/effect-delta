@@ -37,10 +37,9 @@ const program = Effect.gen(function*() {
   yield* Replica.exchange(laptop, phone)
   const text = yield* ReplicatedText.get(phone)
   yield* Effect.log(text)
-  return text
 })
 
-await Effect.runPromise(program) // => "Helloworld"
+await Effect.runPromise(program)
 ```
 
 <CardGrid>

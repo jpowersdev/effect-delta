@@ -43,14 +43,12 @@ const program = Effect.gen(function*() {
     Stream.filter((text) => text === "Hello"),
     Stream.runHead
   )
-  const text = yield* ReplicatedText.get(phone)
-  yield* Effect.log(text)
-  return text
+  yield* Effect.log(yield* ReplicatedText.get(phone))
 })
 
 const RelayLive = Relay.layer.pipe(Layer.provide(HistoryStore.layerMemory))
 
-await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive))) // => "Hello"
+await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive)))
 ```
 
 A replica is a handle you pass to module functions, like a `Queue` or `SubscriptionRef`. Functions with two or more

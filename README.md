@@ -37,14 +37,12 @@ const program = Effect.gen(function*() {
 
   yield* ReplicatedText.insert(laptop, 0, "Hello")
   yield* ReplicatedText.changes(phone).pipe(Stream.filter((text) => text === "Hello"), Stream.runHead)
-  const text = yield* ReplicatedText.get(phone)
-  yield* Effect.log(text)
-  return text
+  yield* Effect.log(yield* ReplicatedText.get(phone))
 })
 
 const RelayLive = Relay.layer.pipe(Layer.provide(HistoryStore.layerMemory))
 
-await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive))) // => "Hello"
+await Effect.runPromise(program.pipe(Effect.scoped, Effect.provide(RelayLive)))
 ```
 
 The [documentation](https://jpowersdev.github.io/effect-delta/) has guides and the API reference, and
