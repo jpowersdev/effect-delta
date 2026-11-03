@@ -5,17 +5,18 @@ set -euo pipefail
 # examples/ with Node.js alone.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 consumer_dir="$(mktemp -d "${TMPDIR:-/tmp}/effect-delta.XXXXXX")"
+version="$(node -p "require('$root/package.json').version")"
 trap 'rm -rf "$consumer_dir"' EXIT
 
 pnpm --dir "$root" --filter @jpowersdev/effect-delta pack --pack-destination "$consumer_dir"
 
-cat > "$consumer_dir/package.json" <<'JSON'
+cat > "$consumer_dir/package.json" <<JSON
 {
   "private": true,
   "type": "module",
   "dependencies": {
     "@effect/platform-node": "4.1.1",
-    "@jpowersdev/effect-delta": "file:./jpowersdev-effect-delta-0.1.0.tgz",
+    "@jpowersdev/effect-delta": "file:./jpowersdev-effect-delta-$version.tgz",
     "effect": "4.1.1"
   }
 }
